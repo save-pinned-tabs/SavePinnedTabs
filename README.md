@@ -12,6 +12,8 @@ A browser extension to save and load groups of pinned tabs
 
 - [Chrome Web Store](https://chrome.google.com/webstore/detail/save-pinned-tabs/anmidgajdonkgmmilbccfefkfieajakd)
 
+- [Firefox Addons](https://addons.mozilla.org/en-US/firefox/addon/save-pinned-tabs/)
+
 - [Edge Addons](https://microsoftedge.microsoft.com/addons/detail/ahejjkehekfnjbpaaochgfbmbajocdkn)
 
 ## Manual Installation
