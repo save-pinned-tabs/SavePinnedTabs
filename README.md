@@ -1,4 +1,4 @@
-# SavePinned
+# Save Pinned Tabs
 
 A browser extension to save and load groups of pinned tabs
 
@@ -15,7 +15,7 @@ A browser extension to save and load groups of pinned tabs
 - [Edge Addons](https://microsoftedge.microsoft.com/addons/detail/ahejjkehekfnjbpaaochgfbmbajocdkn)
 
 ## Manual Installation
-  1. Download the latest zip file from [Releases](https://github.com/jmakila/SavePinned/releases)
+  1. Download the latest zip file from [Releases](https://github.com/jmakila/save-pinned-tabs/releases)
   2. Extract the zip file into a new directory
   3. Open your chromium-based browser and navigate to `chrome://extensions`
   4. Enable Developer Mode and click "Load Unpacked"
@@ -25,49 +25,30 @@ A browser extension to save and load groups of pinned tabs
 
 This project will always be free and open source. If you appreciate it and want to support our work with a donation, please [visit our OpenCollective](https://opencollective.com/save-pinned-tabs). Thank you!
 
-## Development
+### Code Contributors
 
-### Requirements
+This project exists thanks to all the people who contribute. [[Contribute](CONTRIBUTING.md)].
+<a href="https://github.com/save-pinned-tabs/SavePinnedTabs/graphs/contributors"><img src="https://opencollective.com/save-pinned-tabs/contributors.svg?width=890&button=false" /></a>
 
-The following node modules are required for development
+### Financial Contributors
 
-- ajv-cli
-- browserify
+Become a financial contributor and help us sustain our community. [[Contribute](https://opencollective.com/save-pinned-tabs/contribute)]
 
-### Modify Sets Schema
+#### Individuals
 
-After modifying the schema of the sets object, update the JSON-Schema definition in `schema/sets.json`, then run the following commands to regenerate the validation script:
+<a href="https://opencollective.com/save-pinned-tabs"><img src="https://opencollective.com/save-pinned-tabs/individuals.svg?width=890"></a>
 
-`npm run compile-sets-schema`
+#### Organizations
 
-### Launch extension in isolated browser profile
+Support this project with your organization. Your logo will show up here with a link to your website. [[Contribute](https://opencollective.com/save-pinned-tabs/contribute)]
 
-- Create a new browser profile:
-
-  - Chromium: `npm run new-profile:chromium`
-  - Chromium Mac OS: `npm run new-profile:chromium-mac`
-  - Firefox: `npm run new-profile:firefox`
-  - Firefox Mac OS: `npm run new-profile:firefox-mac`
-  - Brave: `npm run new-profile:brave`
-  - Brave: `npm run new-profile:vivaldi`
-
-- Run the extension within the new profile, saving data to the profile
-
-  - Chromium: `npm run run:chromium`
-  - Chromium Mac OS: `npm run run:chromium-mac`
-  - Firefox: `npm run run:firefox`
-  - Firefox Mac OS: `npm run run:firefox-mac`
-  - Brave: `npm run run:brave`
-  - Brave: `npm run run:vivaldi`
-
-### Build
-
-- Set the version number in package.json
-
-- Set the version number in manifest.json
-
-- Build the extension
-
-  `npm run build`
-
-- The extension archive will be saved to `dist/save_pinned_tabs-X.Y.Z.zip`
+<a href="https://opencollective.com/save-pinned-tabs/organization/0/website"><img src="https://opencollective.com/save-pinned-tabs/organization/0/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/1/website"><img src="https://opencollective.com/save-pinned-tabs/organization/1/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/2/website"><img src="https://opencollective.com/save-pinned-tabs/organization/2/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/3/website"><img src="https://opencollective.com/save-pinned-tabs/organization/3/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/4/website"><img src="https://opencollective.com/save-pinned-tabs/organization/4/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/5/website"><img src="https://opencollective.com/save-pinned-tabs/organization/5/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/6/website"><img src="https://opencollective.com/save-pinned-tabs/organization/6/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/7/website"><img src="https://opencollective.com/save-pinned-tabs/organization/7/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/8/website"><img src="https://opencollective.com/save-pinned-tabs/organization/8/avatar.svg"></a>
+<a href="https://opencollective.com/save-pinned-tabs/organization/9/website"><img src="https://opencollective.com/save-pinned-tabs/organization/9/avatar.svg"></a>
