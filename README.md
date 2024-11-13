@@ -1,6 +1,6 @@
 # SavePinned
 
-A chrome extension to save and load groups of pinned tabs
+A browser extension to save and load groups of pinned tabs
 
 ## Features
 
@@ -20,6 +20,10 @@ A chrome extension to save and load groups of pinned tabs
   3. Open your chromium-based browser and navigate to `chrome://extensions`
   4. Enable Developer Mode and click "Load Unpacked"
   5. Select the new directory with the extracated zip file
+
+## Support Our Work
+
+This project will always be free and open source. If you appreciate it and want to support our work with a donation, please [visit our OpenCollective](https://opencollective.com/save-pinned-tabs). Thank you!
 
 ## Development
 
