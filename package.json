@@ -1,6 +1,6 @@
 {
   "name": "savepinned",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A chrome extension to save and load groups of pinned tabs",
   "main": "background.js",
   "scripts": {
@@ -31,6 +31,6 @@
   "devDependencies": {
     "ajv": "^7.2.1",
     "browserify": "^17.0.0",
-    "web-ext": "^8.2.0"
+    "web-ext": "^8.3.0"
   }
 }
