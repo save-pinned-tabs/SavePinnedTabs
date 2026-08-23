@@ -5,6 +5,9 @@ export var Sets = (function () {
 
     var windowId = null;
     var restoreErrorReportPromise = null;
+    var withRestoreErrorsLock = function (callback) {
+        return navigator.locks.request('restoreErrors', callback);
+    };
     browser.windows.getCurrent().then(function (win) {
         windowId = win.id;
     });
@@ -76,11 +79,16 @@ export var Sets = (function () {
             }));
             var restoreErrors = results.filter(function (result) { return result !== null; });
 
+            await withRestoreErrorsLock(function () {
+                if (restoreErrors.length > 0) {
+                    return browser.storage.local.set({ restoreErrors: restoreErrors });
+                }
+                return browser.storage.local.remove('restoreErrors');
+            });
+
             if (restoreErrors.length > 0) {
-                await browser.storage.local.set({ restoreErrors: restoreErrors });
                 console.log('Loaded tabs with '+restoreErrors.length+' error(s)');
             } else {
-                await browser.storage.local.remove('restoreErrors');
                 console.log('Loaded tabs');
             }
 
@@ -90,11 +98,16 @@ export var Sets = (function () {
             if (restoreErrorReportPromise) return restoreErrorReportPromise;
 
             restoreErrorReportPromise = (async function () {
-                var result = await browser.storage.local.get(['restoreErrors']);
-                var restoreErrors = result.restoreErrors || [];
+                var restoreErrors = await withRestoreErrorsLock(async function () {
+                    var result = await browser.storage.local.get(['restoreErrors']);
+                    var errors = result.restoreErrors || [];
+                    if (errors.length > 0) {
+                        await browser.storage.local.remove('restoreErrors');
+                    }
+                    return errors;
+                });
                 if (restoreErrors.length === 0) return;
 
-                await browser.storage.local.remove('restoreErrors');
                 var text = restoreErrors.map(function (error) {
                     return error.url + '\n' + error.message;
                 }).join('\n\n');
