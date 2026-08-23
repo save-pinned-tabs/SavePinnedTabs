@@ -4,6 +4,7 @@ export var Sets = (function () {
 
 
     var windowId = null;
+    var restoreErrorReportPromise = null;
     browser.windows.getCurrent().then(function (win) {
         windowId = win.id;
     });
@@ -85,21 +86,29 @@ export var Sets = (function () {
 
             await set_active(id, winid);
         },
-        reportRestoreErrors: async function () {
-            var result = await browser.storage.local.get(['restoreErrors']);
-            var restoreErrors = result.restoreErrors || [];
-            if (restoreErrors.length === 0) return;
+        reportRestoreErrors: function () {
+            if (restoreErrorReportPromise) return restoreErrorReportPromise;
 
-            await browser.storage.local.remove('restoreErrors');
-            var text = restoreErrors.map(function (error) {
-                return error.url + '\n' + error.message;
-            }).join('\n\n');
+            restoreErrorReportPromise = (async function () {
+                var result = await browser.storage.local.get(['restoreErrors']);
+                var restoreErrors = result.restoreErrors || [];
+                if (restoreErrors.length === 0) return;
 
-            await swal({
-                title: 'Some tabs could not be restored',
-                text: text,
-                icon: 'error'
+                await browser.storage.local.remove('restoreErrors');
+                var text = restoreErrors.map(function (error) {
+                    return error.url + '\n' + error.message;
+                }).join('\n\n');
+
+                await swal({
+                    title: 'Some tabs could not be restored',
+                    text: text,
+                    icon: 'error'
+                });
+            })().finally(function () {
+                restoreErrorReportPromise = null;
             });
+
+            return restoreErrorReportPromise;
         },
         delete: function (id) {
 			swal({

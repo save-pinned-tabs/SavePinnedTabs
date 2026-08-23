@@ -88,8 +88,10 @@ test('reports restoration errors once', async () => {
     ],
   });
 
-  await Sets.reportRestoreErrors();
-  await Sets.reportRestoreErrors();
+  await Promise.all([
+    Sets.reportRestoreErrors(),
+    Sets.reportRestoreErrors(),
+  ]);
 
   assert.equal(alerts.length, 1);
   assert.equal(alerts[0].title, 'Some tabs could not be restored');
