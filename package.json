@@ -4,6 +4,7 @@
   "description": "A chrome extension to save and load groups of pinned tabs",
   "main": "background.js",
   "scripts": {
+    "test": "node --test",
     "new-profile:chromium": "chromium --user-data-dir=savepinned-profile-chromium --first-run",
     "new-profile:chromium-mac": "/Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --user-data-dir=savepinned-profile-chromium --first-run",
     "new-profile:firefox": "firefox -CreateProfile savepinned-profile-firefox",
