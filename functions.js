@@ -85,6 +85,22 @@ export var Sets = (function () {
 
             await set_active(id, winid);
         },
+        reportRestoreErrors: async function () {
+            var result = await browser.storage.local.get(['restoreErrors']);
+            var restoreErrors = result.restoreErrors || [];
+            if (restoreErrors.length === 0) return;
+
+            await browser.storage.local.remove('restoreErrors');
+            var text = restoreErrors.map(function (error) {
+                return error.url + '\n' + error.message;
+            }).join('\n\n');
+
+            await swal({
+                title: 'Some tabs could not be restored',
+                text: text,
+                icon: 'error'
+            });
+        },
         delete: function (id) {
 			swal({
 				buttons: ['Cancel', 'Delete'],
