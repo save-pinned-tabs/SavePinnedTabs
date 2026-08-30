@@ -6,3 +6,5 @@ node_modules
 savepinned-profile-*
 
 dist
+playwright-report
+test-results
