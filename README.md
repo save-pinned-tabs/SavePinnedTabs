@@ -7,6 +7,9 @@ A browser extension to save and load groups of pinned tabs
 - Save groups of pinned tabs
 - Load groups of pinned tabs
 - Autoload a group of pinned tabs on browser startup
+- Update and delete saved tab groups
+- Import and export tab groups as JSON backups
+- Sync saved tab groups through browser extension storage
 
 ## Installation
 
