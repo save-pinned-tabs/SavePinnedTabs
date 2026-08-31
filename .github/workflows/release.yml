@@ -37,11 +37,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build extension package
-        run: npm run build
+      - name: Build browser packages
+        run: npm run build && npm run build:firefox
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" "dist/save_pinned_tabs-${TAG#v}.zip" --verify-tag --generate-notes --title "$TAG"
+        run: |
+          gh release create "$TAG" \
+            "dist/save_pinned_tabs-${TAG#v}.zip" \
+            "dist/save_pinned_tabs-${TAG#v}-firefox.zip" \
+            --verify-tag \
+            --generate-notes \
+            --title "$TAG"

@@ -10,7 +10,9 @@ const extensionId = "savepinnedtabs@buildyourweb.app";
 const packageJson = JSON.parse(
   await readFile(new URL("../../package.json", import.meta.url), "utf8"),
 );
-const buildPath = path.resolve(`dist/save_pinned_tabs-${packageJson.version}.zip`);
+const buildPath = path.resolve(
+  `dist/save_pinned_tabs-${packageJson.version}-firefox.zip`,
+);
 let driver;
 let temporaryDirectory;
 let extensionOrigin;

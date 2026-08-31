@@ -16,9 +16,10 @@
     "run:brave": "web-ext run -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
     "run:vivaldi": "web-ext run -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
     "build": "npm run vendor:sweetalert2 && web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report",
+    "build:firefox": "npm run vendor:sweetalert2 && node scripts/build-firefox.mjs",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
     "test:e2e": "playwright test",
-    "test:e2e:firefox": "npm run build && node --test tests/firefox/firefox.e2e.mjs",
+    "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs",
     "vendor:sweetalert2": "node scripts/vendor-sweetalert2.mjs"
   },
   "repository": {
