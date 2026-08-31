@@ -34,7 +34,6 @@
   },
 
   "background": {
-    "scripts": ["service_worker.js"],
     "service_worker": "service_worker.js",
     "type": "module"
   },
