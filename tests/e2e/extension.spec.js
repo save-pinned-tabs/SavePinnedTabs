@@ -32,7 +32,7 @@ async function saveSet(page, name) {
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
-  await page.locator(".swal-button--confirm").click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(row).toHaveCount(0);
 }
 
@@ -95,9 +95,9 @@ test("a user can export and import tab sets", async ({ extension }) => {
   await deleteSet(popup, "Backup");
   await options.locator("#import-input").setInputFiles(exportPath);
   await options.getByRole("button", { name: "Import" }).click();
-  await expect(options.locator(".swal-text")).toHaveText(
-    "Successfully Imported 1 Tab Sets",
-  );
+  await expect(
+    options.getByText("Successfully Imported 1 Tab Sets", { exact: true }),
+  ).toBeVisible();
 
   await popup.reload();
   await expect(popup.locator(".load-row", { hasText: "Backup" })).toBeVisible();
@@ -121,9 +121,9 @@ test("an imported tab-set name is rendered as text", async ({ extension }) => {
     buffer: Buffer.from(JSON.stringify(backup)),
   });
   await options.getByRole("button", { name: "Import" }).click();
-  await expect(options.locator(".swal-text")).toHaveText(
-    "Successfully Imported 1 Tab Sets",
-  );
+  await expect(
+    options.getByText("Successfully Imported 1 Tab Sets", { exact: true }),
+  ).toBeVisible();
 
   const popup = await openExtensionPage(context, extensionId, "popup.html");
   const row = popup.locator('.load-row[data-id="markup"]');
@@ -149,9 +149,9 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
   });
   await options.getByRole("button", { name: "Import" }).click();
 
-  await expect(options.locator(".swal-text")).toHaveText(
-    "Failed to import tab sets. Please try again.",
-  );
+  await expect(
+    options.getByText("Failed to import tab sets. Please try again.", { exact: true }),
+  ).toBeVisible();
 
   const popup = await openExtensionPage(context, extensionId, "popup.html");
   await expect(popup.locator(".load-row", { hasText: "Invalid" })).toHaveCount(0);

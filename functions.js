@@ -1,3 +1,5 @@
+import Swal from './lib/sweetalert2.esm.min.js';
+
 export var Sets = (function () {
 
 		var browser = globalThis.browser ?? globalThis.chrome;
@@ -75,12 +77,16 @@ export var Sets = (function () {
         	});
         },
         delete: function (id) {
-			swal({
-				buttons: ['Cancel', 'Delete'],
-				className: 'confirm-delete-dialog',
+			Swal.fire({
+				showCancelButton: true,
+				confirmButtonText: 'Delete',
+				cancelButtonText: 'Cancel',
+				customClass: {
+					popup: 'confirm-delete-dialog'
+				},
 				text: "Do you really want to delete this tab set?",
-			}).then(function (conf) {
-				if (conf) browser.storage.sync.remove(id).then(function () {
+			}).then(function (result) {
+				if (result.isConfirmed) browser.storage.sync.remove(id).then(function () {
 					window.location.href = "popup.html";
 				});
 			});
