@@ -103,6 +103,34 @@ test("a user can export and import tab sets", async ({ extension }) => {
   await expect(popup.locator(".load-row", { hasText: "Backup" })).toBeVisible();
 });
 
+test("an imported tab-set name is rendered as text", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const options = await openExtensionPage(context, extensionId, "options.html");
+  const setName = '<img id="injected-markup" src="invalid">';
+  const backup = {
+    markup: {
+      autoload: 0,
+      set_name: setName,
+      tabs: ["https://example.com"],
+    },
+  };
+
+  await options.locator("#import-input").setInputFiles({
+    name: "markup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(backup)),
+  });
+  await options.getByRole("button", { name: "Import" }).click();
+  await expect(options.locator(".swal-text")).toHaveText(
+    "Successfully Imported 1 Tab Sets",
+  );
+
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const row = popup.locator('.load-row[data-id="markup"]');
+  await expect(row.locator("span")).toHaveText(setName);
+  await expect(popup.locator("#injected-markup")).toHaveCount(0);
+});
+
 test("a schema-invalid import is rejected", async ({ extension }) => {
   const { context, extensionId } = extension;
   const options = await openExtensionPage(context, extensionId, "options.html");

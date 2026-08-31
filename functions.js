@@ -90,60 +90,68 @@ export var Sets = (function () {
                 var winid = windowId;
                 browser.storage.local.get('activeTabs').then(function (result) {
                   var active = result.activeTabs ? result.activeTabs[winid] : null;
-              		for (var property in sets) {
-              			if (sets.hasOwnProperty(property)) {
-              				var row = sets[property];
-              				var template = '\
-              				<div class="load-row '+(active === property ? 'active' : '')+'" data-id="'+property+'" data-name="'+row.set_name+'" data-autoload="'+row.autoload+'">\
-              					<span>'+row.set_name+'</span>\
-              					<label><input type="checkbox" name="autoload" class="autoload-radio" value="'+property+'" '+(row.autoload ? 'checked' : '')+'> Autoload</label>\
-                                  '+(active === property ? '<button class="set-save">Save</button>' : '')+'\
-              					<button class="set-load">Load</button>\
-              					<button class="set-delete">Del</button>\
-              				</div>';
-              				var area = document.getElementById('load-area');
-              				area.insertAdjacentHTML('beforeend', template);
-              				var plcelement = document.getElementById('placeholder')
-              				if (plcelement) plcelement.remove();
-              			}
-              		}
+                    var area = document.getElementById('load-area');
+                    for (const property in sets) {
+                        if (!sets.hasOwnProperty(property)) continue;
 
-            		// load buttons
-            		var loadbtns = document.getElementsByClassName('set-load');
-            		for (var i=0; i < loadbtns.length; i++) {
-            			loadbtns[i].addEventListener('click', function () {
-            				var id = this.parentNode.dataset.id;
-            				Sets.load(id, winid);
-            			});
-            		}
+                        const row = sets[property];
+                        const rowElement = document.createElement('div');
+                        rowElement.classList.add('load-row');
+                        if (active === property) rowElement.classList.add('active');
+                        rowElement.dataset.id = property;
+                        rowElement.dataset.name = row.set_name;
+                        rowElement.dataset.autoload = row.autoload;
 
-                    // save buttons
-            		var loadbtns = document.getElementsByClassName('set-save');
-            		for (var i=0; i < loadbtns.length; i++) {
-            			loadbtns[i].addEventListener('click', function () {
-            				var name = this.parentNode.dataset.name;
-            				var auto = this.parentNode.dataset.autoload == 1 ? 1 : 0;
-            				Sets.save(name, auto);
-            			});
-            		}
+                        const nameElement = document.createElement('span');
+                        nameElement.textContent = row.set_name;
+                        rowElement.appendChild(nameElement);
 
-            		// delete buttons
-            		var deletebtns = document.getElementsByClassName('set-delete');
-            		for (var j=0; j < deletebtns.length; j++) {
-            			deletebtns[j].addEventListener('click', function () {
-            				var id = this.parentNode.dataset.id;
-            				Sets.delete(id);
-            			});
-            		}
+                        const autoloadLabel = document.createElement('label');
+                        const autoloadInput = document.createElement('input');
+                        autoloadInput.type = 'checkbox';
+                        autoloadInput.name = 'autoload';
+                        autoloadInput.classList.add('autoload-radio');
+                        autoloadInput.value = property;
+                        autoloadInput.checked = Boolean(row.autoload);
+                        autoloadInput.addEventListener('click', function () {
+                            if (this.checked) Sets.setAutoload(this.value);
+                            else Sets.setAutoload(false);
+                        });
+                        autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
+                        rowElement.appendChild(autoloadLabel);
 
-            		// autoload radios
-            		var radioElements = document.getElementsByClassName('autoload-radio');
-            		for (var i=0; i < radioElements.length; i++) {
-            			radioElements[i].addEventListener('click', function () {
-            				if (this.checked) Sets.setAutoload(this.value);
-            				else Sets.setAutoload(false);
-            			});
-            		}
+                        if (active === property) {
+                            const saveButton = document.createElement('button');
+                            saveButton.classList.add('set-save');
+                            saveButton.textContent = 'Save';
+                            saveButton.addEventListener('click', function () {
+                                const auto = row.autoload == 1 ? 1 : 0;
+                                Sets.save(row.set_name, auto);
+                            });
+                            rowElement.appendChild(saveButton);
+                        }
+
+                        const loadButton = document.createElement('button');
+                        loadButton.classList.add('set-load');
+                        loadButton.textContent = 'Load';
+                        loadButton.addEventListener('click', function () {
+                            Sets.load(property, winid);
+                        });
+                        rowElement.appendChild(loadButton);
+
+                        const deleteButton = document.createElement('button');
+                        deleteButton.classList.add('set-delete');
+                        deleteButton.textContent = 'Del';
+                        deleteButton.addEventListener('click', function () {
+                            Sets.delete(property);
+                        });
+                        rowElement.appendChild(deleteButton);
+
+                        area.appendChild(rowElement);
+                    }
+
+                    var plcelement = document.getElementById('placeholder')
+                    if (plcelement && area.querySelector('.load-row')) plcelement.remove();
 
                 });
         	});
