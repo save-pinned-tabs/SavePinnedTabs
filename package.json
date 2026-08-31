@@ -17,7 +17,8 @@
     "run:vivaldi": "web-ext run -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
     "build": "web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:firefox": "npm run build && node --test tests/firefox/firefox.e2e.mjs"
   },
   "repository": {
     "type": "git",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "ajv": "^8.20.0",
+    "selenium-webdriver": "^4.48.0",
     "web-ext": "^10.6.0"
   }
 }
