@@ -1,6 +1,6 @@
 import { Autoload } from './functions.js';
 
-var browser = chrome;
+var browser = globalThis.browser ?? globalThis.chrome;
 
 export function handleStartup() {
   // autoloading tab set

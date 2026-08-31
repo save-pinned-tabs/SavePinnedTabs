@@ -1,6 +1,6 @@
 export var Sets = (function () {
 
-		var browser = chrome;
+		var browser = globalThis.browser ?? globalThis.chrome;
 
 
     var windowId = null;
@@ -211,7 +211,7 @@ function sleep(ms) {
 
 export var Autoload = (function () {
   let ranOnce = false;
-	var browser = chrome;
+	var browser = globalThis.browser ?? globalThis.chrome;
 
 
   return {

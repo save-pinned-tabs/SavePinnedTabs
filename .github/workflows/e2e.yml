@@ -1,4 +1,4 @@
-name: Chromium E2E
+name: Cross-browser E2E
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  chromium:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -41,3 +41,29 @@ jobs:
           path: test-results
           if-no-files-found: ignore
           retention-days: 7
+
+  firefox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Firefox
+        uses: browser-actions/setup-firefox@v1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Firefox package
+        run: npx web-ext lint -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report
+
+      - name: Run Firefox extension smoke test
+        run: npm run test:e2e:firefox
