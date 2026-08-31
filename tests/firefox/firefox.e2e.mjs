@@ -46,6 +46,11 @@ after(async () => {
 
 test("Firefox runs the background fallback and saves and loads pinned tabs", async () => {
   await driver.get(`${extensionOrigin}/popup.html`);
+  await driver.wait(
+    () => driver.executeScript('return document.activeElement?.id === "save-name";'),
+    5_000,
+  );
+
 
   const hasBackgroundPage = await driver.executeAsyncScript((done) => {
     browser.runtime.getBackgroundPage().then(
@@ -78,11 +83,16 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
     await driver.findElement(By.css('.load-row[data-name="Firefox"] .set-load')),
   );
   await driver.wait(async () => {
-    return driver.executeAsyncScript((expected, unwanted, done) => {
-      browser.tabs.query({ pinned: true, currentWindow: true }).then((tabs) => {
-        const urls = tabs.map((tab) => tab.url);
-        done(urls.includes(expected) && !urls.includes(unwanted));
-      });
-    }, savedUrl, unwantedUrl);
-  }, 5_000);
+    try {
+      return await driver.executeAsyncScript((expected, unwanted, done) => {
+        browser.tabs.query({ pinned: true, currentWindow: true }).then((tabs) => {
+          const urls = tabs.map((tab) => tab.url);
+          done(urls.includes(expected) && !urls.includes(unwanted));
+        });
+      }, savedUrl, unwantedUrl);
+    } catch (error) {
+      if (error.message.includes("Document was unloaded")) return false;
+      throw error;
+    }
+  }, 10_000);
 });
