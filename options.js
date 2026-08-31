@@ -1,11 +1,12 @@
 import { Sets } from "./functions.js";
+import Swal from "./lib/sweetalert2.esm.min.js";
 
 var importInput = document.getElementById("import-input");
 var importButton = document.getElementById("import-button");
 var exportButton = document.getElementById("export-button");
 
 function notifyImportError() {
-  swal({
+  Swal.fire({
     text: "Failed to import tab sets. Please try again.",
     icon: "error",
   });
@@ -15,7 +16,7 @@ function notifyImportError() {
 
 function handleImport() {
   if (!importInput.files[0]) {
-    swal({
+    Swal.fire({
       text: "Please select a file to import",
       icon: "error",
     });
@@ -31,7 +32,7 @@ function handleImport() {
       .then(function () {
         var importedCount = Object.keys(importData).length;
 
-        swal({
+        Swal.fire({
           text: "Successfully Imported " + importedCount + " Tab Sets",
         });
 

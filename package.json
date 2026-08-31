@@ -15,10 +15,11 @@
     "run:firefox-mac": "web-ext run -t firefox-desktop --firefox-binary=/Applications/Firefox\\ Developer\\ Edition.app/Contents/MacOS/firefox-bin --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
     "run:brave": "web-ext run -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
     "run:vivaldi": "web-ext run -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
-    "build": "web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report",
+    "build": "npm run vendor:sweetalert2 && web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
     "test:e2e": "playwright test",
-    "test:e2e:firefox": "npm run build && node --test tests/firefox/firefox.e2e.mjs"
+    "test:e2e:firefox": "npm run build && node --test tests/firefox/firefox.e2e.mjs",
+    "vendor:sweetalert2": "node scripts/vendor-sweetalert2.mjs"
   },
   "repository": {
     "type": "git",
@@ -34,6 +35,7 @@
     "@playwright/test": "^1.62.1",
     "ajv": "^8.20.0",
     "selenium-webdriver": "^4.48.0",
+    "sweetalert2": "^11.26.25",
     "web-ext": "^10.6.0"
   }
 }
