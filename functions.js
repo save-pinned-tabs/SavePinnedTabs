@@ -6,17 +6,23 @@ export var Sets = (function () {
 
 
     var windowId = null;
+    var restoreErrorReportPromise = null;
+    var withRestoreErrorsLock = function (callback) {
+        return navigator.locks.request('restoreErrors', callback);
+    };
     browser.windows.getCurrent().then(function (win) {
         windowId = win.id;
     });
 
     var set_active = function (id, winid) {
-        browser.storage.local.get(['activeTabs']).then(function(result) {
+        return browser.storage.local.get(['activeTabs']).then(function(result) {
             var atabs = result.activeTabs || {};
             atabs[winid] = id;
-            browser.storage.local.set({'activeTabs': atabs}).then(function() {
+            return browser.storage.local.set({'activeTabs': atabs}).then(function() {
                 console.log('Active tabset for window '+winid+' is set to '+id);
-                window.location.href = "popup.html";
+                if (typeof window !== 'undefined') {
+                    window.location.href = 'popup.html';
+                }
             });
         });
     }
@@ -47,34 +53,77 @@ export var Sets = (function () {
         		}
         	});
         },
-        load: function (id, winid) {
-            browser.storage.sync.get(id).then(function (set) {
-        		var tabs = set[id].tabs;
-        		browser.tabs.query({
-        			pinned: true,
-                    windowId: winid
-        		}).then(function (cutabs) {
-                    var list = [];
+        load: async function (id, winid) {
+            var set = await browser.storage.sync.get(id);
+            var tabs = set[id].tabs;
+            var currentTabs = await browser.tabs.query({ pinned: true, windowId: winid });
+            var tabIds = currentTabs.map(function (tab) { return tab.id; });
 
-        			for (var ind of cutabs) {
-        				list.push(ind.id);
-        			}
+            if (tabIds.length > 0) {
+                await browser.tabs.remove(tabIds);
+            }
 
-                    browser.tabs.remove(list);
+            var results = await Promise.all(tabs.map(async function (url) {
+                try {
+                    await browser.tabs.create({
+                        windowId: winid,
+                        url: url,
+                        active: false,
+                        pinned: true
+                    });
+                    return null;
+                } catch (error) {
+                    return {
+                        url: url,
+                        message: error && error.message ? error.message : String(error)
+                    };
+                }
+            }));
+            var restoreErrors = results.filter(function (result) { return result !== null; });
 
-                    for (var inx of tabs) {
-                        browser.tabs.create({
-                            windowId: winid,
-                            url: inx,
-                            active: false,
-                            pinned: true
-                        });
+            await withRestoreErrorsLock(function () {
+                if (restoreErrors.length > 0) {
+                    return browser.storage.local.set({ restoreErrors: restoreErrors });
+                }
+                return browser.storage.local.remove('restoreErrors');
+            });
+
+            if (restoreErrors.length > 0) {
+                console.log('Loaded tabs with '+restoreErrors.length+' error(s)');
+            } else {
+                console.log('Loaded tabs');
+            }
+
+            await set_active(id, winid);
+        },
+        reportRestoreErrors: function () {
+            if (restoreErrorReportPromise) return restoreErrorReportPromise;
+
+            restoreErrorReportPromise = (async function () {
+                var restoreErrors = await withRestoreErrorsLock(async function () {
+                    var result = await browser.storage.local.get(['restoreErrors']);
+                    var errors = result.restoreErrors || [];
+                    if (errors.length > 0) {
+                        await browser.storage.local.remove('restoreErrors');
                     }
+                    return errors;
+                });
+                if (restoreErrors.length === 0) return;
 
-                    console.log('Loaded tabs');
-                    set_active(id, winid);
-        		});
-        	});
+                var text = restoreErrors.map(function (error) {
+                    return error.url + '\n' + error.message;
+                }).join('\n\n');
+
+                await swal({
+                    title: 'Some tabs could not be restored',
+                    text: text,
+                    icon: 'error'
+                });
+            })().finally(function () {
+                restoreErrorReportPromise = null;
+            });
+
+            return restoreErrorReportPromise;
         },
         delete: function (id) {
 			Swal.fire({
