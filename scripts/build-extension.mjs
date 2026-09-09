@@ -16,15 +16,23 @@ const runtimePaths = [
   "style.css",
 ];
 
+const target = process.argv[2];
+if (target !== "chromium" && target !== "firefox") {
+  throw new Error("Usage: node scripts/build-extension.mjs <chromium|firefox>");
+}
+
 const projectRoot = process.cwd();
 const stagingDirectory = await mkdtemp(
-  path.join(os.tmpdir(), "save-pinned-tabs-firefox-"),
+  path.join(os.tmpdir(), `save-pinned-tabs-${target}-`),
 );
 const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
-manifest.background = {
-  scripts: ["service_worker.js"],
-  type: "module",
-};
+
+if (target === "firefox") {
+  manifest.background = {
+    scripts: ["service_worker.js"],
+    type: "module",
+  };
+}
 
 async function runWebExt(args) {
   await new Promise((resolve, reject) => {
@@ -54,7 +62,9 @@ try {
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
   await mkdir("dist", { recursive: true });
-  await runWebExt(["lint", "--source-dir", stagingDirectory]);
+  if (target === "firefox") {
+    await runWebExt(["lint", "--source-dir", stagingDirectory]);
+  }
   await runWebExt([
     "build",
     "--source-dir",
@@ -62,7 +72,7 @@ try {
     "--artifacts-dir",
     "dist",
     "--filename",
-    `save_pinned_tabs-${manifest.version}-firefox.zip`,
+    `save_pinned_tabs-${manifest.version}${target === "firefox" ? "-firefox" : ""}.zip`,
     "--overwrite-dest",
   ]);
 } finally {
