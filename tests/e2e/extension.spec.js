@@ -46,6 +46,7 @@ async function selectAutoloadSet(page, name) {
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
+  await expect(page.locator("#delete-dialog")).toBeVisible();
   await Promise.all([
     page.waitForNavigation(),
     page.getByRole("button", { name: "Delete", exact: true }).click(),
@@ -90,6 +91,12 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
     .click();
 
   await expectOpenTabs(context, [firstUrl, secondUrl], [unwantedUrl]);
+  const workRow = popup.locator(".load-row", { hasText: "Work" });
+  await workRow.getByRole("button", { name: "Del" }).click();
+  await expect(popup.locator("#delete-dialog")).toBeVisible();
+  await popup.keyboard.press("Escape");
+  await expect(popup.locator("#delete-dialog")).toBeHidden();
+  await expect(workRow).toBeVisible();
   await deleteSet(popup, "Work");
 });
 

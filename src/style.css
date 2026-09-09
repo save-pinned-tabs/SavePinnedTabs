@@ -25,13 +25,23 @@ button.set-save:hover, button#save-button:hover { background-color: #29b6f6; }
 button.set-delete { background-color: #ff8a65; }
 button.set-delete:hover { background-color: #ff7043; }
 
-/* SweetAlert2 */
-button.swal2-styled {
-  height: auto;
-  line-height: normal;
-  float: none;
+dialog {
+  width: min(22rem, calc(100% - 2rem));
+  margin: auto;
+  padding: 1.25rem;
+  color: #333;
+  background: white;
+  border: none;
+  border-radius: 6px;
+  box-shadow: 0 1rem 3rem rgb(0 0 0 / 30%);
 }
-.swal2-popup { border-radius: 2px; }
-.swal2-show { animation: unset !important; }
-.confirm-delete-dialog .swal2-confirm { background-color: #ff8a65; }
-.confirm-delete-dialog .swal2-confirm:hover { background-color: #ff7043; }
+dialog::backdrop { background: rgb(0 0 0 / 45%); }
+dialog h3 { margin-bottom: 0.5rem; font-size: 1.15em; }
+dialog p { padding: 0; color: #666; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
+.dialog-actions button { float: none; margin: 0; }
+.dialog-actions button[value="cancel"] { color: #333; background-color: #eee; }
+.dialog-actions button[value="cancel"]:hover { background-color: #ddd; }
+.dialog-actions .dialog-delete { background-color: #ff8a65; }
+.dialog-actions .dialog-delete:hover { background-color: #ff7043; }
+.dialog-actions button:focus-visible { outline: 2px solid #29b6f6; outline-offset: 2px; }

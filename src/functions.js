@@ -1,5 +1,16 @@
 import { createStartupAutoload, loadTabSet } from './autoload.mjs';
-import Swal from './lib/sweetalert2.esm.min.js';
+
+function confirmDelete() {
+    var dialog = document.getElementById('delete-dialog');
+    dialog.returnValue = '';
+    dialog.showModal();
+
+    return new Promise(function (resolve) {
+        dialog.addEventListener('close', function () {
+            resolve(dialog.returnValue === 'delete');
+        }, { once: true });
+    });
+}
 
 var browser = globalThis.browser ?? globalThis.chrome;
 
@@ -57,20 +68,11 @@ export var Sets = (function () {
                 refreshPopup();
             });
         },
-        delete: function (id) {
-			Swal.fire({
-				showCancelButton: true,
-				confirmButtonText: 'Delete',
-				cancelButtonText: 'Cancel',
-				customClass: {
-					popup: 'confirm-delete-dialog'
-				},
-				text: "Do you really want to delete this tab set?",
-			}).then(function (result) {
-				if (result.isConfirmed) browser.storage.sync.remove(id).then(function () {
-					window.location.href = "popup.html";
-				});
-			});
+        delete: async function (id) {
+            if (!await confirmDelete()) return;
+
+            await browser.storage.sync.remove(id);
+            window.location.href = "popup.html";
         },
         get: function () {
             browser.storage.sync.get(null).then(function (sets) {
