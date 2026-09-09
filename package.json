@@ -18,6 +18,8 @@
     "build": "npm run vendor:sweetalert2 && node scripts/build-extension.mjs chromium",
     "build:firefox": "npm run vendor:sweetalert2 && node scripts/build-extension.mjs firefox",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
+    "test": "npm run test:unit && npm run test:e2e && npm run test:e2e:firefox",
+    "test:unit": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs",
     "vendor:sweetalert2": "node scripts/vendor-sweetalert2.mjs"

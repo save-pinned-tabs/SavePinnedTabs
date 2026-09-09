@@ -25,7 +25,10 @@ async function removePinnedTabs(page) {
 
 async function saveSet(page, name) {
   await page.getByPlaceholder("Enter a name for set...").fill(name);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Save", exact: true }).click(),
+  ]);
   await expect(page.locator(".load-row", { hasText: name })).toBeVisible();
 }
 
@@ -211,6 +214,23 @@ test("startup keeps an already restored pinned tab open", async ({ extension }) 
   expect(tabIdAfterStartup).toBe(tabIdBeforeStartup);
 });
 
+test("startup preserves unrelated local extension state", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+
+  const localState = await popup.evaluate(async () => {
+    await chrome.storage.local.set({
+      activeTabs: { 1: "stale" },
+      unrelated: "keep",
+    });
+    const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
+    await handleStartup();
+    return chrome.storage.local.get(null);
+  });
+
+  expect(localState.unrelated).toBe("keep");
+});
+
 test("the startup handler restores the configured pinned tabs", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
@@ -267,3 +287,76 @@ test("an autoload selection persists across browser restart", async () => {
     await rm(userDataDir, { recursive: true, force: true });
   }
 });
+
+{
+  let randomState = 0x23c0ffee;
+  const random = () => {
+    randomState = (1664525 * randomState + 1013904223) >>> 0;
+    return randomState / 0x100000000;
+  };
+  const startupScenarios = Array.from({ length: 2 }, () => ({
+    savedTabCount: 1 + Math.floor(random() * 2),
+    startsMatching: random() < 0.5,
+  }));
+
+  for (const [scenario, { savedTabCount, startsMatching }] of startupScenarios.entries()) {
+    test(`randomized Chromium startup restores tab state ${scenario}`, async () => {
+      test.slow();
+      const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-fuzz-"));
+      let firstLaunch;
+      let secondLaunch;
+
+      try {
+        firstLaunch = await launchExtension(userDataDir);
+        const popup = await openExtensionPage(
+          firstLaunch.context,
+          firstLaunch.extensionId,
+          "popup.html",
+        );
+        const savedUrls = Array.from(
+          { length: savedTabCount },
+          (_, index) => (
+            `chrome-extension://${firstLaunch.extensionId}/tests/e2e/tab.html?fuzz=${scenario}-${index}`
+          ),
+        );
+        const currentUrls = startsMatching
+          ? savedUrls
+          : [`chrome-extension://${firstLaunch.extensionId}/tests/e2e/tab.html?old=${scenario}`];
+
+        await popup.evaluate(async ({ savedUrls, currentUrls }) => {
+          await chrome.storage.sync.set({
+            fuzz: { set_name: "Fuzz", autoload: 1, tabs: savedUrls },
+          });
+          for (const url of currentUrls) {
+            await chrome.tabs.create({ url, pinned: true, active: false });
+          }
+        }, { savedUrls, currentUrls });
+        await firstLaunch.context.close();
+        firstLaunch = undefined;
+
+        secondLaunch = await launchExtension(userDataDir);
+        const reopenedPopup = await openExtensionPage(
+          secondLaunch.context,
+          secondLaunch.extensionId,
+          "popup.html",
+        );
+        await reopenedPopup.evaluate(async () => {
+          const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
+          await handleStartup();
+        });
+
+        await expect.poll(
+          () => reopenedPopup.evaluate(async () => {
+            const tabs = await chrome.tabs.query({ pinned: true, currentWindow: true });
+            return tabs.map((tab) => tab.pendingUrl || tab.url);
+          }),
+          { message: `seed 0x23c0ffee scenario ${scenario}` },
+        ).toEqual(savedUrls);
+      } finally {
+        await firstLaunch?.context.close();
+        await secondLaunch?.context.close();
+        await rm(userDataDir, { recursive: true, force: true });
+      }
+    });
+  }
+}

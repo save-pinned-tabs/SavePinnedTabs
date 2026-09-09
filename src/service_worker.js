@@ -2,9 +2,8 @@ import { Autoload } from './functions.js';
 
 var browser = globalThis.browser ?? globalThis.chrome;
 
-export function handleStartup() {
-  // autoloading tab set
-  browser.storage.local.clear();
+export async function handleStartup() {
+  await browser.storage.local.remove('activeTabs');
 
   if (!browser.windows.onCreated.hasListener(Autoload.windowCreated)) {
     browser.windows.onCreated.addListener(Autoload.windowCreated);

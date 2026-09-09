@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 const runtimePaths = [
+  "autoload.mjs",
   "functions.js",
   "images",
   "lib",

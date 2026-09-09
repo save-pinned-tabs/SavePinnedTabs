@@ -80,10 +80,21 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
     browser.tabs.create({ url, pinned: true, active: false }).then(() => done());
   }, unwantedUrl);
 
+  const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.executeScript(
     "arguments[0].click()",
     await driver.findElement(By.css('.load-row[data-name="Firefox"] .set-load')),
   );
+  await driver.wait(async () => {
+    try {
+      return await driver.executeScript(
+        "return performance.timeOrigin !== arguments[0]",
+        pageLoadTime,
+      );
+    } catch {
+      return false;
+    }
+  }, 10_000);
   await driver.wait(async () => {
     try {
       return await driver.executeAsyncScript((expected, unwanted, done) => {
@@ -93,7 +104,9 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
         });
       }, savedUrl, unwantedUrl);
     } catch (error) {
-      if (error.message.includes("Document was unloaded")) return false;
+      if (/Document was unloaded|browser is not defined|can't access dead object/.test(error.message)) {
+        return false;
+      }
       throw error;
     }
   }, 10_000);

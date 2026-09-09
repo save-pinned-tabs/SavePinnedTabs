@@ -1,8 +1,13 @@
+import { createStartupAutoload, loadTabSet } from './autoload.mjs';
 import Swal from './lib/sweetalert2.esm.min.js';
 
-export var Sets = (function () {
+var browser = globalThis.browser ?? globalThis.chrome;
 
-		var browser = globalThis.browser ?? globalThis.chrome;
+function refreshPopup() {
+    if (typeof window !== 'undefined') window.location.href = "popup.html";
+}
+
+export var Sets = (function () {
 
 
     var windowId = null;
@@ -11,12 +16,11 @@ export var Sets = (function () {
     });
 
     var set_active = function (id, winid) {
-        browser.storage.local.get(['activeTabs']).then(function(result) {
+        return browser.storage.local.get(['activeTabs']).then(function(result) {
             var atabs = result.activeTabs || {};
             atabs[winid] = id;
-            browser.storage.local.set({'activeTabs': atabs}).then(function() {
+            return browser.storage.local.set({'activeTabs': atabs}).then(function() {
                 console.log('Active tabset for window '+winid+' is set to '+id);
-                if (typeof window !== 'undefined') window.location.href = "popup.html";
             });
         });
     }
@@ -39,42 +43,19 @@ export var Sets = (function () {
         				autoload: autoload || 0,
         				tabs: urilist
         			};
-        			browser.storage.sync.set(saveObj).then(function () {
-        				set_active(uid, windowId);
-        			});
+                    browser.storage.sync.set(saveObj)
+                        .then(function () { return set_active(uid, windowId); })
+                        .then(refreshPopup);
         		} else {
         			console.log('No pinned tabs found!');
         		}
         	});
         },
         load: function (id, winid) {
-            browser.storage.sync.get(id).then(function (set) {
-        		var tabs = set[id].tabs;
-        		browser.tabs.query({
-        			pinned: true,
-                    windowId: winid
-        		}).then(function (cutabs) {
-                    var list = [];
-
-        			for (var ind of cutabs) {
-        				list.push(ind.id);
-        			}
-
-                    browser.tabs.remove(list);
-
-                    for (var inx of tabs) {
-                        browser.tabs.create({
-                            windowId: winid,
-                            url: inx,
-                            active: false,
-                            pinned: true
-                        });
-                    }
-
-                    console.log('Loaded tabs');
-                    set_active(id, winid);
-        		});
-        	});
+            return loadTabSet(browser, id, winid).then(function () {
+                console.log('Loaded tabs');
+                refreshPopup();
+            });
         },
         delete: function (id) {
 			Swal.fire({
@@ -175,36 +156,6 @@ export var Sets = (function () {
         		});
         	});
         },
-        clearActive: function (winid) {
-            set_active(null, winid);
-        },
-        autoLoad: function (winid) {
-            browser.tabs.query({
-                pinned: true,
-                windowId: winid
-            }).then(function (currentTabs) {
-                browser.storage.sync.get(null).then(function (sets) {
-                    var autoloaded = false;
-                    for (var property in sets) {
-                        if (sets.hasOwnProperty(property)) {
-                            var set = sets[property];
-                            if (set.autoload == 1) { // there is a tab set to be autoloaded
-                                console.log('Autoloading tabs');
-                                autoloaded = true;
-                                var alreadyRestored = currentTabs.length === set.tabs.length
-                                    && currentTabs.every(function (tab, index) {
-                                        return tab.url === set.tabs[index];
-                                    });
-                                if (alreadyRestored) set_active(property, winid);
-                                else Sets.load(property, winid);
-                                break;
-                            }
-                        }
-                    }
-                    if (!autoloaded) Sets.clearActive(winid);
-                });
-            });
-        },
 		export: function () {
 			var fileName = "SavePinnedTabs_export_" + new Date().toISOString().replaceAll(/[.:]/g, "-") + '.json';
 			
@@ -224,42 +175,4 @@ export var Sets = (function () {
     }
 })();
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-export var Autoload = (function () {
-  let ranOnce = false;
-	var browser = globalThis.browser ?? globalThis.chrome;
-
-
-  return {
-    windowCreated: function (window) {
-      console.log("windowCreated");
-      ranOnce = true;
-
-      browser.windows.getAll(null).then(function (windows) {
-        if (windows.length < 2 && window.type === "normal") {
-          Sets.autoLoad(window.id);
-        }
-      });
-    },
-
-    manual: async function () {
-      // Brave workaround:
-      //  wait a few milliseconds for browser.windows.onCreated to fire
-      //  before checking if we need to manually run windowCreated
-      //  to ensure brave does not load tab set twice
-      await sleep(50);
-
-      // Firefox workaround:
-      //  browser.windows.onCreated does not fire reliably in Firefox
-      //  so we run autoload manually, only if it has not been run before
-      if (!ranOnce) {
-        browser.windows.getCurrent().then(function (window) {
-          Autoload.windowCreated(window);
-        });
-      }
-    },
-  };
-})();
+export var Autoload = createStartupAutoload(browser);
