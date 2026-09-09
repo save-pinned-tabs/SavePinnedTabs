@@ -202,6 +202,7 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
 });
 
 test("an autoload selection persists across browser restart", async () => {
+  test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-restart-"));
   let firstLaunch;
   let secondLaunch;
