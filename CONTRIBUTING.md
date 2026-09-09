@@ -37,7 +37,7 @@ After modifying the schema of the sets object, update the JSON-Schema definition
 
 - Set the version number in package.json
 
-- Set the version number in manifest.json
+- Set the version number in `src/manifest.json`
 
 - Build the extension
 

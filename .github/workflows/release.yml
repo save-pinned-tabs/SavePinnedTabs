@@ -31,7 +31,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#v}"
-          test "$(node -p "require('./manifest.json').version")" = "$VERSION"
+          test "$(node -p "require('./src/manifest.json').version")" = "$VERSION"
           test "$(node -p "require('./package.json').version")" = "$VERSION"
 
       - name: Install dependencies

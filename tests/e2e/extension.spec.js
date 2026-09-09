@@ -51,7 +51,7 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
 }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
-  const tabFixture = `chrome-extension://${extensionId}/tests/e2e/tab.html`;
+  const tabFixture = `chrome-extension://${extensionId}/options.html`;
   const firstUrl = `${tabFixture}?first`;
   const secondUrl = `${tabFixture}?second`;
   const unwantedUrl = `${tabFixture}?unwanted`;
@@ -81,7 +81,7 @@ test("a user can export and import tab sets", async ({ extension }) => {
   const popup = await openExtensionPage(context, extensionId, "popup.html");
 
   await createPinnedTabs(popup, [
-    `chrome-extension://${extensionId}/tests/e2e/tab.html?exported`,
+    `chrome-extension://${extensionId}/options.html?exported`,
   ]);
   await saveSet(popup, "Backup");
 
@@ -160,7 +160,7 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
 test("autoload logic restores the configured pinned tabs", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
-  const autoloadUrl = `chrome-extension://${extensionId}/tests/e2e/tab.html?manual-autoload`;
+  const autoloadUrl = `chrome-extension://${extensionId}/options.html?manual-autoload`;
 
   await createPinnedTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Manual startup");
@@ -182,7 +182,7 @@ test("autoload logic restores the configured pinned tabs", async ({ extension })
 test("the startup handler restores the configured pinned tabs", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
-  const autoloadUrl = `chrome-extension://${extensionId}/tests/e2e/tab.html?startup-handler`;
+  const autoloadUrl = `chrome-extension://${extensionId}/options.html?startup-handler`;
 
   await createPinnedTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Startup handler");
@@ -214,7 +214,7 @@ test("an autoload selection persists across browser restart", async () => {
       firstLaunch.extensionId,
       "popup.html",
     );
-    const autoloadUrl = `chrome-extension://${firstLaunch.extensionId}/tests/e2e/tab.html?autoloaded`;
+    const autoloadUrl = `chrome-extension://${firstLaunch.extensionId}/options.html?autoloaded`;
 
     await createPinnedTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
