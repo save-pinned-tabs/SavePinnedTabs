@@ -15,7 +15,7 @@
     "run:firefox-mac": "web-ext run -t firefox-desktop --firefox-binary=/Applications/Firefox\\ Developer\\ Edition.app/Contents/MacOS/firefox-bin --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
     "run:brave": "web-ext run -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
     "run:vivaldi": "web-ext run -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
-    "build": "npm run vendor:sweetalert2 && web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .git node_modules tests playwright.config.js test-results playwright-report",
+    "build": "npm run vendor:sweetalert2 && web-ext build --overwrite-dest -a dist -i dist savepinned-profile-* .agents skills-lock.json .git node_modules tests playwright.config.js test-results playwright-report",
     "build:firefox": "npm run vendor:sweetalert2 && node scripts/build-firefox.mjs",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
     "test:e2e": "playwright test",
