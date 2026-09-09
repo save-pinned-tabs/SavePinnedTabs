@@ -1,0 +1,135 @@
+---
+import "../styles/global.css";
+
+const stores = [
+  {
+    name: "Chrome Web Store",
+    label: "Get it for Chrome",
+    href: "https://chrome.google.com/webstore/detail/save-pinned-tabs/anmidgajdonkgmmilbccfefkfieajakd",
+    icon: "https://api.iconify.design/logos:chrome.svg",
+  },
+  {
+    name: "Firefox Add-ons",
+    label: "Get it for Firefox",
+    href: "https://addons.mozilla.org/en-US/firefox/addon/save-pinned-tabs/",
+    icon: "https://api.iconify.design/logos:firefox.svg",
+  },
+  {
+    name: "Microsoft Edge Add-ons",
+    label: "Get it for Edge",
+    href: "https://microsoftedge.microsoft.com/addons/detail/ahejjkehekfnjbpaaochgfbmbajocdkn",
+    icon: "https://api.iconify.design/logos:microsoft-edge.svg",
+  },
+];
+
+const projectLinks = [
+  { label: "Download a release", href: "https://github.com/save-pinned-tabs/SavePinnedTabs/releases" },
+  { label: "View the source", href: "https://github.com/save-pinned-tabs/SavePinnedTabs" },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta
+      name="description"
+      content="Save Pinned Tabs is a browser extension that saves, restores, and syncs named groups of pinned tabs."
+    />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <title>Save Pinned Tabs — Browser extension</title>
+  </head>
+  <body class="min-h-screen bg-white antialiased">
+    <main class="mx-auto max-w-4xl px-5">
+
+      <section class="grid items-center gap-10 py-16 sm:grid-cols-[1fr_180px] sm:py-24">
+        <div>
+          <h1 class="text-4xl font-bold leading-tight tracking-tight text-ink sm:text-5xl">Save Pinned Tabs</h1>
+          <p class="mt-5 max-w-2xl text-lg leading-8 text-muted">
+            A browser extension to save, restore, and autoload named groups of pinned tabs. Update or delete saved sets, import and export JSON backups, and sync sets through your browser’s extension storage.
+          </p>
+
+          <div class="mt-8 flex flex-wrap gap-3">
+            {stores.map((store) => (
+              <a
+                class="inline-flex items-center gap-2 border border-brand bg-brand px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-dark"
+                href={store.href}
+                aria-label={`${store.label} from ${store.name}`}
+              >
+                <img class="h-5 w-5" src={store.icon} alt="" width="20" height="20" />
+                {store.label}
+              </a>
+            ))}
+          </div>
+
+          <div class="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            {projectLinks.map((link) => (
+              <a class="text-ink underline underline-offset-4 hover:text-brand" href={link.href}>
+                {link.label}
+              </a>
+            ))}
+          </div>
+        </div>
+
+        <img
+          class="w-36 sm:w-44"
+          src="/logo.png"
+          alt="Save Pinned Tabs logo: a red pushpin over a blue disk"
+          width="176"
+          height="176"
+        />
+      </section>
+
+
+      <section class="border-y border-ink/15 py-12">
+        <div class="grid gap-6 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div>
+            <h2 class="text-2xl font-bold">Support the project</h2>
+            <p class="mt-2 max-w-2xl leading-7 text-muted">
+              Save Pinned Tabs will always be free and open source. If you appreciate it and want to support our work with a donation, please visit our OpenCollective. Thank you!
+            </p>
+          </div>
+          <a
+            class="w-fit border-2 border-brand px-5 py-3 font-semibold text-brand hover:bg-brand hover:text-white"
+            href="https://opencollective.com/save-pinned-tabs/contribute"
+          >
+            Contribute on Open Collective
+          </a>
+        </div>
+      </section>
+
+      <section class="py-12 sm:py-16">
+        <h2 class="text-2xl font-bold">Supporters</h2>
+        <p class="mt-2 text-muted">Thank you to the people who have chipped in to keep the extension maintained!</p>
+        <a
+          class="mt-6 block border border-ink/15 p-4"
+          href="https://opencollective.com/save-pinned-tabs"
+          aria-label="See all Save Pinned Tabs supporters on Open Collective"
+        >
+          <img
+            class="max-w-full"
+            src="https://opencollective.com/save-pinned-tabs/individuals.svg?width=890"
+            alt="Save Pinned Tabs supporters"
+            width="890"
+            height="100"
+            loading="lazy"
+          />
+        </a>
+      </section>
+    </main>
+
+    <footer class="border-t border-ink/15">
+      <div class="mx-auto flex max-w-4xl flex-col gap-4 px-5 py-7 text-sm text-muted sm:flex-row sm:items-center sm:justify-between">
+        <p>Free and open source under the MIT License.</p>
+        <div class="flex flex-wrap gap-5">
+          <a class="hover:text-ink hover:underline" href="https://github.com/save-pinned-tabs/SavePinnedTabs/releases">Releases</a>
+          <a class="hover:text-ink hover:underline" href="https://github.com/save-pinned-tabs/SavePinnedTabs">GitHub</a>
+          <a class="hover:text-ink hover:underline" href="https://opencollective.com/save-pinned-tabs">Open Collective</a>
+          <a class="hover:text-ink hover:underline" href="mailto:save-pinned-tabs-group@googlegroups.com">Contact Us</a>
+        </div>
+      </div>
+    </footer>
+  </body>
+</html>
