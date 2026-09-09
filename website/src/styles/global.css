@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Arial, Helvetica, sans-serif;
+  --color-ink: #202124;
+  --color-muted: #5f6368;
+  --color-brand: #2878c8;
+  --color-brand-dark: #1f65aa;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background: #ffffff;
+    color: #202124;
+    font-family: var(--font-sans);
+  }
+
+  a:focus-visible {
+    outline: 3px solid #2497d0;
+    outline-offset: 4px;
+  }
+}
