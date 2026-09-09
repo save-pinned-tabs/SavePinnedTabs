@@ -16,7 +16,7 @@ export var Sets = (function () {
             atabs[winid] = id;
             browser.storage.local.set({'activeTabs': atabs}).then(function() {
                 console.log('Active tabset for window '+winid+' is set to '+id);
-                window.location.href = "popup.html";
+                if (typeof window !== 'undefined') window.location.href = "popup.html";
             });
         });
     }

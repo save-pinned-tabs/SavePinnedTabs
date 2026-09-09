@@ -29,6 +29,16 @@ async function saveSet(page, name) {
   await expect(page.locator(".load-row", { hasText: name })).toBeVisible();
 }
 
+async function selectAutoloadSet(page, name) {
+  await Promise.all([
+    page.waitForNavigation(),
+    page
+      .locator(".load-row", { hasText: name })
+      .locator("input[name=autoload]")
+      .check(),
+  ]);
+}
+
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
@@ -164,11 +174,7 @@ test("autoload logic restores the configured pinned tabs", async ({ extension })
 
   await createPinnedTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Manual startup");
-  await popup
-    .locator(".load-row", { hasText: "Manual startup" })
-    .locator("input[name=autoload]")
-    .check();
-  await expect(popup.locator(".load-row", { hasText: "Manual startup" })).toBeVisible();
+  await selectAutoloadSet(popup, "Manual startup");
   await removePinnedTabs(popup);
 
   await popup.evaluate(async () => {
@@ -186,13 +192,7 @@ test("startup keeps an already restored pinned tab open", async ({ extension }) 
 
   await createPinnedTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Already restored");
-  await Promise.all([
-    popup.waitForNavigation(),
-    popup
-      .locator(".load-row", { hasText: "Already restored" })
-      .locator("input[name=autoload]")
-      .check(),
-  ]);
+  await selectAutoloadSet(popup, "Already restored");
 
   const tabIdBeforeStartup = await popup.evaluate(async (url) => {
     const tabs = await chrome.tabs.query({ url });
@@ -218,11 +218,7 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
 
   await createPinnedTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Startup handler");
-  await popup
-    .locator(".load-row", { hasText: "Startup handler" })
-    .locator("input[name=autoload]")
-    .check();
-  await expect(popup.locator(".load-row", { hasText: "Startup handler" })).toBeVisible();
+  await selectAutoloadSet(popup, "Startup handler");
   await removePinnedTabs(popup);
 
   await popup.evaluate(async () => {
@@ -250,10 +246,7 @@ test("an autoload selection persists across browser restart", async () => {
 
     await createPinnedTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
-    await popup
-      .locator(".load-row", { hasText: "Startup" })
-      .locator("input[name=autoload]")
-      .check();
+    await selectAutoloadSet(popup, "Startup");
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
