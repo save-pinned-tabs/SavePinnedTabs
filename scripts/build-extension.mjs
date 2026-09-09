@@ -7,7 +7,6 @@ const runtimePaths = [
   "functions.js",
   "images",
   "lib",
-  "LICENSE",
   "options.html",
   "options.js",
   "popup.html",
@@ -22,10 +21,13 @@ if (target !== "chromium" && target !== "firefox") {
 }
 
 const projectRoot = process.cwd();
+const sourceDirectory = path.join(projectRoot, "src");
 const stagingDirectory = await mkdtemp(
   path.join(os.tmpdir(), `save-pinned-tabs-${target}-`),
 );
-const manifest = JSON.parse(await readFile("manifest.json", "utf8"));
+const manifest = JSON.parse(
+  await readFile(path.join(sourceDirectory, "manifest.json"), "utf8"),
+);
 
 if (target === "firefox") {
   manifest.background = {
@@ -54,8 +56,16 @@ async function runWebExt(args) {
 try {
   await Promise.all(
     runtimePaths.map((source) =>
-      cp(source, path.join(stagingDirectory, source), { recursive: true }),
+      cp(
+        path.join(sourceDirectory, source),
+        path.join(stagingDirectory, source),
+        { recursive: true },
+      ),
     ),
+  );
+  await cp(
+    path.join(projectRoot, "LICENSE"),
+    path.join(stagingDirectory, "LICENSE"),
   );
   await writeFile(
     path.join(stagingDirectory, "manifest.json"),

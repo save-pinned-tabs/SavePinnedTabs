@@ -3,7 +3,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const extensionPath = path.resolve(__dirname, "../..");
+const extensionPath = path.resolve(__dirname, "../../src");
 
 async function launchExtension(userDataDir) {
   const context = await chromium.launchPersistentContext(userDataDir, {

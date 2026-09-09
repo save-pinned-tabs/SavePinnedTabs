@@ -8,4 +8,4 @@ const validate = ajv.compile(schema);
 const generated = standaloneCode(ajv, validate);
 const browserBundle = `globalThis.validate20 = (() => {\n  const module = { exports: {} };\n  const exports = module.exports;\n  ${generated}\n  return module.exports;\n})();\n`;
 
-writeFileSync("lib/validate_sets_schema.min.js", browserBundle);
+writeFileSync("src/lib/validate_sets_schema.min.js", browserBundle);
