@@ -179,6 +179,38 @@ test("autoload logic restores the configured pinned tabs", async ({ extension })
   await expectOpenTabs(context, [autoloadUrl]);
 });
 
+test("startup keeps an already restored pinned tab open", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const autoloadUrl = `chrome-extension://${extensionId}/tests/e2e/tab.html?already-restored`;
+
+  await createPinnedTabs(popup, [autoloadUrl]);
+  await saveSet(popup, "Already restored");
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "Already restored" })
+      .locator("input[name=autoload]")
+      .check(),
+  ]);
+
+  const tabIdBeforeStartup = await popup.evaluate(async (url) => {
+    const tabs = await chrome.tabs.query({ url });
+    return tabs[0].id;
+  }, autoloadUrl);
+
+  await popup.evaluate(async () => {
+    const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
+    await handleStartup();
+  });
+
+  const tabIdAfterStartup = await popup.evaluate(async (url) => {
+    const tabs = await chrome.tabs.query({ url });
+    return tabs[0].id;
+  }, autoloadUrl);
+  expect(tabIdAfterStartup).toBe(tabIdBeforeStartup);
+});
+
 test("the startup handler restores the configured pinned tabs", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");

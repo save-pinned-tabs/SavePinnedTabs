@@ -182,24 +182,29 @@ export var Sets = (function () {
             browser.tabs.query({
                 pinned: true,
                 windowId: winid
-            }).then(function (cutabs) {
+            }).then(function (currentTabs) {
                 browser.storage.sync.get(null).then(function (sets) {
-            		var autoloaded = false;
-            		for (var property in sets) {
-            			if (sets.hasOwnProperty(property)) {
-            				var set = sets[property];
-            				if (set.autoload == 1) { // there is a tab set to be autoloaded
+                    var autoloaded = false;
+                    for (var property in sets) {
+                        if (sets.hasOwnProperty(property)) {
+                            var set = sets[property];
+                            if (set.autoload == 1) { // there is a tab set to be autoloaded
                                 console.log('Autoloading tabs');
-            					autoloaded = true;
-            					Sets.load(property, winid);
+                                autoloaded = true;
+                                var alreadyRestored = currentTabs.length === set.tabs.length
+                                    && currentTabs.every(function (tab, index) {
+                                        return tab.url === set.tabs[index];
+                                    });
+                                if (alreadyRestored) set_active(property, winid);
+                                else Sets.load(property, winid);
                                 break;
-            				}
-            			}
-            		}
-            		if (!autoloaded) Sets.clearActive(winid);
-            	});
+                            }
+                        }
+                    }
+                    if (!autoloaded) Sets.clearActive(winid);
+                });
             });
-		},
+        },
 		export: function () {
 			var fileName = "SavePinnedTabs_export_" + new Date().toISOString().replaceAll(/[.:]/g, "-") + '.json';
 			
