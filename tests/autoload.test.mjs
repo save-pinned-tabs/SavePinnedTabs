@@ -146,17 +146,88 @@ test('runs startup restoration once when both startup triggers fire', async () =
   assert.equal(setReads, 1);
 });
 
-test('allows startup restoration to retry after a failed attempt', async () => {
+test('retries startup restoration when the first window is not ready', async () => {
+  let windows = [];
+  let setReads = 0;
+  const browser = createBrowser();
+  browser.storage.sync.get = async () => {
+    setReads += 1;
+    return {};
+  };
+  browser.windows = {
+    async getAll() {
+      return windows;
+    },
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.manual();
+  windows = [{ id: 1, type: 'normal' }];
+  await autoload.windowCreated(windows[0]);
+
+  assert.equal(setReads, 1);
+});
+
+test('waits for the first normal window when no creation event fires', async () => {
+  let windowReads = 0;
+  let restoredWindowId;
+  const browser = createBrowser();
+  browser.tabs.query = async ({ windowId }) => {
+    restoredWindowId = windowId;
+    return [];
+  };
+  browser.windows = {
+    async getAll() {
+      windowReads += 1;
+      return windowReads < 3 ? [] : [{ id: 5, type: 'normal' }];
+    },
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.manual();
+
+  assert.equal(restoredWindowId, 5);
+});
+
+test('uses a normal window created while startup restoration is waiting', async () => {
+  const fallbackDelay = deferred();
+  let restoredWindowId;
+  const browser = createBrowser();
+  browser.tabs.query = async ({ windowId }) => {
+    restoredWindowId = windowId;
+    return [];
+  };
+  browser.windows = {
+    async getAll() {
+      return [];
+    },
+  };
+  const autoload = createStartupAutoload(browser, () => fallbackDelay.promise);
+
+  const fallback = autoload.manual();
+  const windowEvent = autoload.windowCreated({ id: 7, type: 'normal' });
+  fallbackDelay.resolve();
+  await Promise.all([fallback, windowEvent]);
+
+  assert.equal(restoredWindowId, 7);
+});
+
+test('allows startup restoration to retry with a replacement window', async () => {
   let attempts = 0;
+  const queriedWindowIds = [];
   const browser = createBrowser();
   browser.storage.sync.get = async () => {
     attempts += 1;
     if (attempts === 1) throw new Error('storage unavailable');
     return {};
   };
+  browser.tabs.query = async ({ windowId }) => {
+    queriedWindowIds.push(windowId);
+    return [];
+  };
   browser.windows = {
     async getAll() {
-      return [{ id: 1, type: 'normal' }];
+      return [{ id: 2, type: 'normal' }];
     },
   };
   const autoload = createStartupAutoload(browser, async () => {});
@@ -165,9 +236,10 @@ test('allows startup restoration to retry after a failed attempt', async () => {
     autoload.windowCreated({ id: 1, type: 'normal' }),
     /storage unavailable/,
   );
-  await autoload.windowCreated({ id: 1, type: 'normal' });
+  await autoload.windowCreated({ id: 2, type: 'normal' });
 
   assert.equal(attempts, 2);
+  assert.deepEqual(queriedWindowIds, [1, 2]);
 });
 
 test('creates restored tabs sequentially', async () => {
