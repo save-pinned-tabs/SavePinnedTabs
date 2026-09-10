@@ -1,15 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import {
-  createCommandHandler,
-  createShortcutAssignments,
-  registerCommands,
-} from '../src/commands.mjs';
+import { createCommandHandler, registerCommands } from '../src/commands.mjs';
 
-function createCommandHarness({ failAt } = {}) {
+function createCommandHarness({ assignedSetId = 'saved', failAt } = {}) {
   const calls = [];
-  const shortcutSets = { 'load-set-1': 'saved' };
 
   async function awaitPoint(label, result) {
     calls.push(label);
@@ -17,23 +12,18 @@ function createCommandHarness({ failAt } = {}) {
     return result;
   }
 
+  const shortcutAssignments = {
+    list() {
+      return awaitPoint('shortcutAssignments.list', assignedSetId
+        ? { 'load-set-1': assignedSetId }
+        : {});
+    },
+  };
   const browser = {
     commands: {
       onCommand: {
         addListener(listener) {
           browser.commandListener = listener;
-        },
-      },
-    },
-    storage: {
-      local: {
-        get() {
-          return awaitPoint('storage.local.get', { shortcutSets: { ...shortcutSets } });
-        },
-        async set({ shortcutSets: savedAssignments }) {
-          await awaitPoint('storage.local.set');
-          for (const command of Object.keys(shortcutSets)) delete shortcutSets[command];
-          Object.assign(shortcutSets, savedAssignments);
         },
       },
     },
@@ -48,36 +38,46 @@ function createCommandHarness({ failAt } = {}) {
       return awaitPoint('windowTabState.replace', { windowId, setId });
     },
   };
-  return { browser, calls, shortcutSets, windowTabState };
+  return { browser, calls, shortcutAssignments, windowTabState };
 }
 
 test('an assigned command awaits replacement through WindowTabState', async () => {
-  const { browser, calls, windowTabState } = createCommandHarness();
+  const harness = createCommandHarness();
 
-  await createCommandHandler(browser, windowTabState)('load-set-1');
+  await createCommandHandler(
+    harness.browser,
+    harness.windowTabState,
+    harness.shortcutAssignments,
+  )('load-set-1');
 
-  assert.deepEqual(calls, [
-    'storage.local.get',
+  assert.deepEqual(harness.calls, [
+    'shortcutAssignments.list',
     'windows.getLastFocused',
     'windowTabState.replace',
   ]);
 });
 
 test('an unassigned command does not inspect a window or mutate tabs', async () => {
-  const { browser, calls, windowTabState } = createCommandHarness();
-  browser.storage.local.get = async () => ({ shortcutSets: {} });
+  const harness = createCommandHarness({ assignedSetId: null });
 
-  await createCommandHandler(browser, windowTabState)('load-set-1');
+  await createCommandHandler(
+    harness.browser,
+    harness.windowTabState,
+    harness.shortcutAssignments,
+  )('load-set-1');
 
-  assert.deepEqual(calls, []);
+  assert.deepEqual(harness.calls, ['shortcutAssignments.list']);
 });
 
 test('each command await rejects with actionable command context', async () => {
   for (let failAt = 1; failAt <= 3; failAt += 1) {
-    const { browser, windowTabState } = createCommandHarness({ failAt });
-
+    const harness = createCommandHarness({ failAt });
     await assert.rejects(
-      createCommandHandler(browser, windowTabState)('load-set-1'),
+      createCommandHandler(
+        harness.browser,
+        harness.windowTabState,
+        harness.shortcutAssignments,
+      )('load-set-1'),
       (error) => error.message.includes('command "load-set-1"')
         && error.message.includes('injected failure'),
       `fault ${failAt}`,
@@ -85,37 +85,10 @@ test('each command await rejects with actionable command context', async () => {
   }
 });
 
-test('shortcut assignments persist and clear through serialized storage', async () => {
-  const { browser, shortcutSets } = createCommandHarness();
-  const assignments = createShortcutAssignments(browser);
-
-  await assignments.assign('load-set-2', 'second');
-  assert.deepEqual(await assignments.list(), {
-    'load-set-1': 'saved',
-    'load-set-2': 'second',
-  });
-
-  await assignments.assign('load-set-2', null);
-  assert.deepEqual(shortcutSets, { 'load-set-1': 'saved' });
-});
-
-test('each shortcut assignment storage await has actionable fault context', async () => {
-  for (let failAt = 1; failAt <= 2; failAt += 1) {
-    const { browser } = createCommandHarness({ failAt });
-
-    await assert.rejects(
-      createShortcutAssignments(browser).assign('load-set-2', 'second'),
-      (error) => error.message.includes('assign command \"load-set-2\"')
-        && error.message.includes('injected failure'),
-      `fault ${failAt}`,
-    );
-  }
-});
-
 test('command registration installs the routed handler', () => {
-  const { browser, windowTabState } = createCommandHarness();
+  const harness = createCommandHarness();
 
-  registerCommands(browser, windowTabState);
+  registerCommands(harness.browser, harness.windowTabState, harness.shortcutAssignments);
 
-  assert.equal(typeof browser.commandListener, 'function');
+  assert.equal(typeof harness.browser.commandListener, 'function');
 });

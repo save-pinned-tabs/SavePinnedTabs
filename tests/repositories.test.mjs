@@ -7,220 +7,288 @@ import {
   TabSetRepository,
 } from '../src/tab-set-repository.mjs';
 import {
+  BrowserReferenceStorage,
+  BrowserStorageMigration,
+  InMemoryReferenceStorage,
+  LOCAL_DOCUMENT_KEY,
+  SYNC_DOCUMENT_KEY,
+} from '../src/storage-schema.mjs';
+import {
+  ShortcutAssignmentRepository,
+  ShortcutAssignmentStorage,
+} from '../src/shortcut-assignment-repository.mjs';
+import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
 } from '../src/window-session-repository.mjs';
 
+const FIRST_ID = '00000000-0000-4000-8000-000000000001';
+const SECOND_ID = '00000000-0000-4000-8000-000000000002';
+const THIRD_ID = '00000000-0000-4000-8000-000000000003';
 
-function createStorageArea(initialState = {}) {
+function idGenerator(start = 1) {
+  let next = start;
+  return () => `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`;
+}
+
+function createStorageArea(initialState = {}, failSetAt = null) {
   const state = structuredClone(initialState);
+  let setCalls = 0;
+  let failingSetCall = failSetAt;
   return {
     state,
     async get(keys) {
-      await new Promise((resolve) => setImmediate(resolve));
       if (keys === null) return structuredClone(state);
-      if (!(keys in state)) return {};
-      return { [keys]: structuredClone(state[keys]) };
+      if (Array.isArray(keys)) {
+        return Object.fromEntries(keys.filter((key) => key in state).map((key) => [key, structuredClone(state[key])]));
+      }
+      return keys in state ? { [keys]: structuredClone(state[keys]) } : {};
     },
     async set(values) {
-      await new Promise((resolve) => setImmediate(resolve));
+      setCalls += 1;
+      if (setCalls === failingSetCall) throw new Error('injected storage interruption');
       Object.assign(state, structuredClone(values));
     },
-    async remove(key) {
-      delete state[key];
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key];
+    },
+    failNextSet() {
+      failingSetCall = setCalls + 1;
     },
   };
 }
 
-function isValidImport(sets) {
-  return sets !== null
-    && typeof sets === 'object'
-    && !Array.isArray(sets)
-    && Object.values(sets).every((set) => (
-      set !== null
-      && typeof set === 'object'
-      && typeof set.set_name === 'string'
-      && (set.autoload === 0 || set.autoload === 1)
-      && Array.isArray(set.tabs)
-      && set.tabs.every((url) => typeof url === 'string')
-    ));
+function isValidImport(document) {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return false;
+  if (document.version === 2) {
+    return Array.isArray(document.sets)
+      && document.sets.every((set) => typeof set.id === 'string'
+        && typeof set.name === 'string'
+        && Array.isArray(set.tabs))
+      && typeof document.autoload?.scope === 'string'
+      && Array.isArray(document.autoload?.setIds);
+  }
+  const sets = document.version === 1 ? document.sets : document;
+  return sets && Object.values(sets).every((set) => (
+    set && typeof set.set_name === 'string'
+    && (set.autoload === 0 || set.autoload === 1)
+    && Array.isArray(set.tabs)
+  ));
 }
 
-const firstSet = {
-  set_name: 'First',
-  autoload: 0,
-  tabs: ['https://first.example/'],
-};
-const secondSet = {
-  set_name: 'Second',
-  autoload: 1,
-  tabs: ['https://second.example/'],
-};
+function createBrowserHarness({ sync = {}, local = {}, createId = idGenerator() } = {}) {
+  const syncStorage = createStorageArea(sync);
+  const localStorage = createStorageArea(local);
+  const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId });
+  const references = new BrowserReferenceStorage(localStorage, migration);
+  const windowSessions = new WindowSessionRepository(new BrowserWindowSessionStorage(references));
+  let tabSets;
+  const shortcutAssignments = new ShortcutAssignmentRepository(
+    new ShortcutAssignmentStorage(references),
+    { hasSet: (setId) => tabSets.get(setId) },
+  );
+  tabSets = new TabSetRepository(new BrowserTabSetStorage(syncStorage, migration), {
+    createId,
+    validateImport: isValidImport,
+    windowSessions,
+    shortcutAssignments,
+  });
+  return { tabSets, windowSessions, shortcutAssignments, syncStorage, localStorage };
+}
 
-const adapterFactories = [
-  {
-    name: 'browser storage',
-    create() {
-      const syncStorage = createStorageArea();
-      const localStorage = createStorageArea();
-      const windowSessions = new WindowSessionRepository(
-        new BrowserWindowSessionStorage(localStorage),
-      );
-      const tabSets = new TabSetRepository(
-        new BrowserTabSetStorage(syncStorage),
-        { validateImport: isValidImport, windowSessions },
-      );
-      return { tabSets, windowSessions, syncStorage, localStorage };
-    },
-  },
-  {
-    name: 'memory',
-    create() {
-      const windowSessions = new WindowSessionRepository(
-        new InMemoryWindowSessionStorage(),
-      );
-      const tabSets = new TabSetRepository(
-        new InMemoryTabSetStorage(),
-        { validateImport: isValidImport, windowSessions },
-      );
-      return { tabSets, windowSessions };
-    },
-  },
-];
+function createMemoryHarness(createId = idGenerator()) {
+  const references = new InMemoryReferenceStorage();
+  const windowSessions = new WindowSessionRepository(new InMemoryWindowSessionStorage(references));
+  let tabSets;
+  const shortcutAssignments = new ShortcutAssignmentRepository(
+    new ShortcutAssignmentStorage(references),
+    { hasSet: (setId) => tabSets.get(setId) },
+  );
+  tabSets = new TabSetRepository(new InMemoryTabSetStorage(), {
+    createId,
+    validateImport: isValidImport,
+    windowSessions,
+    shortcutAssignments,
+  });
+  return { tabSets, windowSessions, shortcutAssignments };
+}
 
-for (const adapter of adapterFactories) {
-  test(`${adapter.name} tab-set repository satisfies the persistence contract`, async () => {
-    const { tabSets } = adapter.create();
+for (const [name, createHarness] of [
+  ['browser', createBrowserHarness],
+  ['memory', createMemoryHarness],
+]) {
+  test(`${name} repository uses immutable UUID identity across rename and title reuse`, async () => {
+    const { tabSets } = createHarness();
+    const first = await tabSets.save({ name: '同じ名前', tabs: ['https://first.example/'] });
+    const collision = await tabSets.save({ name: '同じ名前', tabs: ['https://second.example/'] });
 
-    assert.equal(await tabSets.get('missing'), null);
-    await Promise.all([
-      tabSets.save('first', firstSet),
-      tabSets.save('second', secondSet),
-    ]);
-    assert.deepEqual(await tabSets.get('first'), firstSet);
-    assert.deepEqual(await tabSets.list(), { first: firstSet, second: secondSet });
+    assert.equal(first.id, FIRST_ID);
+    assert.equal(collision.id, SECOND_ID);
+    assert.notEqual(first.id, collision.id);
 
-    const updatedFirst = { ...firstSet, tabs: ['https://updated.example/'] };
-    await tabSets.save('first', updatedFirst);
-    await tabSets.setAutoload('first');
-    assert.deepEqual(await tabSets.export(), {
-      first: { ...updatedFirst, autoload: 1 },
-      second: { ...secondSet, autoload: 0 },
+    const renamed = await tabSets.save({ ...first, name: 'Renamed 🚀' });
+    assert.equal(renamed.id, first.id);
+    assert.equal((await tabSets.get(first.id)).name, 'Renamed 🚀');
+
+    await tabSets.remove(first.id);
+    const reusedTitle = await tabSets.save({ name: '同じ名前', tabs: [] });
+    assert.equal(reusedTitle.id, THIRD_ID);
+    await assert.rejects(
+      tabSets.save({ ...first, name: 'Cannot resurrect' }),
+      /does not exist and cannot be reused/,
+    );
+  });
+
+  test(`${name} deletion clears Autoload, sessions, and shortcut references`, async () => {
+    const { tabSets, windowSessions, shortcutAssignments } = createHarness();
+    const first = await tabSets.save({ name: 'First', tabs: [] });
+    const second = await tabSets.save({ name: 'Second', tabs: [] });
+    await tabSets.setAutoload({ scope: 'every-window', setIds: [first.id, second.id] });
+    await windowSessions.set(1, first.id);
+    await windowSessions.set(2, second.id);
+    await shortcutAssignments.assign('load-set-1', first.id);
+    await shortcutAssignments.assign('load-set-2', second.id);
+
+    await tabSets.remove(first.id);
+
+    assert.deepEqual(await tabSets.getAutoload(), { scope: 'every-window', setIds: [second.id] });
+    assert.equal(await windowSessions.get(1), null);
+    assert.equal(await windowSessions.get(2), second.id);
+    assert.deepEqual(await shortcutAssignments.list(), { 'load-set-2': second.id });
+  });
+
+  test(`${name} versioned import remaps collisions and export round-trips domain records`, async () => {
+    const { tabSets } = createHarness();
+    const existing = await tabSets.save({ name: 'Existing', tabs: [] });
+    const imported = await tabSets.import({
+      version: 2,
+      sets: [
+        { id: existing.id, name: 'Collision', tabs: ['https://collision.example/'] },
+        { id: SECOND_ID, name: 'Unicode 日本語', tabs: [] },
+      ],
+      autoload: { scope: 'every-window', setIds: [existing.id, SECOND_ID] },
     });
+
+    assert.deepEqual(imported.map((set) => set.id), [SECOND_ID, THIRD_ID]);
+    assert.deepEqual(await tabSets.getAutoload(), {
+      scope: 'every-window',
+      setIds: [SECOND_ID, THIRD_ID],
+    });
+    const exported = await tabSets.export();
+    assert.equal(exported.version, 2);
+    assert.deepEqual(exported.sets.map((set) => set.name), ['Existing', 'Collision', 'Unicode 日本語']);
   });
 
-  test(`${adapter.name} window-session repository preserves concurrent window updates`, async () => {
-    const { windowSessions } = adapter.create();
+  test(`${name} accepts legacy exports and rejects unsupported documents actionably`, async () => {
+    const { tabSets } = createHarness();
+    const imported = await tabSets.import({
+      bGVnYWN5: { set_name: 'Legacy', autoload: 1, tabs: ['https://legacy.example/'] },
+    });
 
-    assert.equal(await windowSessions.get(999), null);
-    await Promise.all([
-      windowSessions.set(1, 'first'),
-      windowSessions.set(2, 'second'),
-    ]);
-    assert.equal(await windowSessions.get(1), 'first');
-    assert.equal(await windowSessions.get(2), 'second');
-
-    await windowSessions.clearClosedWindow(1);
-    assert.equal(await windowSessions.get(1), null);
-    assert.equal(await windowSessions.get(2), 'second');
-    await windowSessions.clearAll();
-    assert.equal(await windowSessions.get(2), null);
-  });
-
-  test(`${adapter.name} tab-set deletion cleans every dangling window session`, async () => {
-    const { tabSets, windowSessions } = adapter.create();
-    await tabSets.save('first', firstSet);
-    await Promise.all([
-      windowSessions.set(1, 'first'),
-      windowSessions.set(2, 'second'),
-      windowSessions.set(3, 'first'),
-    ]);
-
-    await tabSets.remove('first');
-
-    assert.equal(await tabSets.get('first'), null);
-    assert.equal(await windowSessions.get(1), null);
-    assert.equal(await windowSessions.get(2), 'second');
-    assert.equal(await windowSessions.get(3), null);
-  });
-
-  test(`${adapter.name} tab-set import rejects invalid records without changing state`, async () => {
-    const { tabSets } = adapter.create();
-    await tabSets.save('first', firstSet);
-
+    assert.equal(imported[0].name, 'Legacy');
+    assert.deepEqual((await tabSets.getAutoload()).setIds, [imported[0].id]);
     await assert.rejects(
-      tabSets.import({ invalid: { set_name: 'Invalid', autoload: 3, tabs: [] } }),
-      /Failed to import tab set "import payload"/,
-    );
-    assert.deepEqual(await tabSets.list(), { first: firstSet });
-
-    await tabSets.import({ second: secondSet });
-    assert.deepEqual(await tabSets.list(), { first: firstSet, second: secondSet });
-  });
-}
-
-test('browser window-session repositories coordinate concurrent extension contexts', async () => {
-  const localStorage = createStorageArea();
-  const popupSessions = new WindowSessionRepository(
-    new BrowserWindowSessionStorage(localStorage),
-  );
-  const workerSessions = new WindowSessionRepository(
-    new BrowserWindowSessionStorage(localStorage),
-  );
-
-  await Promise.all([
-    popupSessions.set(1, 'first'),
-    workerSessions.set(2, 'second'),
-  ]);
-
-  assert.deepEqual(localStorage.state, {
-    activeTabs: { 1: 'first', 2: 'second' },
-  });
-});
-
-for (const Storage of [BrowserTabSetStorage, InMemoryTabSetStorage]) {
-  test(`${Storage.name} contextualizes validator failures`, async () => {
-    const validationFailure = new Error('validator unavailable');
-    const validateImport = () => {
-      throw validationFailure;
-    };
-    const storage = Storage === BrowserTabSetStorage
-      ? new Storage(createStorageArea())
-      : new Storage();
-    const repository = new TabSetRepository(storage, { validateImport });
-
-    await assert.rejects(
-      repository.import({ first: firstSet }),
-      /Failed to import tab set "import payload": validator unavailable/,
+      tabSets.import({ version: 99, sets: [] }),
+      /Unsupported tab-set document version "99"\. Supported versions are 1 and 2/,
     );
   });
 }
 
-test('browser adapters preserve the existing storage format', async () => {
-  const { tabSets, windowSessions, syncStorage, localStorage } = adapterFactories[0].create();
+test('legacy browser profile migrates once with valid references and no mixed schema', async () => {
+  const harness = createBrowserHarness({
+    sync: {
+      'Rmlyc3Q=': { set_name: 'First', autoload: 1, tabs: ['https://first.example/'] },
+      U2Vjb25k: { set_name: 'Second', autoload: 1, tabs: ['https://second.example/'] },
+      '5pel5pys6Kqe': { set_name: '日本語', autoload: 0, tabs: ['https://unicode.example/'] },
+      unrelated: { preference: true },
+      unrelatedSetShape: { set_name: 'Preference', autoload: 0, tabs: [] },
+    },
+    local: {
+      activeTabs: { 1: 'Rmlyc3Q=', 2: 'missing' },
+      shortcutSets: { 'load-set-1': 'U2Vjb25k', 'load-set-2': 'missing' },
+      unrelated: 'keep',
+    },
+  });
 
-  await tabSets.save('first', firstSet);
-  await windowSessions.set(42, 'first');
+  const sets = await harness.tabSets.list();
+  assert.deepEqual(sets.map((set) => set.name), ['First', 'Second', '日本語']);
+  assert.deepEqual(await harness.tabSets.getAutoload(), {
+    scope: 'first-window',
+    setIds: [sets[0].id, sets[1].id],
+  });
+  assert.equal(await harness.windowSessions.get(1), sets[0].id);
+  assert.equal(await harness.windowSessions.get(2), null);
+  assert.deepEqual(await harness.shortcutAssignments.list(), { 'load-set-1': sets[1].id });
+  assert.deepEqual(
+    Object.keys(harness.syncStorage.state).sort(),
+    [SYNC_DOCUMENT_KEY, 'unrelated', 'unrelatedSetShape'],
+  );
+  assert.deepEqual(Object.keys(harness.localStorage.state).sort(), [LOCAL_DOCUMENT_KEY, 'unrelated']);
+  assert.equal(harness.syncStorage.state[SYNC_DOCUMENT_KEY].migration, undefined);
 
-  assert.deepEqual(syncStorage.state, { first: firstSet });
-  assert.deepEqual(localStorage.state, { activeTabs: { 42: 'first' } });
+  const ids = sets.map((set) => set.id);
+  assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), ids);
 });
 
-test('browser adapter errors identify the operation and record', async () => {
-  const failure = new Error('storage unavailable');
-  const failingStorage = {
-    async get() { throw failure; },
-    async set() { throw failure; },
-    async remove() { throw failure; },
-  };
-  const tabSets = new TabSetRepository(new BrowserTabSetStorage(failingStorage));
-  const windowSessions = new WindowSessionRepository(
-    new BrowserWindowSessionStorage(failingStorage),
+test('saveForWindow rolls back new and updated records when session activation fails', async () => {
+  const generatedIds = [FIRST_ID, FIRST_ID, SECOND_ID];
+  const harness = createBrowserHarness({ createId: () => generatedIds.shift() });
+  await harness.tabSets.list();
+  harness.localStorage.failNextSet();
+
+  await assert.rejects(
+    harness.tabSets.saveForWindow({ name: 'New', tabs: [] }, 1),
+    /injected storage interruption/,
+  );
+  assert.deepEqual(await harness.tabSets.list(), []);
+
+  const saved = await harness.tabSets.save({ name: 'Existing', tabs: ['before'] });
+  assert.equal(saved.id, SECOND_ID);
+  harness.localStorage.failNextSet();
+  await assert.rejects(
+    harness.tabSets.saveForWindow({ ...saved, name: 'Updated', tabs: ['after'] }, 1),
+    /injected storage interruption/,
   );
 
-  await assert.rejects(tabSets.get('saved'), /Failed to get tab set "saved"/);
-  await assert.rejects(tabSets.save('saved', firstSet), /Failed to save tab set "saved"/);
-  await assert.rejects(windowSessions.get(42), /Failed to get window session for window "42"/);
-  await assert.rejects(windowSessions.set(42, 'saved'), /Failed to set window session for window "42"/);
+  assert.deepEqual(await harness.tabSets.get(saved.id), saved);
+  assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), [SECOND_ID]);
+});
+
+test('memory rollback retains failed UUID identity in its ledger', async () => {
+  const generatedIds = [FIRST_ID, FIRST_ID, SECOND_ID];
+  const tabSets = new TabSetRepository(new InMemoryTabSetStorage(), {
+    createId: () => generatedIds.shift(),
+    windowSessions: {
+      async set() {
+        throw new Error('session unavailable');
+      },
+    },
+  });
+
+  await assert.rejects(
+    tabSets.saveForWindow({ name: 'Failed', tabs: [] }, 1),
+    /session unavailable/,
+  );
+  const saved = await tabSets.save({ name: 'Next', tabs: [] });
+
+  assert.equal(saved.id, SECOND_ID);
+  assert.equal(await tabSets.get(FIRST_ID), null);
+});
+
+test('interrupted migration resumes idempotently from its persisted identity map', async () => {
+  const syncStorage = createStorageArea({
+    TGVnYWN5: { set_name: 'Legacy', autoload: 1, tabs: [] },
+  });
+  const localStorage = createStorageArea({ activeTabs: { 7: 'TGVnYWN5' } }, 1);
+  const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId: idGenerator() });
+
+  await assert.rejects(migration.ensureMigrated(), /injected storage interruption/);
+  const stagedId = Object.keys(syncStorage.state[SYNC_DOCUMENT_KEY].sets)[0];
+  await migration.ensureMigrated();
+
+  assert.equal(localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7], stagedId);
+  assert.equal(syncStorage.state[SYNC_DOCUMENT_KEY].migration, undefined);
+  assert.equal('TGVnYWN5' in syncStorage.state, false);
+  assert.equal('activeTabs' in localStorage.state, false);
 });

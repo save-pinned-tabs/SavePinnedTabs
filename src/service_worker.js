@@ -1,8 +1,5 @@
 import { preloadFavicons } from './autoload.mjs';
-import {
-  AUTOLOAD_FIRST_WINDOW,
-  createBrowserLifecycle,
-} from './browser-lifecycle.mjs';
+import { createBrowserLifecycle } from './browser-lifecycle.mjs';
 import { registerCommands } from './commands.mjs';
 import {
   createBrowserWindowTabState,
@@ -16,7 +13,6 @@ const windowTabState = createBrowserWindowTabState(browser, {
   },
 });
 const browserLifecycle = createBrowserLifecycle(browser, {
-  autoloadPolicy: AUTOLOAD_FIRST_WINDOW,
   windowTabState,
 });
 

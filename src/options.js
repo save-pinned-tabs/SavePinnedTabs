@@ -17,8 +17,8 @@ async function initializeShortcuts() {
 
   for (const select of document.querySelectorAll("[data-shortcut-command]")) {
     select.append(new Option("Not assigned", ""));
-    for (const [setId, set] of Object.entries(sets)) {
-      select.append(new Option(set.set_name, setId));
+    for (const set of sets) {
+      select.append(new Option(set.name, set.id));
     }
     select.value = assignments[select.dataset.shortcutCommand] ?? "";
     select.dataset.savedValue = select.value;
@@ -49,9 +49,8 @@ function showNotification(message) {
   dialog.showModal();
 }
 
-function notifyImportError() {
-  showNotification("Failed to import tab sets. Please try again.");
-
+function notifyImportError(error) {
+  showNotification(error?.message || "Failed to import tab sets. Please try again.");
   importInput.value = "";
 }
 
@@ -65,16 +64,17 @@ function handleImport() {
   var reader = new FileReader();
 
   reader.onload = function () {
-    var importData = JSON.parse(reader.result);
-    Sets.import(importData)
-      .then(function () {
-        var importedCount = Object.keys(importData).length;
-
-        showNotification("Successfully Imported " + importedCount + " Tab Sets");
-
-        importInput.value = "";
-      })
-      .catch(notifyImportError);
+    try {
+      var importData = JSON.parse(reader.result);
+      Sets.import(importData)
+        .then(function (importedSets) {
+          showNotification("Successfully Imported " + importedSets.length + " Tab Sets");
+          importInput.value = "";
+        })
+        .catch(notifyImportError);
+    } catch (error) {
+      notifyImportError(error);
+    }
   };
 
   reader.onerror = notifyImportError;

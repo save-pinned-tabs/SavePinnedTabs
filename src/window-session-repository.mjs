@@ -1,10 +1,4 @@
-import {
-  createSerializedOperation,
-  createSerializedStorageOperation,
-} from './serialized-operation.mjs';
-
-const ACTIVE_TABS_KEY = 'activeTabs';
-const WINDOW_SESSION_LOCK = 'save-pinned-tabs:window-sessions';
+import { BrowserReferenceStorage, InMemoryReferenceStorage } from './storage-schema.mjs';
 
 function sessionError(operation, identity, cause) {
   return new Error(`Failed to ${operation} window session for window "${identity}": ${cause.message}`, { cause });
@@ -86,49 +80,46 @@ export class WindowSessionRepository {
 }
 
 export class BrowserWindowSessionStorage {
-  #storage;
-  #runExclusive;
+  #references;
+  #document;
 
-  constructor(localStorage) {
-    this.#storage = localStorage;
-    this.#runExclusive = createSerializedStorageOperation(localStorage, WINDOW_SESSION_LOCK);
+  constructor(localStorageOrReferences, migration) {
+    this.#references = typeof localStorageOrReferences?.read === 'function'
+      ? localStorageOrReferences
+      : new BrowserReferenceStorage(localStorageOrReferences, migration);
   }
 
   runExclusive(operation) {
-    return this.#runExclusive(operation);
+    return this.#references.runExclusive(async () => {
+      this.#document = await this.#references.read();
+      try {
+        return await operation();
+      } finally {
+        this.#document = undefined;
+      }
+    });
   }
 
   async readAll() {
-    const stored = await this.#storage.get(ACTIVE_TABS_KEY);
-    return { ...(stored[ACTIVE_TABS_KEY] ?? {}) };
+    const document = this.#document ?? await this.#references.read();
+    return { ...document.windowSessions };
   }
 
   async writeAll(sessions) {
-    await this.#storage.set({ [ACTIVE_TABS_KEY]: sessions });
+    const document = this.#document ?? await this.#references.read();
+    document.windowSessions = { ...sessions };
+    await this.#references.write(document);
   }
 
   async clearAll() {
-    await this.#storage.remove(ACTIVE_TABS_KEY);
+    const document = this.#document ?? await this.#references.read();
+    document.windowSessions = {};
+    await this.#references.write(document);
   }
 }
 
-export class InMemoryWindowSessionStorage {
-  #sessions = {};
-  #runExclusive = createSerializedOperation('save-pinned-tabs:memory-window-sessions');
-
-  runExclusive(operation) {
-    return this.#runExclusive(operation);
-  }
-
-  async readAll() {
-    return { ...this.#sessions };
-  }
-
-  async writeAll(sessions) {
-    this.#sessions = { ...sessions };
-  }
-
-  async clearAll() {
-    this.#sessions = {};
+export class InMemoryWindowSessionStorage extends BrowserWindowSessionStorage {
+  constructor(references = new InMemoryReferenceStorage()) {
+    super(references);
   }
 }

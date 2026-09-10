@@ -200,27 +200,30 @@ export class WindowTabState {
     });
   }
 
-  captureAndSave(windowId, setId, { name, autoload = 0 }) {
-    return this.#run(windowId, `capture and save tab set "${setId}"`, async () => {
+  captureAndSave(windowId, set) {
+    return this.#run(windowId, `capture and save tab set "${set.id ?? 'new'}"`, async () => {
       const tabs = await this.#tabs.queryPinned(windowId);
       if (tabs.length === 0) {
         await this.#windowSessions.clear(windowId);
         return null;
       }
 
-      const set = {
-        set_name: name,
-        autoload: autoload || 0,
+      const capturedSet = {
+        ...set,
         tabs: tabs.map((tab) => tab.url),
       };
       await this.#windowSessions.clear(windowId);
       try {
-        await this.#tabSets.saveForWindow(setId, set, windowId);
+        return await this.#tabSets.saveForWindow(capturedSet, windowId);
       } catch (error) {
         const rollbackErrors = await this.#clearSessionAfterFailure(windowId);
-        throw operationError(`capture and save tab set "${setId}"`, windowId, error, rollbackErrors);
+        throw operationError(
+          `capture and save tab set "${set.id ?? 'new'}"`,
+          windowId,
+          error,
+          rollbackErrors,
+        );
       }
-      return set;
     });
   }
 
@@ -391,8 +394,8 @@ export function createWindowTabStateClient(browser) {
     unload(windowId, setId) {
       return sendWindowTabStateMessage(browser, 'unload', [windowId, setId]);
     },
-    captureAndSave(windowId, setId, set) {
-      return sendWindowTabStateMessage(browser, 'captureAndSave', [windowId, setId, set]);
+    captureAndSave(windowId, set) {
+      return sendWindowTabStateMessage(browser, 'captureAndSave', [windowId, set]);
     },
   };
 }

@@ -1,8 +1,7 @@
 {
   "$id": "sets",
-  "type": "object",
-  "patternProperties": {
-    ".*": {
+  "$defs": {
+    "legacySet": {
       "type": "object",
       "properties": {
         "autoload": { "type": "integer", "minimum": 0, "maximum": 1 },
@@ -11,6 +10,55 @@
       },
       "required": ["autoload", "set_name", "tabs"],
       "additionalProperties": false
+    },
+    "legacySets": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/legacySet" }
+    },
+    "set": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$" },
+        "name": { "type": "string" },
+        "tabs": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "tabs"],
+      "additionalProperties": false
+    },
+    "autoload": {
+      "type": "object",
+      "properties": {
+        "scope": { "enum": ["first-window", "every-window"] },
+        "setIds": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$" },
+          "uniqueItems": true
+        }
+      },
+      "required": ["scope", "setIds"],
+      "additionalProperties": false
     }
-  }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "version": { "const": 2 },
+        "sets": { "type": "array", "items": { "$ref": "#/$defs/set" } },
+        "autoload": { "$ref": "#/$defs/autoload" }
+      },
+      "required": ["version", "sets", "autoload"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": { "const": 1 },
+        "sets": { "$ref": "#/$defs/legacySets" }
+      },
+      "required": ["version", "sets"],
+      "additionalProperties": false
+    },
+    { "$ref": "#/$defs/legacySets" }
+  ]
 }

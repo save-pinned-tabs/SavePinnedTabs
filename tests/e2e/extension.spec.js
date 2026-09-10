@@ -172,7 +172,7 @@ test("an imported tab-set name is rendered as text", async ({ extension }) => {
   ).toBeVisible();
 
   const popup = await openExtensionPage(context, extensionId, "popup.html");
-  const row = popup.locator('.load-row[data-id="markup"]');
+  const row = popup.locator(".load-row", { hasText: setName });
   await expect(row.locator("span")).toHaveText(setName);
   await expect(popup.locator("#injected-markup")).toHaveCount(0);
 });
@@ -196,7 +196,7 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
   await options.getByRole("button", { name: "Import" }).click();
 
   await expect(
-    options.getByText("Failed to import tab sets. Please try again.", { exact: true }),
+    options.getByText(/Import validation failed/),
   ).toBeVisible();
 
   const popup = await openExtensionPage(context, extensionId, "popup.html");
@@ -219,7 +219,7 @@ test("startup keeps an already restored pinned tab open", async ({ extension }) 
   }, autoloadUrl);
 
   await popup.evaluate(async () => {
-    await chrome.storage.session.remove("browserLifecycle");
+    await chrome.storage.session.remove("savePinnedTabs:lifecycle");
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
     await handleStartup();
   });
@@ -241,7 +241,7 @@ test("startup preserves unrelated local extension state", async ({ extension }) 
       unrelated: "keep",
     });
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
-    await chrome.storage.session.remove("browserLifecycle");
+    await chrome.storage.session.remove("savePinnedTabs:lifecycle");
     await handleStartup();
     return chrome.storage.local.get(null);
   });
@@ -260,7 +260,7 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
   await removePinnedTabs(popup);
 
   await popup.evaluate(async () => {
-    await chrome.storage.session.remove("browserLifecycle");
+    await chrome.storage.session.remove("savePinnedTabs:lifecycle");
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
     await handleStartup();
   });

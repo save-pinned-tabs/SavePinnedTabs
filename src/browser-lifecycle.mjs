@@ -1,11 +1,16 @@
-import { restoreAutoloadSet } from './autoload.mjs';
+import { restoreAutoloadSets } from './autoload.mjs';
 import { createSerializedStorageOperation } from './serialized-operation.mjs';
 import { createBrowserWindowTabState } from './window-tab-state.mjs';
+import { createBrowserRepositories } from './repositories.mjs';
+import {
+  AUTOLOAD_EVERY_WINDOW,
+  AUTOLOAD_FIRST_WINDOW,
+  AUTOLOAD_SCOPES,
+} from './storage-schema.mjs';
 
-export const AUTOLOAD_FIRST_WINDOW = 'first-window';
-export const AUTOLOAD_EVERY_WINDOW = 'every-window';
+export { AUTOLOAD_EVERY_WINDOW, AUTOLOAD_FIRST_WINDOW };
 
-const LIFECYCLE_KEY = 'browserLifecycle';
+const LIFECYCLE_KEY = 'savePinnedTabs:lifecycle';
 const LIFECYCLE_LOCK = 'save-pinned-tabs:browser-lifecycle';
 const DEFAULT_STARTUP_WINDOW_ATTEMPTS = 100;
 
@@ -77,7 +82,7 @@ export class BrowserLifecycleStateStorage {
 }
 
 export class BrowserLifecycle {
-  #autoloadPolicy;
+  #getAutoload;
   #stateStorage;
   #windows;
   #windowTabState;
@@ -87,6 +92,7 @@ export class BrowserLifecycle {
 
   constructor({
     autoloadPolicy,
+    getAutoload,
     stateStorage,
     windows,
     windowTabState,
@@ -94,13 +100,13 @@ export class BrowserLifecycle {
     delay = wait,
     startupWindowAttempts = DEFAULT_STARTUP_WINDOW_ATTEMPTS,
   }) {
-    if (
-      autoloadPolicy !== AUTOLOAD_FIRST_WINDOW
-      && autoloadPolicy !== AUTOLOAD_EVERY_WINDOW
-    ) {
-      throw new TypeError(`Unsupported Autoload policy "${autoloadPolicy}"`);
+    if (!getAutoload && !AUTOLOAD_SCOPES.has(autoloadPolicy)) {
+      throw new TypeError(`Unsupported Autoload scope "${autoloadPolicy}"`);
     }
-    this.#autoloadPolicy = autoloadPolicy;
+    this.#getAutoload = getAutoload ?? (() => ({
+      scope: autoloadPolicy,
+      setIds: [],
+    }));
     this.#stateStorage = stateStorage;
     this.#windows = windows;
     this.#windowTabState = windowTabState;
@@ -111,17 +117,22 @@ export class BrowserLifecycle {
 
   async onBrowserStartup() {
     await this.#initializeStartup();
+    const configuration = await this.#autoloadConfiguration();
     const startupWindowIds = await this.#findStartupWindowIds();
-    const targets = this.#autoloadPolicy === AUTOLOAD_FIRST_WINDOW
+    const targets = configuration.scope === AUTOLOAD_FIRST_WINDOW
       ? startupWindowIds.slice(0, 1)
       : startupWindowIds;
-    await Promise.all(targets.map((windowId) => this.#restoreWindowOnce(windowId)));
-  }
+    await Promise.all(targets.map(
+      (windowId) => this.#restoreWindowOnce(windowId, configuration),
+    ));
 
+  }
   async onWindowCreated(window) {
     if (window?.type !== 'normal' || !Number.isInteger(window.id)) return;
     const startupObserved = await this.#rememberNormalWindow(window.id);
-    if (startupObserved) await this.#restoreWindowOnce(window.id);
+    if (startupObserved) {
+      await this.#restoreWindowOnce(window.id, await this.#autoloadConfiguration());
+    }
   }
 
   async onWindowRemoved(windowId) {
@@ -175,36 +186,44 @@ export class BrowserLifecycle {
     return [...windowIds];
   }
 
-  async #restoreWindowOnce(windowId) {
+  async #restoreWindowOnce(windowId, configuration) {
     await this.#stateStorage.runExclusive(async () => {
       const state = normalizeState(await this.#stateStorage.read());
       if (!state.startupObserved || state.restoredWindowIds.includes(windowId)) return;
       if (
-        this.#autoloadPolicy === AUTOLOAD_FIRST_WINDOW
+        configuration.scope === AUTOLOAD_FIRST_WINDOW
         && state.firstWindowId !== null
       ) return;
 
-      await this.#restoreAutoload(windowId);
+      await this.#restoreAutoload(windowId, configuration);
       addWindowId(state.restoredWindowIds, windowId);
-      if (this.#autoloadPolicy === AUTOLOAD_FIRST_WINDOW) {
+      if (configuration.scope === AUTOLOAD_FIRST_WINDOW) {
         state.firstWindowId = windowId;
       }
       await this.#stateStorage.write(state);
     });
   }
+
+  async #autoloadConfiguration() {
+    const configuration = await this.#getAutoload();
+    if (!AUTOLOAD_SCOPES.has(configuration?.scope) || !Array.isArray(configuration.setIds)) {
+      throw new TypeError(`Unsupported Autoload scope "${configuration?.scope}"`);
+    }
+    return configuration;
+  }
 }
 
 export function createBrowserLifecycle(browser, {
-  autoloadPolicy,
   windowTabState = createBrowserWindowTabState(browser),
+  repositories = createBrowserRepositories(browser),
 } = {}) {
   return new BrowserLifecycle({
-    autoloadPolicy,
+    getAutoload: () => repositories.tabSets.getAutoload(),
     stateStorage: new BrowserLifecycleStateStorage(browser.storage.session),
     windows: browser.windows,
     windowTabState,
-    restoreAutoload(windowId) {
-      return restoreAutoloadSet(browser, windowId, windowTabState);
+    restoreAutoload(windowId, configuration) {
+      return restoreAutoloadSets(browser, windowId, configuration, windowTabState);
     },
   });
 }

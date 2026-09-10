@@ -1,30 +1,75 @@
 import {
-  createSerializedOperation,
-  createSerializedStorageOperation,
-} from './serialized-operation.mjs';
+  AUTOLOAD_SCOPES,
+  SYNC_DOCUMENT_KEY,
+  emptySyncDocument,
+  isUuid,
+  newSetId,
+} from './storage-schema.mjs';
+import { createSerializedOperation, createSerializedStorageOperation } from './serialized-operation.mjs';
 
 const TAB_SET_LOCK = 'save-pinned-tabs:tab-sets';
+const EXPORT_VERSION = 2;
 
 function tabSetError(operation, setId, cause) {
   return new Error(`Failed to ${operation} tab set "${setId}": ${cause.message}`, { cause });
 }
 
 function tabSetsEqual(left, right) {
-  return left.set_name === right.set_name
-    && left.autoload === right.autoload
+  return left.id === right.id
+    && left.name === right.name
     && left.tabs.length === right.tabs.length
     && left.tabs.every((url, index) => url === right.tabs[index]);
+}
+
+function validateSetDraft(set) {
+  if (!set || typeof set !== 'object') throw new TypeError('Tab set must be an object');
+  if (typeof set.name !== 'string' || set.name.length === 0) {
+    throw new TypeError('Tab set name must be a non-empty string');
+  }
+  if (!Array.isArray(set.tabs) || !set.tabs.every((url) => typeof url === 'string')) {
+    throw new TypeError('Tab set tabs must be an array of strings');
+  }
+  if (set.id !== undefined && !isUuid(set.id)) {
+    throw new TypeError(`Tab set id "${set.id}" is not a UUID`);
+  }
+}
+
+function validateAutoload(configuration) {
+  if (!configuration || !AUTOLOAD_SCOPES.has(configuration.scope)) {
+    throw new TypeError(`Unsupported Autoload scope "${configuration?.scope}"`);
+  }
+  if (!Array.isArray(configuration.setIds)) {
+    throw new TypeError('Autoload setIds must be an array');
+  }
+}
+
+function importedVersion(document) {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return null;
+  return Object.hasOwn(document, 'version') ? document.version : 1;
+}
+
+function legacySets(document) {
+  return document.version === 1 ? document.sets : document;
 }
 
 export class TabSetRepository {
   #storage;
   #validateImport;
   #windowSessions;
+  #shortcutAssignments;
+  #createId;
 
-  constructor(storage, { validateImport, windowSessions } = {}) {
+  constructor(storage, {
+    validateImport,
+    windowSessions,
+    shortcutAssignments,
+    createId = newSetId,
+  } = {}) {
     this.#storage = storage;
     this.#validateImport = validateImport;
     this.#windowSessions = windowSessions;
+    this.#shortcutAssignments = shortcutAssignments;
+    this.#createId = createId;
   }
 
   async list() {
@@ -43,24 +88,36 @@ export class TabSetRepository {
     }
   }
 
-  save(setId, set) {
+  save(set) {
     return this.#storage.runExclusive(async () => {
       try {
-        await this.#storage.save(setId, set);
+        return await this.#persist(set);
       } catch (error) {
-        throw tabSetError('save', setId, error);
+        throw tabSetError('save', set?.id ?? 'new', error);
       }
     });
   }
 
-  saveForWindow(setId, set, windowId) {
+  saveForWindow(set, windowId) {
     return this.#storage.runExclusive(async () => {
+      let savedSet;
+      let previousSet = null;
       try {
-        await this.#storage.save(setId, set);
-        await this.#windowSessions.set(windowId, setId);
+        if (set?.id) previousSet = await this.#storage.get(set.id);
+        savedSet = await this.#persist(set);
+        await this.#windowSessions.set(windowId, savedSet.id);
+        return savedSet;
       } catch (error) {
+        let rollbackContext = '';
+        if (savedSet) {
+          try {
+            await this.#storage.restore(savedSet.id, previousSet);
+          } catch (rollbackError) {
+            rollbackContext = `; rollback also failed: ${rollbackError.message}`;
+          }
+        }
         throw new Error(
-          `Failed to save tab set "${setId}" for window "${windowId}": ${error.message}`,
+          `Failed to save tab set "${set?.id ?? 'new'}" for window "${windowId}": ${error.message}${rollbackContext}`,
           { cause: error },
         );
       }
@@ -83,16 +140,28 @@ export class TabSetRepository {
     });
   }
 
-  setAutoload(setId) {
+  async getAutoload() {
+    try {
+      return await this.#storage.getAutoload();
+    } catch (error) {
+      throw tabSetError('get autoload for', 'all', error);
+    }
+  }
+
+  setAutoload(configuration) {
     return this.#storage.runExclusive(async () => {
       try {
-        const sets = await this.#storage.list();
-        for (const [storedSetId, set] of Object.entries(sets)) {
-          set.autoload = setId && storedSetId === setId ? 1 : 0;
-        }
-        await this.#storage.saveAll(sets);
+        validateAutoload(configuration);
+        const uniqueSetIds = [...new Set(configuration.setIds)];
+        const knownIds = new Set((await this.#storage.list()).map((set) => set.id));
+        const staleId = uniqueSetIds.find((setId) => !knownIds.has(setId));
+        if (staleId) throw new Error(`Tab set id "${staleId}" does not exist`);
+        await this.#storage.setAutoload({
+          scope: configuration.scope,
+          setIds: uniqueSetIds,
+        });
       } catch (error) {
-        throw tabSetError('set autoload for', setId ?? 'none', error);
+        throw tabSetError('set autoload for', 'configuration', error);
       }
     });
   }
@@ -102,6 +171,7 @@ export class TabSetRepository {
       try {
         await this.#storage.remove(setId);
         await this.#windowSessions?.clearSetReferences(setId);
+        await this.#shortcutAssignments?.clearSetReferences(setId);
       } catch (error) {
         throw tabSetError('remove', setId, error);
       }
@@ -110,67 +180,178 @@ export class TabSetRepository {
 
   async export() {
     try {
-      return await this.#storage.list();
+      return {
+        version: EXPORT_VERSION,
+        sets: await this.#storage.list(),
+        autoload: await this.#storage.getAutoload(),
+      };
     } catch (error) {
       throw tabSetError('export', 'all', error);
     }
   }
 
-  import(sets) {
+  import(document) {
     return this.#storage.runExclusive(async () => {
       try {
-        if (!this.#validateImport?.(sets)) {
-          throw new TypeError('Import validation failed');
+        const version = importedVersion(document);
+        if (![1, EXPORT_VERSION].includes(version)) {
+          throw new TypeError(
+            `Unsupported tab-set document version "${String(version)}". Supported versions are 1 and ${EXPORT_VERSION}`,
+          );
         }
-        await this.#storage.saveAll(sets);
+        if (!this.#validateImport?.(document)) throw new TypeError('Import validation failed');
+
+        const identities = await this.#storage.identities();
+        const imported = [];
+        const importedAutoloadIds = [];
+        if (version === EXPORT_VERSION) {
+          for (const set of document.sets) {
+            validateSetDraft(set);
+            const id = identities.has(set.id) ? this.#newId(identities) : set.id;
+            identities.add(id);
+            imported.push({ ...set, id });
+          }
+          const idMap = new Map(document.sets.map((set, index) => [set.id, imported[index].id]));
+          importedAutoloadIds.push(...document.autoload.setIds
+            .map((id) => idMap.get(id))
+            .filter(Boolean));
+        } else {
+          for (const set of Object.values(legacySets(document))) {
+            const id = this.#newId(identities);
+            imported.push({ id, name: set.set_name, tabs: [...set.tabs] });
+            if (set.autoload === 1) importedAutoloadIds.push(id);
+          }
+        }
+
+        const currentAutoload = await this.#storage.getAutoload();
+        await this.#storage.import(imported, {
+          scope: version === EXPORT_VERSION ? document.autoload.scope : currentAutoload.scope,
+          setIds: [...new Set(currentAutoload.setIds.concat(importedAutoloadIds))],
+        });
+        return imported;
       } catch (error) {
         throw tabSetError('import', 'import payload', error);
       }
     });
   }
+
+  async #persist(set) {
+    validateSetDraft(set);
+    const savedSet = {
+      ...set,
+      id: set.id ?? this.#newId(await this.#storage.identities()),
+    };
+    if (set.id && !await this.#storage.get(set.id)) {
+      throw new Error(`Tab set id "${set.id}" does not exist and cannot be reused`);
+    }
+    await this.#storage.save(savedSet);
+    return savedSet;
+  }
+
+  #newId(identities) {
+    let id;
+    do id = this.#createId(); while (!isUuid(id) || identities.has(id));
+    identities.add(id);
+    return id;
+  }
 }
 
 export class BrowserTabSetStorage {
   #storage;
+  #migration;
   #runExclusive;
 
-  constructor(syncStorage) {
+  constructor(syncStorage, migration) {
     this.#storage = syncStorage;
+    this.#migration = migration;
     this.#runExclusive = createSerializedStorageOperation(syncStorage, TAB_SET_LOCK);
   }
 
   runExclusive(operation) {
-    return this.#runExclusive(operation);
+    return this.#runExclusive(async () => {
+      await this.#migration.ensureMigrated();
+      return operation();
+    });
   }
 
   async list() {
-    return this.#storage.get(null);
+    const document = await this.#read();
+    return Object.values(document.sets).map((set) => structuredClone(set));
   }
 
   async get(setId) {
-    const stored = await this.#storage.get(setId);
-    return stored[setId] ?? null;
+    const document = await this.#read();
+    return document.sets[setId] ? structuredClone(document.sets[setId]) : null;
   }
 
-  async save(setId, set) {
-    await this.#storage.set({ [setId]: set });
+  async identities() {
+    const document = await this.#read();
+    return new Set(Object.keys(document.sets).concat(document.deletedSetIds));
   }
 
-  async saveAll(sets) {
-    await this.#storage.set(sets);
+  async save(set) {
+    const document = await this.#read();
+    document.sets[set.id] = structuredClone(set);
+    await this.#write(document);
+  }
+  async restore(setId, previousSet) {
+    const document = await this.#read();
+    if (previousSet) {
+      document.sets[setId] = structuredClone(previousSet);
+    } else {
+      delete document.sets[setId];
+      if (!document.deletedSetIds.includes(setId)) document.deletedSetIds.push(setId);
+    }
+    await this.#write(document);
+  }
+
+  async getAutoload() {
+    const document = await this.#read();
+    return structuredClone(document.autoload);
+  }
+
+  async setAutoload(configuration) {
+    const document = await this.#read();
+    document.autoload = structuredClone(configuration);
+    await this.#write(document);
   }
 
   async remove(setId) {
-    await this.#storage.remove(setId);
+    const document = await this.#read();
+    if (document.sets[setId]) {
+      delete document.sets[setId];
+      if (!document.deletedSetIds.includes(setId)) document.deletedSetIds.push(setId);
+    }
+    document.autoload.setIds = document.autoload.setIds.filter((id) => id !== setId);
+    await this.#write(document);
+  }
+
+  async import(sets, autoload) {
+    const document = await this.#read();
+    for (const set of sets) document.sets[set.id] = structuredClone(set);
+    document.autoload = structuredClone(autoload);
+    await this.#write(document);
+  }
+
+  async #read() {
+    await this.#migration.ensureMigrated();
+    const stored = await this.#storage.get(SYNC_DOCUMENT_KEY);
+    return structuredClone(stored[SYNC_DOCUMENT_KEY]);
+  }
+
+  async #write(document) {
+    await this.#storage.set({ [SYNC_DOCUMENT_KEY]: structuredClone(document) });
   }
 }
 
 export class InMemoryTabSetStorage {
-  #sets;
+  #document;
   #runExclusive = createSerializedOperation('save-pinned-tabs:memory-tab-sets');
 
-  constructor(sets = {}) {
-    this.#sets = structuredClone(sets);
+  constructor({ sets = [], autoload } = {}) {
+    this.#document = emptySyncDocument();
+    for (const set of sets) this.#document.sets[set.id] = structuredClone(set);
+    if (autoload) this.#document.autoload = structuredClone(autoload);
   }
 
   runExclusive(operation) {
@@ -178,22 +359,50 @@ export class InMemoryTabSetStorage {
   }
 
   async list() {
-    return structuredClone(this.#sets);
+    return Object.values(this.#document.sets).map((set) => structuredClone(set));
   }
 
   async get(setId) {
-    return this.#sets[setId] ? structuredClone(this.#sets[setId]) : null;
+    return this.#document.sets[setId] ? structuredClone(this.#document.sets[setId]) : null;
   }
 
-  async save(setId, set) {
-    this.#sets[setId] = structuredClone(set);
+  async identities() {
+    return new Set(Object.keys(this.#document.sets).concat(this.#document.deletedSetIds));
   }
 
-  async saveAll(sets) {
-    Object.assign(this.#sets, structuredClone(sets));
+  async save(set) {
+    this.#document.sets[set.id] = structuredClone(set);
+  }
+  async restore(setId, previousSet) {
+    if (previousSet) {
+      this.#document.sets[setId] = structuredClone(previousSet);
+    } else {
+      delete this.#document.sets[setId];
+      if (!this.#document.deletedSetIds.includes(setId)) {
+        this.#document.deletedSetIds.push(setId);
+      }
+    }
+  }
+
+  async getAutoload() {
+    return structuredClone(this.#document.autoload);
+  }
+
+  async setAutoload(configuration) {
+    this.#document.autoload = structuredClone(configuration);
   }
 
   async remove(setId) {
-    delete this.#sets[setId];
+    if (this.#document.sets[setId]) {
+      delete this.#document.sets[setId];
+      if (!this.#document.deletedSetIds.includes(setId)) this.#document.deletedSetIds.push(setId);
+    }
+    this.#document.autoload.setIds = this.#document.autoload.setIds.filter((id) => id !== setId);
+  }
+
+  async import(sets, autoload) {
+    for (const set of sets) this.#document.sets[set.id] = structuredClone(set);
+    this.#document.autoload = structuredClone(autoload);
   }
 }
+

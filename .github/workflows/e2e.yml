@@ -57,6 +57,7 @@ jobs:
           cache: npm
 
       - name: Set up Firefox
+        id: setup-firefox
         uses: browser-actions/setup-firefox@v1
         with:
           firefox-version: latest-devedition
@@ -66,3 +67,5 @@ jobs:
 
       - name: Run Firefox extension smoke test
         run: npm run test:e2e:firefox
+        env:
+          FIREFOX_BINARY: ${{ steps.setup-firefox.outputs.firefox-path }}

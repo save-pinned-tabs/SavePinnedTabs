@@ -244,6 +244,33 @@ test('a normal window closed before startup is not selected as the first window'
   ]);
 });
 
+test('lifecycle uses the stored Autoload scope and passes selected IDs to restoration', async () => {
+  const stateStorage = new EphemeralWorkerStateStorage();
+  const restored = [];
+  const configuration = {
+    scope: AUTOLOAD_EVERY_WINDOW,
+    setIds: ['first-id', 'second-id'],
+  };
+  const lifecycle = new BrowserLifecycle({
+    getAutoload: async () => configuration,
+    stateStorage,
+    windows: {
+      async getAll() {
+        return [{ id: 1, type: 'normal' }, { id: 2, type: 'normal' }];
+      },
+    },
+    windowTabState: { async resetSessions() {} },
+    async restoreAutoload(windowId, selected) {
+      restored.push([windowId, selected]);
+    },
+    startupWindowAttempts: 1,
+  });
+
+  await lifecycle.onBrowserStartup();
+
+  assert.deepEqual(restored, [[1, configuration], [2, configuration]]);
+});
+
 test('listener registration occurs during service-worker module evaluation', async () => {
   const registered = [];
   const event = (name) => ({

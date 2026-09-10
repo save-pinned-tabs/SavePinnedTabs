@@ -149,13 +149,16 @@ test("Firefox restores Autoload after a browser restart", async () => {
   const autoloadUrl = `${extensionOrigin}/options.html?firefox-restart`;
   await driver.get(`${extensionOrigin}/options.html`);
   const setupError = await driver.executeAsyncScript((url, done) => {
-    browser.storage.sync.set({
-      firefoxRestart: {
+    Promise.all([
+      browser.storage.sync.remove("savePinnedTabs:sync"),
+      browser.storage.local.remove("savePinnedTabs:local"),
+    ]).then(() => browser.storage.sync.set({
+      RmlyZWZveCByZXN0YXJ0: {
         autoload: 1,
         set_name: "Firefox restart",
         tabs: [url],
       },
-    })
+    }))
       .then(() => browser.tabs.query({ pinned: true, currentWindow: true }))
       .then((tabs) => browser.tabs.remove(tabs.map((tab) => tab.id)))
       .then(() => done(null), (error) => done(error.message));

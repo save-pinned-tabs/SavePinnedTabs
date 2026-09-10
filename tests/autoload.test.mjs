@@ -5,8 +5,10 @@ import {
   loadTabSet,
   preloadFavicons,
   restoreAutoloadSet,
+  restoreAutoloadSets,
 } from '../src/autoload.mjs';
 import { createBrowserRepositories } from '../src/repositories.mjs';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage-schema.mjs';
 
 function deferred() {
   let resolve;
@@ -24,25 +26,52 @@ function createBrowser({
   createTab,
   updateTab,
 } = {}) {
-  const activeTabs = { ...sessions };
+  const syncDocument = {
+    version: 2,
+    sets: Object.fromEntries(Object.entries(sets).map(([id, set]) => [id, {
+      id,
+      name: set.name ?? set.set_name ?? id,
+      tabs: [...set.tabs],
+    }])),
+    autoload: {
+      scope: 'first-window',
+      setIds: Object.entries(sets)
+        .filter(([, set]) => set.autoload === 1)
+        .map(([id]) => id),
+    },
+    deletedSetIds: [],
+  };
+  const localDocument = {
+    version: 2,
+    windowSessions: { ...sessions },
+    shortcutAssignments: {},
+  };
   let nextTabId = 100;
 
-  return {
-    sessionState: activeTabs,
+  const browser = {
+    get sessionState() {
+      return localDocument.windowSessions;
+    },
     storage: {
       local: {
-        async get() {
-          return { activeTabs: { ...activeTabs } };
+        async get(key) {
+          if (key === null) return { [LOCAL_DOCUMENT_KEY]: structuredClone(localDocument) };
+          return { [LOCAL_DOCUMENT_KEY]: structuredClone(localDocument) };
         },
         async set(value) {
-          for (const windowId of Object.keys(activeTabs)) delete activeTabs[windowId];
-          Object.assign(activeTabs, value.activeTabs);
+          Object.assign(localDocument, structuredClone(value[LOCAL_DOCUMENT_KEY]));
         },
+        async remove() {},
       },
       sync: {
-        async get() {
-          return sets;
+        async get(key) {
+          if (key === null) return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
+          return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
         },
+        async set(value) {
+          Object.assign(syncDocument, structuredClone(value[SYNC_DOCUMENT_KEY]));
+        },
+        async remove() {},
       },
     },
     tabs: {
@@ -57,7 +86,41 @@ function createBrowser({
       update: updateTab ?? (async () => {}),
     },
   };
+  browser.testSyncDocument = syncDocument;
+  return browser;
 }
+
+test('multi-set Autoload replaces with the first set and appends the rest', async () => {
+  const browser = createBrowser({
+    sets: {
+      first: { tabs: ['https://first.example/'] },
+      stale: { tabs: ['https://stale.example/'] },
+      second: { tabs: ['https://second.example/'] },
+    },
+  });
+  delete browser.testSyncDocument.sets.stale;
+  const operations = [];
+  const windowTabState = {
+    async replace(windowId, setId) {
+      operations.push(['replace', windowId, setId]);
+    },
+    async append(windowId, setId) {
+      operations.push(['append', windowId, setId]);
+    },
+  };
+
+  await restoreAutoloadSets(
+    browser,
+    7,
+    { scope: 'every-window', setIds: ['first', 'missing', 'second'] },
+    windowTabState,
+  );
+
+  assert.deepEqual(operations, [
+    ['replace', 7, 'first'],
+    ['append', 7, 'second'],
+  ]);
+});
 
 test('creates and pins replacements before removing existing pinned tabs', async () => {
   const creation = deferred();
@@ -344,50 +407,30 @@ test('preserves restoration invariants across randomized tab states', async () =
         : { id: index + 1, url: '', pendingUrl: url }
     ));
     const originalIds = tabs.map((tab) => tab.id);
-    const localState = { unrelated: scenario };
     let nextTabId = 1000;
-    const browser = {
-      storage: {
-        local: {
-          async get() {
-            return { activeTabs: { ...(localState.activeTabs ?? {}) } };
-          },
-          async set(value) {
-            localState.activeTabs = { ...value.activeTabs };
-          },
-        },
-        sync: {
-          async get() {
-            return { saved: { autoload: 1, tabs: savedUrls } };
-          },
-        },
+    const browser = createBrowser({
+      currentTabs: tabs,
+      sets: { saved: { autoload: 1, tabs: savedUrls } },
+      async removeTabs(tabIds) {
+        const removedIds = new Set(Array.isArray(tabIds) ? tabIds : [tabIds]);
+        const remaining = tabs.filter((tab) => !removedIds.has(tab.id));
+        tabs.splice(0, tabs.length, ...remaining);
       },
-      tabs: {
-        async query() {
-          return tabs.map((tab) => ({ ...tab }));
-        },
-        async remove(tabIds) {
-          const removedIds = new Set(Array.isArray(tabIds) ? tabIds : [tabIds]);
-          const remaining = tabs.filter((tab) => !removedIds.has(tab.id));
-          tabs.splice(0, tabs.length, ...remaining);
-        },
-        async create({ url }) {
-          const tab = { id: nextTabId, url, pinned: false };
-          tabs.push(tab);
-          nextTabId += 1;
-          return tab;
-        },
-        async update(tabId, changes) {
-          Object.assign(tabs.find((tab) => tab.id === tabId), changes);
-        },
+      async createTab({ url }) {
+        const tab = { id: nextTabId, url, pinned: false };
+        tabs.push(tab);
+        nextTabId += 1;
+        return tab;
       },
-    };
+      async updateTab(tabId, changes) {
+        Object.assign(tabs.find((tab) => tab.id === tabId), changes);
+      },
+    });
 
     await restoreAutoloadSet(browser, 1);
 
     assert.deepEqual(tabs.map((tab) => tab.pendingUrl || tab.url), savedUrls);
-    assert.equal(localState.activeTabs[1], 'saved');
-    assert.equal(localState.unrelated, scenario);
+    assert.equal(browser.sessionState[1], 'saved');
     if (startsMatching) assert.deepEqual(tabs.map((tab) => tab.id), originalIds);
   }
 });

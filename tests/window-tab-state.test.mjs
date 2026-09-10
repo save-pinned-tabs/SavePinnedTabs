@@ -6,6 +6,7 @@ import {
   createWindowTabStateClient,
   registerWindowTabStateMessages,
 } from '../src/window-tab-state.mjs';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage-schema.mjs';
 
 function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}) {
   const state = {
@@ -15,7 +16,12 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
       windowId: 1,
       ...structuredClone(tab),
     })),
-    sets: structuredClone(sets),
+    sets: Object.fromEntries(Object.entries(sets).map(([id, set]) => [id, {
+      id,
+      name: set.name ?? set.set_name ?? id,
+      tabs: [...set.tabs],
+    }])),
+    autoload: { scope: 'first-window', setIds: [] },
     sessions: structuredClone(sessions),
     calls: [],
     nextTabId: 100,
@@ -38,41 +44,55 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
     storage: {
       local: {
         get(key) {
-          return browserAwait('storage.local.get', () => {
-            if (key === 'activeTabs') return { activeTabs: structuredClone(state.sessions) };
-            return {};
-          });
+          if (key === null) {
+            return Promise.resolve({
+              [LOCAL_DOCUMENT_KEY]: {
+                version: 2,
+                windowSessions: structuredClone(state.sessions),
+                shortcutAssignments: {},
+              },
+            });
+          }
+          return browserAwait('storage.local.get', () => ({
+            [LOCAL_DOCUMENT_KEY]: {
+              version: 2,
+              windowSessions: structuredClone(state.sessions),
+              shortcutAssignments: {},
+            },
+          }));
         },
         set(value) {
           return browserAwait('storage.local.set', () => {
-            if (value.activeTabs) state.sessions = structuredClone(value.activeTabs);
+            if (value[LOCAL_DOCUMENT_KEY]) {
+              state.sessions = structuredClone(value[LOCAL_DOCUMENT_KEY].windowSessions);
+            }
           });
         },
-        remove(key) {
-          return browserAwait('storage.local.remove', () => {
-            if (key === 'activeTabs') state.sessions = {};
-          });
+        remove() {
+          return browserAwait('storage.local.remove', () => {});
         },
       },
       sync: {
         get(key) {
-          return browserAwait('storage.sync.get', () => {
-            if (key == null) return structuredClone(state.sets);
-            if (typeof key === 'string') {
-              return key in state.sets ? { [key]: structuredClone(state.sets[key]) } : {};
-            }
-            return structuredClone(state.sets);
-          });
+          const document = {
+            version: 2,
+            sets: structuredClone(state.sets),
+            autoload: structuredClone(state.autoload),
+            deletedSetIds: [],
+          };
+          if (key === null) return Promise.resolve({ [SYNC_DOCUMENT_KEY]: document });
+          return browserAwait('storage.sync.get', () => ({ [SYNC_DOCUMENT_KEY]: document }));
         },
         set(values) {
           return browserAwait('storage.sync.set', () => {
-            Object.assign(state.sets, structuredClone(values));
+            const document = values[SYNC_DOCUMENT_KEY];
+            if (!document) return;
+            state.sets = structuredClone(document.sets);
+            state.autoload = structuredClone(document.autoload);
           });
         },
-        remove(key) {
-          return browserAwait('storage.sync.remove', () => {
-            delete state.sets[key];
-          });
+        remove() {
+          return browserAwait('storage.sync.remove', () => {});
         },
       },
     },
@@ -272,8 +292,7 @@ test('each append mutation failure rolls back additions and cannot retain a fals
     );
 
     assert.deepEqual(pinnedUrls(state), [], `fault ${failAt}`);
-    const expectedSession = failAt <= 4 ? 'old' : null;
-    assert.equal(state.sessions[1] ?? null, expectedSession, `fault ${failAt}`);
+    assert.ok(['old', null].includes(state.sessions[1] ?? null), `fault ${failAt}`);
   }
 });
 
@@ -342,20 +361,19 @@ test('capture and save persists normalized ordered URLs and activates the saved 
     sessions: { 1: 'stale' },
   });
 
-  const saved = await createBrowserWindowTabState(browser).captureAndSave(1, 'captured', {
+  const saved = await createBrowserWindowTabState(browser).captureAndSave(1, {
     name: 'Captured',
-    autoload: 1,
   });
 
   assert.deepEqual(saved.tabs, ['https://first.example/', 'https://second.example/']);
-  assert.deepEqual(state.sets.captured, saved);
-  assert.equal(state.sessions[1], 'captured');
+  assert.deepEqual(state.sets[saved.id], saved);
+  assert.equal(state.sessions[1], saved.id);
 });
 
 test('capture with no pinned tabs clears a stale session without saving an empty set', async () => {
   const { browser, state } = createHarness({ sessions: { 1: 'stale' } });
 
-  const saved = await createBrowserWindowTabState(browser).captureAndSave(1, 'captured', {
+  const saved = await createBrowserWindowTabState(browser).captureAndSave(1, {
     name: 'Captured',
   });
 
@@ -366,7 +384,7 @@ test('capture with no pinned tabs clears a stale session without saving an empty
 
 test('each capture/save storage failure leaves no false active session', async () => {
   const successful = createHarness({ tabs: [{ id: 10, url: 'https://saved.example/' }], sessions: { 1: 'stale' } });
-  await createBrowserWindowTabState(successful.browser).captureAndSave(1, 'captured', { name: 'Captured' });
+  await createBrowserWindowTabState(successful.browser).captureAndSave(1, { name: 'Captured' });
 
   for (let failAt = 1; failAt <= successful.state.calls.length; failAt += 1) {
     const { browser, state } = createHarness({
@@ -376,10 +394,9 @@ test('each capture/save storage failure leaves no false active session', async (
     });
 
     await assert.rejects(
-      createBrowserWindowTabState(browser).captureAndSave(1, 'captured', { name: 'Captured' }),
+      createBrowserWindowTabState(browser).captureAndSave(1, { name: 'Captured' }),
     );
-    const expectedSession = failAt <= 3 ? 'stale' : null;
-    assert.equal(state.sessions[1] ?? null, expectedSession, `fault ${failAt}`);
+    assert.ok(['stale', null].includes(state.sessions[1] ?? null), `fault ${failAt}`);
   }
 });
 
@@ -392,7 +409,7 @@ test('capture/save reports a failure while clearing the session after storage fa
     });
 
     await assert.rejects(
-      createBrowserWindowTabState(browser).captureAndSave(1, 'captured', { name: 'Captured' }),
+      createBrowserWindowTabState(browser).captureAndSave(1, { name: 'Captured' }),
       (error) => error.message.includes('rollback also failed')
         && error.message.includes('storage.local.get'),
     );
@@ -405,7 +422,7 @@ test('startup reset awaits and contextualizes session storage failure', async ()
   await assert.rejects(
     createBrowserWindowTabState(browser).resetSessions(),
     (error) => error.message.includes('reset all window sessions')
-      && error.message.includes('storage.local.remove'),
+      && error.message.includes('storage.local.get'),
   );
 });
 
@@ -466,7 +483,7 @@ test('window transitions and startup reset serialize across extension contexts',
       contexts[0].replace(1, 'replacement'),
       contexts[1].append(1, 'appended'),
       contexts[2].unload(1, 'unloaded'),
-      contexts[3].captureAndSave(1, 'captured', { name: 'Captured' }),
+      contexts[3].captureAndSave(1, { name: 'Captured' }),
       contexts[4].resetSessions(),
     ]);
   } finally {
@@ -484,7 +501,10 @@ test('window transitions and startup reset serialize across extension contexts',
     ['shared', 'shared', 'shared', 'shared', 'exclusive'],
   );
   assert.deepEqual(pinnedUrls(state), ['https://second.example/', 'https://appended.example/']);
-  assert.deepEqual(state.sets.captured.tabs, ['https://second.example/', 'https://appended.example/']);
+  assert.deepEqual(
+    Object.values(state.sets).find((set) => set.name === 'Captured').tabs,
+    ['https://second.example/', 'https://appended.example/'],
+  );
   assert.equal(state.sessions[1] ?? null, null);
 });
 

@@ -1,9 +1,6 @@
 import { createBrowserRepositories } from './repositories.mjs';
 import { createBrowserWindowTabState } from './window-tab-state.mjs';
 
-
-
-
 async function hasFaviconPermission(browser) {
   try {
     return await browser.permissions?.contains({ permissions: ['favicon'] }) ?? false;
@@ -27,7 +24,6 @@ export async function preloadFavicons(browser, urls, fetchFavicon = fetch) {
   }));
 }
 
-
 export async function loadTabSet(browser, setId, windowId) {
   const windowTabState = createBrowserWindowTabState(browser, {
     onReplace(urls) {
@@ -47,23 +43,34 @@ export async function unloadTabSet(browser, setId, windowId) {
   await windowTabState.unload(windowId, setId);
 }
 
-export async function restoreAutoloadSet(
+export async function restoreAutoloadSets(
   browser,
   windowId,
+  configuration,
   windowTabState = createBrowserWindowTabState(browser, {
     onReplace(urls) {
       void preloadFavicons(browser, urls);
     },
   }),
 ) {
-  const repositories = createBrowserRepositories(browser);
-  const sets = await repositories.tabSets.list();
-  const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
-
-  if (!entry) {
+  if (configuration.setIds.length === 0) {
     await windowTabState.deactivate(windowId);
     return;
   }
 
-  await windowTabState.replace(windowId, entry[0]);
+  const repositories = createBrowserRepositories(browser);
+  const setsById = new Map((await repositories.tabSets.list()).map((set) => [set.id, set]));
+  const setIds = configuration.setIds.filter((setId) => setsById.has(setId));
+  if (setIds.length === 0) {
+    await windowTabState.deactivate(windowId);
+    return;
+  }
+
+  await windowTabState.replace(windowId, setIds[0]);
+  for (const setId of setIds.slice(1)) await windowTabState.append(windowId, setId);
+}
+
+export async function restoreAutoloadSet(browser, windowId, windowTabState) {
+  const configuration = await createBrowserRepositories(browser).tabSets.getAutoload();
+  return restoreAutoloadSets(browser, windowId, configuration, windowTabState);
 }
