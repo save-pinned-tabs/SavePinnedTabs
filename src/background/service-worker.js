@@ -1,11 +1,11 @@
 import { preloadFavicons } from './autoload.mjs';
 import { createBrowserLifecycle } from './browser-lifecycle.mjs';
-import { createBrowserTabSetController } from './browser-tab-set-controller.mjs';
+import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.mjs';
 import { registerCommands } from './commands.mjs';
 import {
   createBrowserWindowTabState,
   registerWindowTabStateMessages,
-} from './window-tab-state.mjs';
+} from '../storage/window-tab-state.mjs';
 
 const browser = globalThis.browser ?? globalThis.chrome;
 const windowTabState = createBrowserWindowTabState(browser, {

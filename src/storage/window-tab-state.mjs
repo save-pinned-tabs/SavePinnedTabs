@@ -1,4 +1,4 @@
-import { createBrowserRepositories } from './repositories.mjs';
+import { createBrowserRepositories } from './browser-repositories.mjs';
 import { createSerializedStorageOperation } from './serialized-operation.mjs';
 
 const ALL_WINDOWS_LOCK = 'save-pinned-tabs:all-window-tabs';

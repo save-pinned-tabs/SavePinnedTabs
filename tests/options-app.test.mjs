@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { startOptionsApp } from '../src/options-app.mjs';
+import { startOptionsApp } from '../src/options/options-app.mjs';
 
 function createView() {
   const events = [];

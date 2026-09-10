@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { registerCommands } from '../src/commands.mjs';
+import { registerCommands } from '../src/background/commands.mjs';
 
 function createHarness(result = { status: 'success', value: { executed: true } }) {
   const calls = [];

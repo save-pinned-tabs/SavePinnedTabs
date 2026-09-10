@@ -1,4 +1,4 @@
-import { createBrowserTabSetController } from './browser-tab-set-controller.mjs';
+import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.mjs';
 import { startOptionsApp } from './options-app.mjs';
 import { createOptionsUi } from './options-ui.mjs';
 

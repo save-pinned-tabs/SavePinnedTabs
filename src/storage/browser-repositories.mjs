@@ -1,7 +1,7 @@
 import {
   BrowserTabSetStorage,
   TabSetRepository,
-} from './tab-set-repository.mjs';
+} from '../tab-sets/tab-set-repository.mjs';
 import {
   BrowserReferenceStorage,
   BrowserStorageMigration,

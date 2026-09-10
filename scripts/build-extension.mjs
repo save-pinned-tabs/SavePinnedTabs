@@ -4,30 +4,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 const runtimePaths = [
-  "autoload.mjs",
-  "browser-lifecycle.mjs",
-  "browser-tab-set-controller.mjs",
-  "commands.mjs",
-  "options-app.mjs",
-  "options-ui.mjs",
-  "popup-app.mjs",
-  "popup-ui.mjs",
-  "repositories.mjs",
-  "shortcut-assignment-repository.mjs",
-  "serialized-operation.mjs",
-  "storage-schema.mjs",
-  "tab-set-controller.mjs",
-  "tab-set-repository.mjs",
-  "window-session-repository.mjs",
-  "window-tab-state.mjs",
+  "background",
   "images",
   "lib",
-  "options.html",
-  "options.js",
-  "popup.html",
-  "popup.js",
-  "service_worker.js",
-  "style.css",
+  "options",
+  "popup",
+  "storage",
+  "styles",
+  "tab-sets",
 ];
 
 const target = process.argv[2];
@@ -46,7 +30,7 @@ const manifest = JSON.parse(
 
 if (target === "firefox") {
   manifest.background = {
-    scripts: ["service_worker.js"],
+    scripts: ["background/service-worker.js"],
     type: "module",
   };
   manifest.permissions = manifest.permissions.filter(

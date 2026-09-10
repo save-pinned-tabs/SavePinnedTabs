@@ -5,7 +5,7 @@ import {
   AUTOLOAD_EVERY_WINDOW,
   AUTOLOAD_FIRST_WINDOW,
   BrowserLifecycle,
-} from '../src/browser-lifecycle.mjs';
+} from '../src/background/browser-lifecycle.mjs';
 
 class EphemeralWorkerStateStorage {
   #state;
@@ -303,7 +303,7 @@ test('listener registration occurs during service-worker module evaluation', asy
   };
 
   try {
-    await import(`../src/service_worker.js?listener-test=${Date.now()}`);
+    await import(`../src/background/service-worker.js?listener-test=${Date.now()}`);
   } finally {
     delete globalThis.chrome;
   }

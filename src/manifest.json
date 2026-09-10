@@ -29,12 +29,12 @@
       "64": "images/icon_64.png",
       "32": "images/icon_32.png"
     },
-    "default_popup": "popup.html",
+    "default_popup": "popup/popup.html",
     "default_title": "Save pinned tabs"
   },
 
   "background": {
-    "service_worker": "service_worker.js",
+    "service_worker": "background/service-worker.js",
     "type": "module"
   },
 
@@ -58,7 +58,7 @@
   },
 
   "options_ui": {
-    "page": "options.html",
+    "page": "options/options.html",
     "open_in_tab": false
   }
 }

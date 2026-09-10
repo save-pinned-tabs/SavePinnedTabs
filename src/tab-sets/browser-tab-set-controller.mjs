@@ -1,6 +1,6 @@
-import { createBrowserRepositories } from './repositories.mjs';
+import { createBrowserRepositories } from '../storage/browser-repositories.mjs';
 import { TabSetController } from './tab-set-controller.mjs';
-import { createWindowTabStateClient } from './window-tab-state.mjs';
+import { createWindowTabStateClient } from '../storage/window-tab-state.mjs';
 
 export function createBrowserTabSetController(browser, {
   windowTabState = createWindowTabStateClient(browser),

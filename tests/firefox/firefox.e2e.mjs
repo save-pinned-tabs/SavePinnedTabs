@@ -150,18 +150,18 @@ async function importDocument(document, fileName = "import.json") {
 }
 
 test("a user can save a pinned tab set without reloading", async () => {
-  await openExtensionPage("popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options.html?save`]);
+  await openExtensionPage("popup/popup.html");
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?save`]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await saveSet("Work");
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
 
 test("a user can update a pinned tab set without reloading", async () => {
-  await openExtensionPage("popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options.html?first`]);
+  await openExtensionPage("popup/popup.html");
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?first`]);
   await saveSet("Work");
-  const secondUrl = `${extensionOrigin}/options.html?second`;
+  const secondUrl = `${extensionOrigin}/options/options.html?second`;
   await createPinnedTabs([secondUrl]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-save')).click();
@@ -171,11 +171,11 @@ test("a user can update a pinned tab set without reloading", async () => {
 });
 
 test("a user can load a pinned tab set without reloading", async () => {
-  await openExtensionPage("popup.html");
-  const savedUrl = `${extensionOrigin}/options.html?saved`;
+  await openExtensionPage("popup/popup.html");
+  const savedUrl = `${extensionOrigin}/options/options.html?saved`;
   await createPinnedTabs([savedUrl]);
   await saveSet("Work");
-  await createPinnedTabs([`${extensionOrigin}/options.html?unwanted`]);
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?unwanted`]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-load')).click();
   await waitForStatus("popup-status", "Tab set loaded.");
@@ -184,8 +184,8 @@ test("a user can load a pinned tab set without reloading", async () => {
 });
 
 test("a user can cancel deletion with Escape", async () => {
-  await openExtensionPage("popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options.html?cancel-delete`]);
+  await openExtensionPage("popup/popup.html");
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?cancel-delete`]);
   await saveSet("Work");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-delete')).click();
   const dialog = await driver.findElement(By.id("delete-dialog"));
@@ -196,8 +196,8 @@ test("a user can cancel deletion with Escape", async () => {
 });
 
 test("a user can delete a pinned tab set without reloading", async () => {
-  await openExtensionPage("popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options.html?delete`]);
+  await openExtensionPage("popup/popup.html");
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?delete`]);
   await saveSet("Work");
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   const row = await driver.findElement(By.css('.load-row[data-name="Work"]'));
@@ -209,10 +209,10 @@ test("a user can delete a pinned tab set without reloading", async () => {
 });
 
 test("Append preserves ordering and duplicate multiplicity without reloading", async () => {
-  await openExtensionPage("popup.html");
-  const firstUrl = `${extensionOrigin}/options.html?append-first`;
-  const duplicateUrl = `${extensionOrigin}/options.html?append-duplicate`;
-  const trailingUrl = `${extensionOrigin}/options.html?append-trailing`;
+  await openExtensionPage("popup/popup.html");
+  const firstUrl = `${extensionOrigin}/options/options.html?append-first`;
+  const duplicateUrl = `${extensionOrigin}/options/options.html?append-duplicate`;
+  const trailingUrl = `${extensionOrigin}/options/options.html?append-trailing`;
   await createPinnedTabs([firstUrl, duplicateUrl, duplicateUrl]);
   await saveSet("Appendable");
   await removePinnedTabs();
@@ -225,9 +225,9 @@ test("Append preserves ordering and duplicate multiplicity without reloading", a
 });
 
 test("Unload removes saved duplicate multiplicity without reloading", async () => {
-  await openExtensionPage("popup.html");
-  const duplicateUrl = `${extensionOrigin}/options.html?unload-duplicate`;
-  const trailingUrl = `${extensionOrigin}/options.html?unload-trailing`;
+  await openExtensionPage("popup/popup.html");
+  const duplicateUrl = `${extensionOrigin}/options/options.html?unload-duplicate`;
+  const trailingUrl = `${extensionOrigin}/options/options.html?unload-trailing`;
   await createPinnedTabs([duplicateUrl, duplicateUrl]);
   await saveSet("Unloadable");
   await createPinnedTabs([trailingUrl, duplicateUrl]);
@@ -239,11 +239,11 @@ test("Unload removes saved duplicate multiplicity without reloading", async () =
 });
 
 async function createShortcutFixture() {
-  await openExtensionPage("popup.html");
-  const assignedUrl = `${extensionOrigin}/options.html?shortcut`;
+  await openExtensionPage("popup/popup.html");
+  const assignedUrl = `${extensionOrigin}/options/options.html?shortcut`;
   await createPinnedTabs([assignedUrl]);
   await saveSet("Shortcut target");
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   const shortcut = await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'));
   await shortcut.findElement(By.xpath('./option[normalize-space(.)="Shortcut target"]')).click();
   await waitForStatus("options-status", "Shortcut assignment saved.");
@@ -262,7 +262,7 @@ test("a shortcut assignment persists", async () => {
 
 test("an assigned command dispatches through the registered listener", async () => {
   const { assignedUrl } = await createShortcutFixture();
-  await createPinnedTabs([`${extensionOrigin}/options.html?shortcut-unwanted`]);
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?shortcut-unwanted`]);
   const result = await driver.executeAsyncScript((done) => {
     browser.runtime.getBackgroundPage()
       .then((page) => page.savePinnedTabsCommandListener("load-set-1"))
@@ -273,7 +273,7 @@ test("an assigned command dispatches through the registered listener", async () 
 });
 
 test("an unassigned command is a no-op", async () => {
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   const before = await pinnedUrls();
   const result = await driver.executeAsyncScript((done) => {
     browser.runtime.getBackgroundPage()
@@ -285,12 +285,12 @@ test("an unassigned command is a no-op", async () => {
 });
 
 test("multi-set Autoload replaces then appends in every normal window and ignores popups", async () => {
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   const firstId = "11111111-1111-4111-8111-111111111111";
   const secondId = "22222222-2222-4222-8222-222222222222";
-  const firstUrl = `${extensionOrigin}/options.html?autoload-first`;
-  const secondUrl = `${extensionOrigin}/options.html?autoload-second`;
-  const duplicateUrl = `${extensionOrigin}/options.html?autoload-duplicate`;
+  const firstUrl = `${extensionOrigin}/options/options.html?autoload-first`;
+  const secondUrl = `${extensionOrigin}/options/options.html?autoload-second`;
+  const duplicateUrl = `${extensionOrigin}/options/options.html?autoload-duplicate`;
   await importDocument({
     version: 2,
     sets: [
@@ -301,7 +301,7 @@ test("multi-set Autoload replaces then appends in every normal window and ignore
   }, "autoload.json");
   await waitForStatus("options-status", "Successfully imported 2 tab sets.");
   await restartFirefox();
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   await driver.wait(async () => (
     JSON.stringify(await pinnedUrls()) === JSON.stringify([firstUrl, duplicateUrl, secondUrl])
   ), 30_000);
@@ -314,15 +314,15 @@ test("multi-set Autoload replaces then appends in every normal window and ignore
       === JSON.stringify([firstUrl, duplicateUrl, secondUrl])
   ), 30_000);
   const popupWindowId = await driver.executeAsyncScript((done) => {
-    browser.windows.create({ type: "popup", url: browser.runtime.getURL("popup.html") })
+    browser.windows.create({ type: "popup", url: browser.runtime.getURL("popup/popup.html") })
       .then((window) => done(window.id));
   });
   await driver.wait(async () => (await pinnedUrls(popupWindowId)).length === 0, 10_000);
 });
 
 test("a pending failure blocks duplicate commands and recovers in place", async () => {
-  await openExtensionPage("popup.html");
-  const existingUrl = `${extensionOrigin}/options.html?existing`;
+  await openExtensionPage("popup/popup.html");
+  const existingUrl = `${extensionOrigin}/options/options.html?existing`;
   await createPinnedTabs([existingUrl]);
   await saveSet("Existing");
   await driver.executeScript(() => {
@@ -387,7 +387,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
   }, legacyKey);
   assert.equal(schemaExists, false);
   await restartFirefox();
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   await driver.wait(until.elementLocated(By.css('.load-row[data-name="Legacy Work"]')), 10_000);
   const migrated = await driver.executeAsyncScript((setKey, done) => {
     Promise.all([browser.storage.sync.get(null), browser.storage.local.get(null)])
@@ -415,14 +415,14 @@ test("a legacy profile migrates sets and references exactly once across restarts
     }).then(() => done());
   }, lateLegacyKey);
   await restartFirefox();
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 0);
 });
 
 test("saved-set titles can exceed 30 characters and wrap", async () => {
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   const longName = "A very long saved tab set title that remains readable instead of being truncated";
-  await createPinnedTabs([`${extensionOrigin}/options.html?long-title`]);
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?long-title`]);
   await saveSet(longName);
   const title = await driver.findElement(By.css(`.load-row[data-name="${longName}"] span`));
   assert.equal(await title.getText(), longName);
@@ -433,10 +433,10 @@ test("saved-set titles can exceed 30 characters and wrap", async () => {
 });
 
 test("a user can export and import tab sets", async () => {
-  await openExtensionPage("popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options.html?exported`]);
+  await openExtensionPage("popup/popup.html");
+  await createPinnedTabs([`${extensionOrigin}/options/options.html?exported`]);
   await saveSet("Backup");
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   await driver.findElement(By.id("export-button")).click();
   await waitForStatus("options-status", "Tab sets exported.");
   let exportName;
@@ -445,53 +445,53 @@ test("a user can export and import tab sets", async () => {
       .find((name) => /^SavePinnedTabs_export_.*\.json$/.test(name));
     return Boolean(exportName);
   }, 10_000);
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   const row = await driver.findElement(By.css('.load-row[data-name="Backup"]'));
   await row.findElement(By.css(".set-delete")).click();
   await driver.findElement(By.css("#delete-dialog button[value=delete]")).click();
   await waitForStatus("popup-status", "Tab set deleted.");
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   await driver.findElement(By.id("import-input"))
     .sendKeys(path.join(temporaryDirectory, exportName));
   await driver.findElement(By.id("import-button")).click();
   await waitForStatus("options-status", "Successfully imported 1 tab set.");
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   assert.ok(await driver.findElement(By.css('.load-row[data-name="Backup"]')));
 });
 
 test("an imported tab-set name is rendered as text", async () => {
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   const setName = '<img id="injected-markup" src="invalid">';
   await importDocument({
     markup: { autoload: 0, set_name: setName, tabs: ["https://example.com"] },
   }, "markup.json");
   await waitForStatus("options-status", "Successfully imported 1 tab set.");
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   const rows = await driver.findElements(By.css(".load-row"));
   assert.equal(await rows[0].findElement(By.css("span")).getText(), setName);
   assert.equal((await driver.findElements(By.id("injected-markup"))).length, 0);
 });
 
 test("a schema-invalid import is rejected", async () => {
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   await importDocument({
     invalid: { autoload: 2, set_name: "Invalid", tabs: ["https://example.com"] },
   }, "invalid.json");
   await driver.wait(async () => (
     (await driver.findElement(By.id("options-status")).getText()).includes("Import validation failed")
   ), 10_000);
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Invalid"]'))).length, 0);
 });
 
 test("startup keeps an already restored pinned tab open", async () => {
-  await openExtensionPage("popup.html");
-  const url = `${extensionOrigin}/options.html?already-restored`;
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?already-restored`;
   await createPinnedTabs([url]);
   await saveSet("Already restored");
   await selectAutoloadSet("Already restored");
   await restartFirefox();
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   await driver.wait(async () => (await pinnedUrls()).filter((tabUrl) => tabUrl === url).length === 1, 30_000);
 });
 
@@ -501,33 +501,33 @@ test("startup preserves unrelated local extension state", async () => {
     browser.storage.local.set({ unrelated: "keep" }).then(() => done());
   });
   await restartFirefox();
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   assert.equal(await driver.executeAsyncScript((done) => {
     browser.storage.local.get("unrelated").then(({ unrelated }) => done(unrelated));
   }), "keep");
 });
 
 test("the startup handler restores the configured pinned tabs", async () => {
-  await openExtensionPage("popup.html");
-  const url = `${extensionOrigin}/options.html?startup-handler`;
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?startup-handler`;
   await createPinnedTabs([url]);
   await saveSet("Startup handler");
   await selectAutoloadSet("Startup handler");
   await removePinnedTabs();
   await restartFirefox();
-  await openExtensionPage("options.html");
+  await openExtensionPage("options/options.html");
   await driver.wait(async () => (await pinnedUrls()).includes(url), 30_000);
 });
 
 test("an autoload selection persists across browser restart", async () => {
-  await openExtensionPage("popup.html");
-  const url = `${extensionOrigin}/options.html?restart`;
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?restart`;
   await createPinnedTabs([url]);
   await saveSet("Startup");
   await selectAutoloadSet("Startup");
   await removePinnedTabs();
   await restartFirefox();
-  await openExtensionPage("popup.html");
+  await openExtensionPage("popup/popup.html");
   await driver.wait(async () => (await pinnedUrls()).includes(url), 30_000);
   assert.equal(
     await driver.findElement(By.css('.load-row[data-name="Startup"] input[name=autoload]'))

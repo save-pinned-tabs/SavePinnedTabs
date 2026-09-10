@@ -1,5 +1,5 @@
-import { createBrowserRepositories } from './repositories.mjs';
-import { createBrowserWindowTabState } from './window-tab-state.mjs';
+import { createBrowserRepositories } from '../storage/browser-repositories.mjs';
+import { createBrowserWindowTabState } from '../storage/window-tab-state.mjs';
 
 async function hasFaviconPermission(browser) {
   try {

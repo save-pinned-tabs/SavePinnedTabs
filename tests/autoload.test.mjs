@@ -6,9 +6,9 @@ import {
   preloadFavicons,
   restoreAutoloadSet,
   restoreAutoloadSets,
-} from '../src/autoload.mjs';
-import { createBrowserRepositories } from '../src/repositories.mjs';
-import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage-schema.mjs';
+} from '../src/background/autoload.mjs';
+import { createBrowserRepositories } from '../src/storage/browser-repositories.mjs';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage/storage-schema.mjs';
 
 function deferred() {
   let resolve;

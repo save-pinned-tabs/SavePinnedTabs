@@ -5,23 +5,23 @@ import {
   BrowserTabSetStorage,
   InMemoryTabSetStorage,
   TabSetRepository,
-} from '../src/tab-set-repository.mjs';
+} from '../src/tab-sets/tab-set-repository.mjs';
 import {
   BrowserReferenceStorage,
   BrowserStorageMigration,
   InMemoryReferenceStorage,
   LOCAL_DOCUMENT_KEY,
   SYNC_DOCUMENT_KEY,
-} from '../src/storage-schema.mjs';
+} from '../src/storage/storage-schema.mjs';
 import {
   ShortcutAssignmentRepository,
   ShortcutAssignmentStorage,
-} from '../src/shortcut-assignment-repository.mjs';
+} from '../src/storage/shortcut-assignment-repository.mjs';
 import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
-} from '../src/window-session-repository.mjs';
+} from '../src/storage/window-session-repository.mjs';
 
 const FIRST_ID = '00000000-0000-4000-8000-000000000001';
 const SECOND_ID = '00000000-0000-4000-8000-000000000002';

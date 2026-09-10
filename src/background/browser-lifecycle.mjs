@@ -1,12 +1,12 @@
 import { restoreAutoloadSets } from './autoload.mjs';
-import { createSerializedStorageOperation } from './serialized-operation.mjs';
-import { createBrowserWindowTabState } from './window-tab-state.mjs';
-import { createBrowserRepositories } from './repositories.mjs';
+import { createSerializedStorageOperation } from '../storage/serialized-operation.mjs';
+import { createBrowserWindowTabState } from '../storage/window-tab-state.mjs';
+import { createBrowserRepositories } from '../storage/browser-repositories.mjs';
 import {
   AUTOLOAD_EVERY_WINDOW,
   AUTOLOAD_FIRST_WINDOW,
   AUTOLOAD_SCOPES,
-} from './storage-schema.mjs';
+} from '../storage/storage-schema.mjs';
 
 export { AUTOLOAD_EVERY_WINDOW, AUTOLOAD_FIRST_WINDOW };
 

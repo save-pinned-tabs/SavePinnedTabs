@@ -4,8 +4,8 @@ import {
   emptySyncDocument,
   isUuid,
   newSetId,
-} from './storage-schema.mjs';
-import { createSerializedOperation, createSerializedStorageOperation } from './serialized-operation.mjs';
+} from '../storage/storage-schema.mjs';
+import { createSerializedOperation, createSerializedStorageOperation } from '../storage/serialized-operation.mjs';
 
 const TAB_SET_LOCK = 'save-pinned-tabs:tab-sets';
 const EXPORT_VERSION = 2;

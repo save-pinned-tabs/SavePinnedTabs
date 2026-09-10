@@ -1,4 +1,4 @@
-import { createBrowserTabSetController } from './browser-tab-set-controller.mjs';
+import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.mjs';
 import { startPopupApp } from './popup-app.mjs';
 import { createPopupUi } from './popup-ui.mjs';
 
