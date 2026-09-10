@@ -47,12 +47,13 @@ async function replacePinnedTabs(browser, windowId, currentTabs, savedUrls) {
 
   for (const url of savedUrls) {
     try {
-      await browser.tabs.create({
+      const restoredTab = await browser.tabs.create({
         windowId,
         url,
         active: false,
         pinned: true,
       });
+      await browser.tabs.update(restoredTab.id, { pinned: true });
     } catch (error) {
       throw new Error(`Failed to restore tab ${url}`, { cause: error });
     }
