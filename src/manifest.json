@@ -3,6 +3,7 @@
   "name": "Save Pinned Tabs",
   "short_name": "Save Pinned",
   "version": "3.0.1",
+  "minimum_chrome_version": "92",
 
   "description": "Save, restore, autoload, import, and export named groups of pinned tabs.",
   "icons": {
