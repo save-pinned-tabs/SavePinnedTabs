@@ -69,6 +69,34 @@ test('removes existing pinned tabs before creating replacements', async () => {
   assert.deepEqual(operations, ['remove', 'create']);
 });
 
+test('combines every selected Autoload set without duplicate URLs', async () => {
+  const createdUrls = [];
+  const browser = createBrowser({
+    sets: {
+      first: {
+        autoload: 1,
+        tabs: ['https://first.example/', 'https://shared.example/'],
+      },
+      second: {
+        autoload: 1,
+        tabs: ['https://shared.example/', 'https://second.example/'],
+      },
+    },
+    createTab: async ({ url }) => {
+      createdUrls.push(url);
+    },
+  });
+
+  await restoreAutoloadSet(browser, 1);
+
+  assert.deepEqual(createdUrls, [
+    'https://first.example/',
+    'https://shared.example/',
+    'https://second.example/',
+  ]);
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
+});
+
 test('resolves only after every tab and active-set state are restored', async () => {
   const creation = deferred();
   let hasResolved = false;
