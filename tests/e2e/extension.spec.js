@@ -132,6 +132,39 @@ test("saved-set titles can exceed 30 characters and wrap", async ({ extension })
   expect(wraps).toBe(true);
 });
 
+test("saving without pinned tabs explains why nothing was saved", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+
+  await popup.getByPlaceholder("Enter a name for set...").fill("Empty");
+  await popup.getByRole("button", { name: "Save", exact: true }).click();
+
+  await expect(popup.getByRole("status")).toHaveText(
+    "Pin at least one tab before saving.",
+  );
+
+  await popup.evaluate(async () => {
+    const window = await chrome.windows.getCurrent();
+    await chrome.storage.sync.set({
+      V29yaw: {
+        set_name: "Work",
+        autoload: 0,
+        tabs: ["https://saved.example/"],
+      },
+    });
+    await chrome.storage.local.set({ activeTabs: { [window.id]: "V29yaw" } });
+  });
+  await popup.reload();
+  await popup
+    .locator(".load-row", { hasText: "Work" })
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+
+  await expect(popup.getByRole("status")).toHaveText(
+    "Pin at least one tab before saving.",
+  );
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
