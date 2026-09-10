@@ -139,11 +139,30 @@ test('runs startup restoration once when both startup triggers fire', async () =
   const autoload = createStartupAutoload(browser, () => fallbackDelay.promise);
 
   const fallback = autoload.manual();
-  const windowEvent = autoload.windowCreated({ id: 99, type: 'popup' });
+  const windowEvent = autoload.windowCreated({ id: 1, type: 'normal' });
   fallbackDelay.resolve();
   await Promise.all([fallback, windowEvent]);
 
   assert.equal(setReads, 1);
+});
+
+test('ignores popup windows without restoring pinned tabs', async () => {
+  let setReads = 0;
+  const browser = createBrowser();
+  browser.storage.sync.get = async () => {
+    setReads += 1;
+    return {};
+  };
+  browser.windows = {
+    async getAll() {
+      return [{ id: 1, type: 'normal' }];
+    },
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.windowCreated({ id: 99, type: 'popup' });
+
+  assert.equal(setReads, 0);
 });
 
 test('retries startup restoration when the first window is not ready', async () => {
