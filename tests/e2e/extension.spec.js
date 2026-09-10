@@ -100,6 +100,49 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("a user can directly edit a saved set's URLs", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const extensionUrl = `chrome-extension://${extensionId}/options.html`;
+  await popup.evaluate(async (savedExtensionUrl) => {
+    await chrome.storage.sync.set({
+      editable: {
+        set_name: "Editable",
+        autoload: 1,
+        tabs: ["https://remove.example/", savedExtensionUrl],
+      },
+    });
+  }, extensionUrl);
+  await popup.reload();
+
+  await popup
+    .locator(".load-row", { hasText: "Editable" })
+    .getByRole("button", { name: "Edit" })
+    .click();
+  await expect(popup.locator("#edit-dialog")).toBeVisible();
+  await popup.getByRole("textbox", { name: "Saved tab URLs" }).fill("javascript:alert(1)");
+  await popup.getByRole("button", { name: "Save changes" }).click();
+  await expect(popup.getByRole("status")).toHaveText("Invalid URL: javascript:alert(1)");
+  await expect(popup.locator("#edit-dialog")).toBeVisible();
+
+  await popup.getByRole("textbox", { name: "Saved tab URLs" }).fill(
+    `${extensionUrl}\nhttps://add.example/`,
+  );
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup.getByRole("button", { name: "Save changes" }).click(),
+  ]);
+
+  const editedSet = await popup.evaluate(async () => (
+    await chrome.storage.sync.get("editable")
+  ).editable);
+  expect(editedSet).toEqual({
+    set_name: "Editable",
+    autoload: 1,
+    tabs: [extensionUrl, "https://add.example/"],
+  });
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");

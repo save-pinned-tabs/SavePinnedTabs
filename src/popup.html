@@ -24,6 +24,18 @@
 		</div>
 	</form>
 </dialog>
+<dialog id="edit-dialog" aria-labelledby="edit-dialog-title">
+	<form method="dialog">
+	<h3 id="edit-dialog-title">Edit tab set</h3>
+	<p>Enter one URL per line. Add, change, reorder, or remove entries.</p>
+	<textarea id="edit-urls" rows="8" aria-label="Saved tab URLs"></textarea>
+	<p id="edit-status" role="status"></p>
+	<div class="dialog-actions">
+		<button value="cancel">Cancel</button>
+		<button id="save-edit-button" type="button">Save changes</button>
+	</div>
+	</form>
+</dialog>
 <script src="popup.js" type="module"></script>
 </body>
 </html>

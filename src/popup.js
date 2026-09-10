@@ -11,4 +11,7 @@ document.getElementById('save-name').addEventListener('keydown', function (event
 	}
 });
 document.getElementById('save-name').focus();
+document.getElementById('save-edit-button').addEventListener('click', function () {
+	Sets.saveEdits();
+});
 document.addEventListener('DOMContentLoaded', Sets.get);

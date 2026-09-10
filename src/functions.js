@@ -17,11 +17,22 @@ var browser = globalThis.browser ?? globalThis.chrome;
 function refreshPopup() {
     if (typeof window !== 'undefined') window.location.href = "popup.html";
 }
+const UNSAFE_URL_PROTOCOLS = new Set(['data:', 'javascript:', 'vbscript:']);
+
+function isLoadableUrl(value) {
+    try {
+        return !UNSAFE_URL_PROTOCOLS.has(new URL(value).protocol);
+    } catch {
+        return false;
+    }
+}
+
 
 export var Sets = (function () {
 
 
     var windowId = null;
+    var editGeneration = 0;
     browser.windows.getCurrent().then(function (win) {
         windowId = win.id;
     });
@@ -109,6 +120,14 @@ export var Sets = (function () {
                         autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
                         rowElement.appendChild(autoloadLabel);
 
+                        const editButton = document.createElement('button');
+                        editButton.classList.add('set-edit');
+                        editButton.textContent = 'Edit';
+                        editButton.addEventListener('click', function () {
+                            Sets.edit(property);
+                        });
+                        rowElement.appendChild(editButton);
+
                         if (active === property) {
                             const saveButton = document.createElement('button');
                             saveButton.classList.add('set-save');
@@ -144,6 +163,71 @@ export var Sets = (function () {
 
                 });
         	});
+        },
+        edit: async function (id) {
+            const generation = ++editGeneration;
+            const dialog = document.getElementById('edit-dialog');
+            const status = document.getElementById('edit-status');
+            const saveButton = document.getElementById('save-edit-button');
+            dialog.dataset.setId = id;
+            document.getElementById('edit-dialog-title').textContent = 'Edit tab set';
+            document.getElementById('edit-urls').value = '';
+            status.textContent = 'Loading…';
+            saveButton.disabled = true;
+            dialog.showModal();
+
+            try {
+                const set = (await browser.storage.sync.get(id))[id];
+                if (!dialog.open || editGeneration !== generation) return;
+                if (!set) {
+                    status.textContent = 'This tab set no longer exists.';
+                    return;
+                }
+                document.getElementById('edit-dialog-title').textContent = `Edit ${set.set_name}`;
+                document.getElementById('edit-urls').value = set.tabs.join('\n');
+                status.textContent = '';
+                saveButton.disabled = false;
+            } catch {
+                if (!dialog.open || editGeneration !== generation) return;
+                status.textContent = 'Could not load this tab set. Please try again.';
+            }
+        },
+        saveEdits: async function () {
+            const dialog = document.getElementById('edit-dialog');
+            const id = dialog.dataset.setId;
+            const generation = editGeneration;
+            const saveButton = document.getElementById('save-edit-button');
+            const tabs = document.getElementById('edit-urls').value
+                .split('\n')
+                .map((url) => url.trim())
+                .filter(Boolean);
+            const invalidUrl = tabs.find((url) => !isLoadableUrl(url));
+            if (invalidUrl) {
+                document.getElementById('edit-status').textContent = `Invalid URL: ${invalidUrl}`;
+                return;
+            }
+            saveButton.disabled = true;
+
+            try {
+                const saved = await browser.storage.sync.get(id);
+                if (!dialog.open || editGeneration !== generation) return;
+                if (!saved[id]) {
+                    document.getElementById('edit-status').textContent =
+                        'This tab set no longer exists.';
+                    saveButton.disabled = false;
+                    return;
+                }
+                saved[id].tabs = tabs;
+                await browser.storage.sync.set(saved);
+                if (!dialog.open || editGeneration !== generation) return;
+                dialog.close();
+                refreshPopup();
+            } catch {
+                if (!dialog.open || editGeneration !== generation) return;
+                saveButton.disabled = false;
+                document.getElementById('edit-status').textContent =
+                    'Could not save these changes. Please try again.';
+            }
         },
         setAutoload: function (id) {
             browser.storage.sync.get(null).then(function (sets) {
