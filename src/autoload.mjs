@@ -1,18 +1,11 @@
 import { createBrowserRepositories } from './repositories.mjs';
+import { createBrowserWindowTabState } from './window-tab-state.mjs';
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 
-function effectiveUrl(tab) {
-  return tab.pendingUrl || tab.url;
-}
-
-function tabsMatch(currentTabs, savedUrls) {
-  return currentTabs.length === savedUrls.length
-    && currentTabs.every((tab, index) => effectiveUrl(tab) === savedUrls[index]);
-}
 
 async function hasFaviconPermission(browser) {
   try {
@@ -37,61 +30,42 @@ export async function preloadFavicons(browser, urls, fetchFavicon = fetch) {
   }));
 }
 
-async function replacePinnedTabs(browser, windowId, currentTabs, savedUrls) {
-  void preloadFavicons(browser, savedUrls);
-  const tabIds = currentTabs.map((tab) => tab.id);
-  if (tabIds.length > 0) await browser.tabs.remove(tabIds);
-
-  for (const url of savedUrls) {
-    try {
-      await browser.tabs.create({
-        windowId,
-        url,
-        active: false,
-        pinned: true,
-      });
-    } catch (error) {
-      throw new Error(`Failed to restore tab ${url}`, { cause: error });
-    }
-  }
-}
 
 export async function loadTabSet(browser, setId, windowId) {
-  const repositories = createBrowserRepositories(browser);
-  const [currentTabs, set] = await Promise.all([
-    browser.tabs.query({ pinned: true, windowId }),
-    repositories.tabSets.get(setId),
-  ]);
-  if (!set) throw new Error(`Failed to load tab set "${setId}" in window "${windowId}": set does not exist`);
+  const windowTabState = createBrowserWindowTabState(browser, {
+    onReplace(urls) {
+      void preloadFavicons(browser, urls);
+    },
+  });
+  await windowTabState.replace(windowId, setId);
+}
 
-  await replacePinnedTabs(browser, windowId, currentTabs, set.tabs);
-  const activated = await repositories.tabSets.activateWindowSession(setId, set, windowId);
-  if (!activated) {
-    throw new Error(`Failed to load tab set "${setId}" in window "${windowId}": set changed or was deleted while loading`);
-  }
+export async function appendTabSet(browser, setId, windowId) {
+  const windowTabState = createBrowserWindowTabState(browser);
+  await windowTabState.append(windowId, setId);
+}
+
+export async function unloadTabSet(browser, setId, windowId) {
+  const windowTabState = createBrowserWindowTabState(browser);
+  await windowTabState.unload(windowId, setId);
 }
 
 export async function restoreAutoloadSet(browser, windowId) {
   const repositories = createBrowserRepositories(browser);
-  const [currentTabs, sets] = await Promise.all([
-    browser.tabs.query({ pinned: true, windowId }),
-    repositories.tabSets.list(),
-  ]);
+  const sets = await repositories.tabSets.list();
   const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
+  const windowTabState = createBrowserWindowTabState(browser, {
+    onReplace(urls) {
+      void preloadFavicons(browser, urls);
+    },
+  });
 
   if (!entry) {
-    await repositories.windowSessions.set(windowId, null);
+    await windowTabState.deactivate(windowId);
     return;
   }
 
-  const [setId, set] = entry;
-  if (!tabsMatch(currentTabs, set.tabs)) {
-    await replacePinnedTabs(browser, windowId, currentTabs, set.tabs);
-  }
-  const activated = await repositories.tabSets.activateWindowSession(setId, set, windowId);
-  if (!activated) {
-    throw new Error(`Failed to restore autoload tab set "${setId}" in window "${windowId}": set changed or was deleted while loading`);
-  }
+  await windowTabState.replace(windowId, entry[0]);
 }
 
 const STARTUP_WINDOW_ATTEMPTS = 100;

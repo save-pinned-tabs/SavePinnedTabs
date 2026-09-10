@@ -1,11 +1,17 @@
 import { Autoload } from './functions.js';
-import { createBrowserRepositories } from './repositories.mjs';
+import { registerCommands } from './commands.mjs';
+import {
+  createBrowserWindowTabState,
+  registerWindowTabStateMessages,
+} from './window-tab-state.mjs';
 
 var browser = globalThis.browser ?? globalThis.chrome;
-var repositories = createBrowserRepositories(browser);
+var windowTabState = createBrowserWindowTabState(browser);
+registerWindowTabStateMessages(browser, windowTabState);
+registerCommands(browser, windowTabState);
 
 export async function handleWindowRemoved(windowId) {
-  await repositories.windowSessions.clearClosedWindow(windowId);
+  await windowTabState.deactivate(windowId);
 }
 
 if (!browser.windows.onRemoved.hasListener(handleWindowRemoved)) {
@@ -13,7 +19,7 @@ if (!browser.windows.onRemoved.hasListener(handleWindowRemoved)) {
 }
 
 export async function handleStartup() {
-  await repositories.windowSessions.clearAll();
+  await windowTabState.resetSessions();
 
   if (!browser.windows.onCreated.hasListener(Autoload.windowCreated)) {
     browser.windows.onCreated.addListener(Autoload.windowCreated);

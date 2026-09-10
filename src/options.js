@@ -1,6 +1,47 @@
+import { createShortcutAssignments } from "./commands.mjs";
 import { Sets } from "./functions.js";
+import { createBrowserRepositories } from "./repositories.mjs";
 
 var importInput = document.getElementById("import-input");
+var browser = globalThis.browser ?? globalThis.chrome;
+var repositories = createBrowserRepositories(browser);
+var shortcutAssignments = createShortcutAssignments(browser);
+
+async function initializeShortcuts() {
+  const [sets, assignments, commands] = await Promise.all([
+    repositories.tabSets.list(),
+    shortcutAssignments.list(),
+    browser.commands.getAll(),
+  ]);
+  const shortcuts = new Map(commands.map((command) => [command.name, command.shortcut]));
+
+  for (const select of document.querySelectorAll("[data-shortcut-command]")) {
+    select.append(new Option("Not assigned", ""));
+    for (const [setId, set] of Object.entries(sets)) {
+      select.append(new Option(set.set_name, setId));
+    }
+    select.value = assignments[select.dataset.shortcutCommand] ?? "";
+    select.dataset.savedValue = select.value;
+
+    const shortcut = shortcuts.get(select.dataset.shortcutCommand);
+    document.querySelector(
+      `[data-shortcut-label="${select.dataset.shortcutCommand}"]`,
+    ).textContent = shortcut || "Not assigned in browser";
+
+    select.addEventListener("change", async function () {
+      const previousValue = this.dataset.savedValue;
+      try {
+        await shortcutAssignments.assign(this.dataset.shortcutCommand, this.value);
+        this.dataset.savedValue = this.value;
+        document.getElementById("shortcut-status").textContent = "";
+      } catch {
+        this.value = previousValue;
+        document.getElementById("shortcut-status").textContent =
+          "Could not save the shortcut assignment. Please try again.";
+      }
+    });
+  }
+}
 
 function showNotification(message) {
   var dialog = document.getElementById("notification-dialog");
@@ -52,3 +93,8 @@ document
 document
   .getElementById("export-button")
   .addEventListener("click", handleExport);
+
+initializeShortcuts().catch(() => {
+  document.getElementById("shortcut-status").textContent =
+    "Could not load shortcut assignments. Please try again.";
+});

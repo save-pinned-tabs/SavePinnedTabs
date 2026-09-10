@@ -1,5 +1,6 @@
-import { createStartupAutoload, loadTabSet } from './autoload.mjs';
+import { createStartupAutoload } from './autoload.mjs';
 import { createBrowserRepositories } from './repositories.mjs';
+import { createWindowTabStateClient } from './window-tab-state.mjs';
 
 function confirmDelete() {
     var dialog = document.getElementById('delete-dialog');
@@ -15,6 +16,7 @@ function confirmDelete() {
 
 var browser = globalThis.browser ?? globalThis.chrome;
 var repositories = createBrowserRepositories(browser);
+var windowTabState = createWindowTabStateClient(browser);
 
 function refreshPopup() {
     if (typeof window !== 'undefined') window.location.href = "popup.html";
@@ -30,34 +32,30 @@ export var Sets = (function () {
 
 
     return {
-        save: function (name, autoload) {
-            var urilist = [];
-            return browser.tabs.query({
-        		pinned: true,
-        		currentWindow: true
-        	}).then(function (tabs) {
-        		for (var i = 0; i < tabs.length; i++) {
-        			urilist[i] = tabs[i].url;
-        		}
-        		if (urilist.length > 0) {
-        			var uid = window.btoa(name);
-                    var set = {
-        				set_name: name,
-        				autoload: autoload || 0,
-        				tabs: urilist
-        			};
-                    return repositories.tabSets.saveForWindow(uid, set, windowId)
-                        .then(refreshPopup);
-        		} else {
-        			console.log('No pinned tabs found!');
-        		}
-        	});
+        save: async function (name, autoload) {
+            var winid = windowId ?? (await browser.windows.getCurrent()).id;
+            var uid = window.btoa(name);
+            var set = await windowTabState.captureAndSave(winid, uid, {
+                name: name,
+                autoload: autoload || 0,
+            });
+            if (!set) {
+                console.log('No pinned tabs found!');
+                return;
+            }
+            refreshPopup();
         },
         load: function (id, winid) {
-            return loadTabSet(browser, id, winid).then(function () {
+            return windowTabState.replace(winid, id).then(function () {
                 console.log('Loaded tabs');
                 refreshPopup();
             });
+        },
+        append: function (id, winid) {
+            return windowTabState.append(winid, id).then(refreshPopup);
+        },
+        unload: function (id, winid) {
+            return windowTabState.unload(winid, id).then(refreshPopup);
         },
         delete: async function (id) {
             if (!await confirmDelete()) return;
