@@ -52,18 +52,28 @@ export async function restoreAutoloadSet(browser, windowId) {
     browser.tabs.query({ pinned: true, windowId }),
     browser.storage.sync.get(null),
   ]);
-  const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
+  const autoloadEntries = Object.entries(sets)
+    .filter(([, set]) => set.autoload == 1);
 
-  if (!entry) {
+  if (autoloadEntries.length === 0) {
     await setActiveTabSet(browser, windowId, null);
     return;
   }
 
-  const [setId, set] = entry;
-  if (!tabsMatch(currentTabs, set.tabs)) {
-    await replacePinnedTabs(browser, windowId, currentTabs, set.tabs);
+  const savedUrls = [];
+  const seenUrls = new Set();
+  for (const [, set] of autoloadEntries) {
+    for (const url of set.tabs) {
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      savedUrls.push(url);
+    }
   }
-  await setActiveTabSet(browser, windowId, setId);
+  if (!tabsMatch(currentTabs, savedUrls)) {
+    await replacePinnedTabs(browser, windowId, currentTabs, savedUrls);
+  }
+  const activeSetId = autoloadEntries.length === 1 ? autoloadEntries[0][0] : null;
+  await setActiveTabSet(browser, windowId, activeSetId);
 }
 
 const STARTUP_WINDOW_ATTEMPTS = 100;

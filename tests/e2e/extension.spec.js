@@ -100,6 +100,36 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("a user can select multiple sets for Autoload", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const firstUrl = `chrome-extension://${extensionId}/options.html?autoload-first`;
+  const sharedUrl = `chrome-extension://${extensionId}/options.html?autoload-shared`;
+  const secondUrl = `chrome-extension://${extensionId}/options.html?autoload-second`;
+  await popup.evaluate(async (sets) => {
+    await chrome.storage.sync.set(sets);
+  }, {
+    first: { set_name: "First", autoload: 0, tabs: [firstUrl, sharedUrl] },
+    second: { set_name: "Second", autoload: 0, tabs: [sharedUrl, secondUrl] },
+  });
+  await popup.reload();
+
+  await selectAutoloadSet(popup, "First");
+  await selectAutoloadSet(popup, "Second");
+  await expect(popup.locator('input[name="autoload"]:checked')).toHaveCount(2);
+  await removePinnedTabs(popup);
+  await popup.evaluate(async () => {
+    const { Autoload } = await import(chrome.runtime.getURL("functions.js"));
+    await Autoload.manual();
+  });
+
+  await expectOpenTabs(context, [firstUrl, sharedUrl, secondUrl]);
+  const pinnedUrls = await popup.evaluate(async () => (
+    await chrome.tabs.query({ pinned: true, currentWindow: true })
+  ).map((tab) => tab.url));
+  expect(pinnedUrls.filter((url) => url === sharedUrl)).toHaveLength(1);
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");

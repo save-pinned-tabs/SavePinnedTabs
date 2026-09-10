@@ -103,8 +103,7 @@ export var Sets = (function () {
                         autoloadInput.value = property;
                         autoloadInput.checked = Boolean(row.autoload);
                         autoloadInput.addEventListener('click', function () {
-                            if (this.checked) Sets.setAutoload(this.value);
-                            else Sets.setAutoload(false);
+                            Sets.setAutoload(this.value, this.checked);
                         });
                         autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
                         rowElement.appendChild(autoloadLabel);
@@ -145,18 +144,12 @@ export var Sets = (function () {
                 });
         	});
         },
-        setAutoload: function (id) {
-            browser.storage.sync.get(null).then(function (sets) {
-        		for (var property in sets) {
-        			if (sets.hasOwnProperty(property)) {
-        				if (id && property == id) sets[property].autoload = 1;
-        				else sets[property].autoload = 0;
-        			}
-        		}
-        		browser.storage.sync.set(sets).then(function () {
-        			window.location.href = "popup.html";
-        		});
-        	});
+        setAutoload: async function (id, enabled) {
+            const stored = await browser.storage.sync.get(id);
+            if (!stored[id]) return;
+            stored[id].autoload = enabled ? 1 : 0;
+            await browser.storage.sync.set(stored);
+            window.location.href = "popup.html";
         },
 		export: function () {
 			var fileName = "SavePinnedTabs_export_" + new Date().toISOString().replaceAll(/[.:]/g, "-") + '.json';
