@@ -6,8 +6,11 @@ const path = require("node:path");
 const extensionPath = path.resolve(__dirname, "../../src");
 
 async function launchExtension(userDataDir) {
+  const browser = process.env.CHROMIUM_BINARY
+    ? { executablePath: process.env.CHROMIUM_BINARY }
+    : { channel: "chromium" };
   const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: "chromium",
+    ...browser,
     headless: true,
     args: [
       `--disable-extensions-except=${extensionPath}`,
