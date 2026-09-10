@@ -127,9 +127,8 @@ export function createStartupAutoload(browser, delay = wait) {
   }
 
   function windowCreated(window) {
-    if (window?.type === 'normal' && !createdNormalWindow) {
-      createdNormalWindow = window;
-    }
+    if (window?.type !== 'normal') return;
+    if (!createdNormalWindow) createdNormalWindow = window;
     return restoreOnce();
   }
 
