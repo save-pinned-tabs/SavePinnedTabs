@@ -4,7 +4,6 @@
 	<meta charset="UTF-8">
 	<title>Save Pinned</title>
 	<link href="style.css" rel="stylesheet">
-	<link href="lib/sweetalert2.min.css" rel="stylesheet">
 </head>
 <body>
 <h2>Save <span>Save current pinned tabs.</span></h2>
@@ -15,6 +14,16 @@
 <div id="load-area">
 	<div id="placeholder">There are no saved tab sets</div>
 </div>
+<dialog id="delete-dialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-description">
+	<form method="dialog">
+		<h3 id="delete-dialog-title">Delete tab set?</h3>
+		<p id="delete-dialog-description">This action cannot be undone.</p>
+		<div class="dialog-actions">
+			<button value="cancel" autofocus>Cancel</button>
+			<button value="delete" class="dialog-delete">Delete</button>
+		</div>
+	</form>
+</dialog>
 <script src="popup.js" type="module"></script>
 </body>
 </html>

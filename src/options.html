@@ -5,7 +5,6 @@
     <title>Save Pinned Tabs - Options</title>
     <meta charset="utf-8" />
     <link href="style.css" rel="stylesheet">
-    <link href="lib/sweetalert2.min.css" rel="stylesheet">
     <style>
       .container {
         padding: 10px 20px 10px 20px;
@@ -36,6 +35,15 @@
         <input id="import-input" type="file" name="importfile" accept="application/json" />
         <button id="import-button">Import</button>
       </div>
+
+      <dialog id="notification-dialog" aria-labelledby="notification-message">
+        <form method="dialog">
+          <p id="notification-message"></p>
+          <div class="dialog-actions">
+            <button value="close" autofocus>OK</button>
+          </div>
+        </form>
+      </dialog>
 
       <script src="lib/FileSaver.min.js"></script>
       <script src="lib/validate_sets_schema.min.js"></script>

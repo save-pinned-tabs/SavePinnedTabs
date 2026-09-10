@@ -15,12 +15,13 @@
     "run:firefox-mac": "web-ext run --source-dir src -t firefox-desktop --firefox-binary=/Applications/Firefox\\ Developer\\ Edition.app/Contents/MacOS/firefox-bin --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
     "run:brave": "web-ext run --source-dir src -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
     "run:vivaldi": "web-ext run --source-dir src -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
-    "build": "npm run vendor:sweetalert2 && node scripts/build-extension.mjs chromium",
-    "build:firefox": "npm run vendor:sweetalert2 && node scripts/build-extension.mjs firefox",
+    "build": "node scripts/build-extension.mjs chromium",
+    "build:firefox": "node scripts/build-extension.mjs firefox",
     "compile-sets-schema": "node schema/compile-sets-validator.js",
+    "test": "npm run test:unit && npm run test:e2e && npm run test:e2e:firefox",
+    "test:unit": "node --test tests/*.test.mjs",
     "test:e2e": "playwright test",
-    "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs",
-    "vendor:sweetalert2": "node scripts/vendor-sweetalert2.mjs"
+    "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs"
   },
   "repository": {
     "type": "git",
@@ -36,7 +37,6 @@
     "@playwright/test": "^1.62.1",
     "ajv": "^8.20.0",
     "selenium-webdriver": "^4.48.0",
-    "sweetalert2": "^11.26.25",
     "web-ext": "^10.6.0"
   }
 }
