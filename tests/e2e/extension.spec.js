@@ -93,6 +93,16 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
     .click();
 
   await expectOpenTabs(context, [firstUrl, secondUrl], [unwantedUrl]);
+  const restoredTabs = await popup.evaluate(async (urls) => {
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    return tabs
+      .filter((tab) => urls.includes(tab.url))
+      .map((tab) => ({ url: tab.url, pinned: tab.pinned }));
+  }, [firstUrl, secondUrl]);
+  expect(restoredTabs).toEqual([
+    { url: firstUrl, pinned: true },
+    { url: secondUrl, pinned: true },
+  ]);
   const workRow = popup.locator(".load-row", { hasText: "Work" });
   await workRow.getByRole("button", { name: "Del" }).click();
   await expect(popup.locator("#delete-dialog")).toBeVisible();

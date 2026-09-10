@@ -11,8 +11,15 @@ function deferred() {
   return { promise, resolve };
 }
 
-function createBrowser({ currentTabs = [], sets = {}, removeTabs, createTab } = {}) {
+function createBrowser({
+  currentTabs = [],
+  sets = {},
+  removeTabs,
+  createTab,
+  updateTab,
+} = {}) {
   const activeTabs = {};
+  let nextCreatedTabId = 1;
 
   return {
     storage: {
@@ -35,7 +42,11 @@ function createBrowser({ currentTabs = [], sets = {}, removeTabs, createTab } = 
         return currentTabs;
       },
       remove: removeTabs ?? (async () => {}),
-      create: createTab ?? (async () => {}),
+      async create(properties) {
+        const tab = await createTab?.(properties);
+        return tab ?? { id: nextCreatedTabId++ };
+      },
+      update: updateTab ?? (async () => {}),
     },
   };
 }
@@ -160,6 +171,26 @@ test('does not delay restoration while favicon loading is pending', async () => 
     globalThis.fetch = originalFetch;
     faviconResponse.resolve({ ok: false });
   }
+});
+
+test('pins each restored tab after it is created', async () => {
+  const updates = [];
+  const browser = createBrowser({
+    sets: {
+      saved: {
+        autoload: 1,
+        tabs: ['https://new.example/'],
+      },
+    },
+    createTab: async () => ({ id: 42 }),
+    updateTab: async (tabId, properties) => {
+      updates.push({ tabId, properties });
+    },
+  });
+
+  await restoreAutoloadSet(browser, 1);
+
+  assert.deepEqual(updates, [{ tabId: 42, properties: { pinned: true } }]);
 });
 
 test('resolves only after every tab and active-set state are restored', async () => {
@@ -452,8 +483,13 @@ test('preserves restoration invariants across randomized tab states', async () =
           tabs.length = 0;
         },
         async create({ url }) {
-          tabs.push({ id: nextTabId, url });
+          const tab = { id: nextTabId, url };
+          tabs.push(tab);
           nextTabId += 1;
+          return tab;
+        },
+        async update(tabId, properties) {
+          Object.assign(tabs.find((tab) => tab.id === tabId), properties);
         },
       },
     };
