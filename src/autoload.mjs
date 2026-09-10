@@ -17,8 +17,16 @@ function tabsMatch(currentTabs, savedUrls) {
     && currentTabs.every((tab, index) => effectiveUrl(tab) === savedUrls[index]);
 }
 
+async function hasFaviconPermission(browser) {
+  try {
+    return await browser.permissions?.contains({ permissions: ['favicon'] }) ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export async function preloadFavicons(browser, urls, fetchFavicon = fetch) {
-  if (!browser.runtime?.getURL) return;
+  if (!browser.runtime?.getURL || !await hasFaviconPermission(browser)) return;
   await Promise.all(urls.map(async (url) => {
     const faviconUrl = new URL(browser.runtime.getURL('/_favicon/'));
     faviconUrl.searchParams.set('pageUrl', url);

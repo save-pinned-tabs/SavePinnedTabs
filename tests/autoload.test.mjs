@@ -77,6 +77,11 @@ test('preloads each saved favicon through the browser favicon cache', async () =
         return `chrome-extension://extension-id${path}`;
       },
     },
+    permissions: {
+      async contains() {
+        return true;
+      },
+    },
   };
 
   await preloadFavicons(
@@ -97,6 +102,30 @@ test('preloads each saved favicon through the browser favicon cache', async () =
   ]);
 });
 
+test('skips favicon requests when the browser lacks favicon permission', async () => {
+  for (const contains of [
+    async () => false,
+    async () => { throw new Error('unknown permission'); },
+  ]) {
+    let requested = false;
+    const browser = {
+      permissions: { contains },
+      runtime: {
+        getURL() {
+          requested = true;
+          throw new Error('should not construct favicon URL');
+        },
+      },
+    };
+
+    await preloadFavicons(browser, ['https://saved.example/'], async () => {
+      requested = true;
+    });
+
+    assert.equal(requested, false);
+  }
+});
+
 test('does not delay restoration while favicon loading is pending', async () => {
   const faviconResponse = deferred();
   let created = false;
@@ -114,6 +143,11 @@ test('does not delay restoration while favicon loading is pending', async () => 
   browser.runtime = {
     getURL(path) {
       return `chrome-extension://extension-id${path}`;
+    },
+  };
+  browser.permissions = {
+    async contains() {
+      return true;
     },
   };
   const originalFetch = globalThis.fetch;
