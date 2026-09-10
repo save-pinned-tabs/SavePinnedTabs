@@ -165,6 +165,35 @@ test("saving without pinned tabs explains why nothing was saved", async ({ exten
   );
 });
 
+test("every saved tab set keeps its Save button", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const pinnedUrl = `chrome-extension://${extensionId}/options.html?updated`;
+  await popup.evaluate(async () => {
+    await chrome.storage.sync.set({
+      "Rmlyc3Q=": { set_name: "First", autoload: 0, tabs: ["https://first.example/"] },
+      "U2Vjb25k": { set_name: "Second", autoload: 0, tabs: ["https://second.example/"] },
+    });
+    await chrome.storage.local.remove("activeTabs");
+  });
+  await popup.reload();
+
+  await expect(popup.getByRole("button", { name: "Save" })).toHaveCount(3);
+
+  await createPinnedTabs(popup, [pinnedUrl]);
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "Second" })
+      .getByRole("button", { name: "Save", exact: true })
+      .click(),
+  ]);
+  const savedTabs = await popup.evaluate(async () => (
+    await chrome.storage.sync.get("U2Vjb25k")
+  ).U2Vjb25k.tabs);
+  expect(savedTabs).toContain(pinnedUrl);
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
