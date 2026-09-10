@@ -6,6 +6,10 @@ import { spawn } from "node:child_process";
 const runtimePaths = [
   "autoload.mjs",
   "functions.js",
+  "repositories.mjs",
+  "serialized-operation.mjs",
+  "tab-set-repository.mjs",
+  "window-session-repository.mjs",
   "images",
   "lib",
   "options.html",

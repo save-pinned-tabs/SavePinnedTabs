@@ -1,12 +1,9 @@
+import { createBrowserRepositories } from './repositories.mjs';
+
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function setActiveTabSet(browser, windowId, setId) {
-  const { activeTabs = {} } = await browser.storage.local.get('activeTabs');
-  activeTabs[windowId] = setId;
-  await browser.storage.local.set({ activeTabs });
-}
 
 function effectiveUrl(tab) {
   return tab.pendingUrl || tab.url;
@@ -60,26 +57,30 @@ async function replacePinnedTabs(browser, windowId, currentTabs, savedUrls) {
 }
 
 export async function loadTabSet(browser, setId, windowId) {
-  const [currentTabs, sets] = await Promise.all([
+  const repositories = createBrowserRepositories(browser);
+  const [currentTabs, set] = await Promise.all([
     browser.tabs.query({ pinned: true, windowId }),
-    browser.storage.sync.get(setId),
+    repositories.tabSets.get(setId),
   ]);
-  const set = sets[setId];
-  if (!set) throw new Error(`Tab set ${setId} does not exist`);
+  if (!set) throw new Error(`Failed to load tab set "${setId}" in window "${windowId}": set does not exist`);
 
   await replacePinnedTabs(browser, windowId, currentTabs, set.tabs);
-  await setActiveTabSet(browser, windowId, setId);
+  const activated = await repositories.tabSets.activateWindowSession(setId, set, windowId);
+  if (!activated) {
+    throw new Error(`Failed to load tab set "${setId}" in window "${windowId}": set changed or was deleted while loading`);
+  }
 }
 
 export async function restoreAutoloadSet(browser, windowId) {
+  const repositories = createBrowserRepositories(browser);
   const [currentTabs, sets] = await Promise.all([
     browser.tabs.query({ pinned: true, windowId }),
-    browser.storage.sync.get(null),
+    repositories.tabSets.list(),
   ]);
   const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
 
   if (!entry) {
-    await setActiveTabSet(browser, windowId, null);
+    await repositories.windowSessions.set(windowId, null);
     return;
   }
 
@@ -87,7 +88,10 @@ export async function restoreAutoloadSet(browser, windowId) {
   if (!tabsMatch(currentTabs, set.tabs)) {
     await replacePinnedTabs(browser, windowId, currentTabs, set.tabs);
   }
-  await setActiveTabSet(browser, windowId, setId);
+  const activated = await repositories.tabSets.activateWindowSession(setId, set, windowId);
+  if (!activated) {
+    throw new Error(`Failed to restore autoload tab set "${setId}" in window "${windowId}": set changed or was deleted while loading`);
+  }
 }
 
 const STARTUP_WINDOW_ATTEMPTS = 100;

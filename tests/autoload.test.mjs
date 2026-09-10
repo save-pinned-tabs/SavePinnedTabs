@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, preloadFavicons, restoreAutoloadSet } from '../src/autoload.mjs';
+import {
+  createStartupAutoload,
+  loadTabSet,
+  preloadFavicons,
+  restoreAutoloadSet,
+} from '../src/autoload.mjs';
+import { createBrowserRepositories } from '../src/repositories.mjs';
 
 function deferred() {
   let resolve;
@@ -67,6 +73,41 @@ test('removes existing pinned tabs before creating replacements', async () => {
   removal.resolve();
   await restoration;
   assert.deepEqual(operations, ['remove', 'create']);
+});
+
+test('does not recreate a dangling session when its set is deleted during load', async () => {
+  const creationStarted = deferred();
+  const finishCreation = deferred();
+  const sets = {
+    saved: {
+      set_name: 'Saved',
+      autoload: 0,
+      tabs: ['https://saved.example/'],
+    },
+  };
+  const browser = createBrowser({
+    sets,
+    createTab: async () => {
+      creationStarted.resolve();
+      await finishCreation.promise;
+    },
+  });
+  browser.storage.sync.remove = async (setId) => {
+    delete sets[setId];
+  };
+
+  const loading = loadTabSet(browser, 'saved', 1);
+  await creationStarted.promise;
+
+  const repositories = createBrowserRepositories(browser);
+  await repositories.tabSets.remove('saved');
+  finishCreation.resolve();
+
+  await assert.rejects(
+    loading,
+    /Failed to load tab set "saved" in window "1": set changed or was deleted while loading/,
+  );
+  assert.equal(await repositories.windowSessions.get(1), null);
 });
 
 test('preloads each saved favicon through the browser favicon cache', async () => {

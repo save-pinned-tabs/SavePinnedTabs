@@ -1,4 +1,5 @@
 import { createStartupAutoload, loadTabSet } from './autoload.mjs';
+import { createBrowserRepositories } from './repositories.mjs';
 
 function confirmDelete() {
     var dialog = document.getElementById('delete-dialog');
@@ -13,6 +14,7 @@ function confirmDelete() {
 }
 
 var browser = globalThis.browser ?? globalThis.chrome;
+var repositories = createBrowserRepositories(browser);
 
 function refreshPopup() {
     if (typeof window !== 'undefined') window.location.href = "popup.html";
@@ -26,15 +28,6 @@ export var Sets = (function () {
         windowId = win.id;
     });
 
-    var set_active = function (id, winid) {
-        return browser.storage.local.get(['activeTabs']).then(function(result) {
-            var atabs = result.activeTabs || {};
-            atabs[winid] = id;
-            return browser.storage.local.set({'activeTabs': atabs}).then(function() {
-                console.log('Active tabset for window '+winid+' is set to '+id);
-            });
-        });
-    }
 
     return {
         save: function (name, autoload) {
@@ -47,15 +40,13 @@ export var Sets = (function () {
         			urilist[i] = tabs[i].url;
         		}
         		if (urilist.length > 0) {
-        			var saveObj = {};
         			var uid = window.btoa(name);
-        			saveObj[uid] = {
+                    var set = {
         				set_name: name,
         				autoload: autoload || 0,
         				tabs: urilist
         			};
-                    return browser.storage.sync.set(saveObj)
-                        .then(function () { return set_active(uid, windowId); })
+                    return repositories.tabSets.saveForWindow(uid, set, windowId)
                         .then(refreshPopup);
         		} else {
         			console.log('No pinned tabs found!');
@@ -71,14 +62,13 @@ export var Sets = (function () {
         delete: async function (id) {
             if (!await confirmDelete()) return;
 
-            await browser.storage.sync.remove(id);
+            await repositories.tabSets.remove(id);
             window.location.href = "popup.html";
         },
         get: function () {
-            browser.storage.sync.get(null).then(function (sets) {
+            repositories.tabSets.list().then(function (sets) {
                 var winid = windowId;
-                browser.storage.local.get('activeTabs').then(function (result) {
-                  var active = result.activeTabs ? result.activeTabs[winid] : null;
+                repositories.windowSessions.get(winid).then(function (active) {
                     var area = document.getElementById('load-area');
                     for (const property in sets) {
                         if (!sets.hasOwnProperty(property)) continue;
@@ -146,33 +136,21 @@ export var Sets = (function () {
         	});
         },
         setAutoload: function (id) {
-            browser.storage.sync.get(null).then(function (sets) {
-        		for (var property in sets) {
-        			if (sets.hasOwnProperty(property)) {
-        				if (id && property == id) sets[property].autoload = 1;
-        				else sets[property].autoload = 0;
-        			}
-        		}
-        		browser.storage.sync.set(sets).then(function () {
-        			window.location.href = "popup.html";
-        		});
-        	});
+            repositories.tabSets.setAutoload(id).then(function () {
+                window.location.href = "popup.html";
+            });
         },
 		export: function () {
 			var fileName = "SavePinnedTabs_export_" + new Date().toISOString().replaceAll(/[.:]/g, "-") + '.json';
 			
-			return browser.storage.sync.get(null).then(function (sets) {
+			return repositories.tabSets.export().then(function (sets) {
 				var fileText = JSON.stringify(sets);
 				var fileBlob = new Blob([fileText], { type: "application/json;charset=utf-8" });
 				saveAs(fileBlob, fileName);
 			});
 		},
 		import: function (sets) {
-			if (!validate20(sets)) {
-				return Promise.reject();
-			}
-
-			return browser.storage.sync.set(sets);
+			return repositories.tabSets.import(sets);
 		},
     }
 })();
