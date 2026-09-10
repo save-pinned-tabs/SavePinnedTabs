@@ -102,6 +102,26 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("saved-set titles can exceed 30 characters and wrap", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const longName =
+    "A very long saved tab set title that remains readable instead of being truncated";
+  await createPinnedTabs(popup, [
+    `chrome-extension://${extensionId}/options.html?long-title`,
+  ]);
+
+  await saveSet(popup, longName);
+
+  const title = popup.locator(".load-row", { hasText: longName }).locator("span");
+  await expect(title).toHaveText(longName);
+  const wraps = await title.evaluate((element) => {
+    const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+    return element.scrollHeight > lineHeight * 1.5;
+  });
+  expect(wraps).toBe(true);
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
