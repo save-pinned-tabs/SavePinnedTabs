@@ -184,7 +184,6 @@ export var Sets = (function () {
             const status = document.getElementById('edit-status');
             const saveButton = document.getElementById('save-edit-button');
             dialog.dataset.setId = id;
-            document.getElementById('edit-dialog-title').textContent = 'Edit tab set';
             document.getElementById('edit-urls').value = '';
             document.getElementById('edit-name').value = '';
             status.textContent = 'Loading…';
