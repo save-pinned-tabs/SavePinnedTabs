@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
+import { createStartupAutoload, restoreAutoloadSet, unloadTabSet } from '../src/autoload.mjs';
 
 function deferred() {
   let resolve;
@@ -67,6 +67,73 @@ test('removes existing pinned tabs before creating replacements', async () => {
   removal.resolve();
   await restoration;
   assert.deepEqual(operations, ['remove', 'create']);
+});
+
+test('unloads only the saved group from the current window', async () => {
+  let removedTabIds;
+  const browser = createBrowser({
+    currentTabs: [
+      { id: 10, url: 'https://saved.example/' },
+      { id: 11, url: 'https://saved.example/' },
+      { id: 12, url: '', pendingUrl: 'https://other.example/' },
+    ],
+    sets: {
+      saved: {
+        autoload: 0,
+        tabs: ['https://saved.example/', 'https://other.example/'],
+      },
+    },
+    removeTabs: async (tabIds) => {
+      removedTabIds = tabIds;
+    },
+  });
+  await browser.storage.local.set({ activeTabs: { 1: 'saved' } });
+
+  await unloadTabSet(browser, 'saved', 1);
+
+  assert.deepEqual(removedTabIds, [10, 12]);
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
+});
+
+test('clears active state when an overlapping group is unloaded', async () => {
+  const browser = createBrowser({
+    currentTabs: [
+      { id: 10, url: 'https://shared.example/' },
+      { id: 11, url: 'https://active.example/' },
+    ],
+    sets: {
+      active: {
+        autoload: 0,
+        tabs: ['https://shared.example/', 'https://active.example/'],
+      },
+      overlapping: {
+        autoload: 0,
+        tabs: ['https://shared.example/'],
+      },
+    },
+  });
+  await browser.storage.local.set({ activeTabs: { 1: 'active' } });
+
+  await unloadTabSet(browser, 'overlapping', 1);
+
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
+});
+
+test('clears active state for an imported set with an empty ID', async () => {
+  const browser = createBrowser({
+    currentTabs: [{ id: 10, url: 'https://saved.example/' }],
+    sets: {
+      '': {
+        autoload: 0,
+        tabs: ['https://saved.example/'],
+      },
+    },
+  });
+  await browser.storage.local.set({ activeTabs: { 1: '' } });
+
+  await unloadTabSet(browser, '', 1);
+
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
 });
 
 test('resolves only after every tab and active-set state are restored', async () => {

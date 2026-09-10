@@ -47,6 +47,43 @@ export async function loadTabSet(browser, setId, windowId) {
   await setActiveTabSet(browser, windowId, setId);
 }
 
+export async function unloadTabSet(browser, setId, windowId) {
+  const [currentTabs, sets] = await Promise.all([
+    browser.tabs.query({ pinned: true, windowId }),
+    browser.storage.sync.get(setId),
+  ]);
+  const set = sets[setId];
+  if (!set) throw new Error(`Tab set ${setId} does not exist`);
+
+  const remainingUrls = new Map();
+  for (const url of set.tabs) {
+    remainingUrls.set(url, (remainingUrls.get(url) ?? 0) + 1);
+  }
+  const tabIds = [];
+  for (const tab of currentTabs) {
+    const url = effectiveUrl(tab);
+    const remaining = remainingUrls.get(url) ?? 0;
+    if (remaining === 0) continue;
+    remainingUrls.set(url, remaining - 1);
+    tabIds.push(tab.id);
+  }
+  if (tabIds.length > 0) await browser.tabs.remove(tabIds);
+
+  const { activeTabs = {} } = await browser.storage.local.get('activeTabs');
+  const activeSetId = activeTabs[windowId];
+  if (activeSetId == null) return;
+
+  const activeSet = activeSetId === setId
+    ? set
+    : (await browser.storage.sync.get(activeSetId))[activeSetId];
+  const removedIds = new Set(tabIds);
+  const remainingTabs = currentTabs.filter((tab) => !removedIds.has(tab.id));
+  if (!activeSet || !tabsMatch(remainingTabs, activeSet.tabs)) {
+    activeTabs[windowId] = null;
+    await browser.storage.local.set({ activeTabs });
+  }
+}
+
 export async function restoreAutoloadSet(browser, windowId) {
   const [currentTabs, sets] = await Promise.all([
     browser.tabs.query({ pinned: true, windowId }),

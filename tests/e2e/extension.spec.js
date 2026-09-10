@@ -87,7 +87,7 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await createPinnedTabs(popup, [unwantedUrl]);
   await popup
     .locator(".load-row", { hasText: "Work" })
-    .getByRole("button", { name: "Load" })
+    .getByRole("button", { name: "Load", exact: true })
     .click();
 
   await expectOpenTabs(context, [firstUrl, secondUrl], [unwantedUrl]);
@@ -98,6 +98,27 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await expect(popup.locator("#delete-dialog")).toBeHidden();
   await expect(workRow).toBeVisible();
   await deleteSet(popup, "Work");
+});
+
+test("a user can unload every tab in a saved group", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const firstUrl = `chrome-extension://${extensionId}/options.html?unload-first`;
+  const secondUrl = `chrome-extension://${extensionId}/options.html?unload-second`;
+  const unrelatedUrl = `chrome-extension://${extensionId}/options.html?keep-open`;
+
+  await createPinnedTabs(popup, [firstUrl, secondUrl]);
+  await saveSet(popup, "Unload me");
+  await createPinnedTabs(popup, [unrelatedUrl]);
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "Unload me" })
+      .getByRole("button", { name: "Unload" })
+      .click(),
+  ]);
+
+  await expectOpenTabs(context, [unrelatedUrl], [firstUrl, secondUrl]);
 });
 
 test("a user can export and import tab sets", async ({ extension }) => {

@@ -1,4 +1,4 @@
-import { createStartupAutoload, loadTabSet } from './autoload.mjs';
+import { createStartupAutoload, loadTabSet, unloadTabSet } from './autoload.mjs';
 
 function confirmDelete() {
     var dialog = document.getElementById('delete-dialog');
@@ -68,6 +68,9 @@ export var Sets = (function () {
                 refreshPopup();
             });
         },
+        unload: function (id, winid) {
+            return unloadTabSet(browser, id, winid).then(refreshPopup);
+        },
         delete: async function (id) {
             if (!await confirmDelete()) return;
 
@@ -127,6 +130,14 @@ export var Sets = (function () {
                             Sets.load(property, winid);
                         });
                         rowElement.appendChild(loadButton);
+
+                        const unloadButton = document.createElement('button');
+                        unloadButton.classList.add('set-unload');
+                        unloadButton.textContent = 'Unload';
+                        unloadButton.addEventListener('click', function () {
+                            Sets.unload(property, winid);
+                        });
+                        rowElement.appendChild(unloadButton);
 
                         const deleteButton = document.createElement('button');
                         deleteButton.classList.add('set-delete');
