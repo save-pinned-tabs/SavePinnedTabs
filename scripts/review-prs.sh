@@ -191,6 +191,8 @@ REVIEW_ROOT=""
 REVIEW_WORKTREE=""
 BROWSER_PROFILE=""
 BROWSER_BIN=""
+BROWSER_KIND=""
+FIREFOX_EXTENSION=""
 BROWSER_PID=""
 PR_NUMBER=""
 PR_TITLE=""
@@ -212,6 +214,16 @@ trap cleanup EXIT
 
 find_browser() {
   local candidate
+  if [[ "$BROWSER_KIND" == "firefox" ]]; then
+    for candidate in firefox firefox-developer-edition; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        BROWSER_BIN=$(command -v "$candidate")
+        return
+      fi
+    done
+    return 1
+  fi
+
   for candidate in chromium google-chrome google-chrome-stable brave-browser vivaldi; do
     if command -v "$candidate" >/dev/null 2>&1; then
       BROWSER_BIN=$(command -v "$candidate")
@@ -221,13 +233,52 @@ find_browser() {
   return 1
 }
 
+prepare_firefox_extension() {
+  local archives
+  say "Building the Firefox package for this PR."
+  (cd "$REVIEW_WORKTREE" && npm ci && npm run build:firefox)
+  archives=("$REVIEW_WORKTREE"/dist/*-firefox.zip)
+  if [[ ! -f "${archives[0]}" ]]; then
+    warn "The Firefox extension package was not created."
+    exit 1
+  fi
+  FIREFOX_EXTENSION="$REVIEW_ROOT/firefox-extension"
+  mkdir -p "$FIREFOX_EXTENSION"
+  unzip -q "${archives[0]}" -d "$FIREFOX_EXTENSION"
+  "$BROWSER_BIN" -CreateProfile \
+    "save-pinned-review-$PR_NUMBER $BROWSER_PROFILE" \
+    >/dev/null
+}
+
+show_browser_setup() {
+  if [[ "$BROWSER_KIND" == "firefox" ]]; then
+    step "On about:debugging, click 'This Firefox'."
+    step "Click 'Load Temporary Add-on'."
+    step "Select: $FIREFOX_EXTENSION/manifest.json"
+    step "Pin test tabs, then open Save Pinned Tabs from the toolbar."
+  else
+    step "On chrome://extensions, confirm Save Pinned Tabs is enabled."
+    step "Pin test tabs, then open the extension from its toolbar icon."
+  fi
+}
+
 launch_browser() {
-  "$BROWSER_BIN" \
-    --user-data-dir="$BROWSER_PROFILE" \
-    --disable-extensions-except="$REVIEW_WORKTREE/src" \
-    --load-extension="$REVIEW_WORKTREE/src" \
-    chrome://extensions/ \
-    >"$REVIEW_ROOT/browser.log" 2>&1 &
+  if [[ "$BROWSER_KIND" == "firefox" ]]; then
+
+    "$BROWSER_BIN" \
+      --no-remote \
+      --new-instance \
+      --profile "$BROWSER_PROFILE" \
+      "about:debugging#/runtime/this-firefox" \
+      >"$REVIEW_ROOT/browser.log" 2>&1 &
+  else
+    "$BROWSER_BIN" \
+      --user-data-dir="$BROWSER_PROFILE" \
+      --disable-extensions-except="$REVIEW_WORKTREE/src" \
+      --load-extension="$REVIEW_WORKTREE/src" \
+      chrome://extensions/ \
+      >"$REVIEW_ROOT/browser.log" 2>&1 &
+  fi
   BROWSER_PID=$!
   sleep 2
 }
@@ -237,6 +288,11 @@ restart_browser() {
   pause "Press Enter after the isolated browser has exited."
   wait "$BROWSER_PID" >/dev/null 2>&1 || true
   launch_browser
+  if [[ "$BROWSER_KIND" == "firefox" ]]; then
+    warn "Firefox removes temporary add-ons when it exits."
+    show_browser_setup
+    pause "Press Enter after reloading the temporary add-on."
+  fi
 }
 
 show_review_steps() {
@@ -311,11 +367,17 @@ show_review_steps() {
       step "Confirm both titles remain complete, wrap, and keep their action buttons visible."
       ;;
     70)
-      warn "Favicon warming is Chromium-only. Firefox retains normal restoration without warming."
-      step "Visit two sites once so Chromium has their favicons, then save and enable Autoload."
-      restart_browser
-      step "Watch the tab strip during restoration and confirm cached icons appear promptly."
-      step "Confirm the tabs themselves are not delayed while icons are fetched."
+      if [[ "$BROWSER_KIND" == "firefox" ]]; then
+        warn "Firefox does not support Chromium's favicon cache API."
+        step "Save a set, enable Autoload, and restart Firefox."
+        restart_browser
+        step "Confirm normal tab restoration still works without extension errors."
+      else
+        step "Visit two sites once so Chromium has their favicons, then save and enable Autoload."
+        restart_browser
+        step "Watch the tab strip during restoration and confirm cached icons appear promptly."
+        step "Confirm the tabs themselves are not delayed while icons are fetched."
+      fi
       ;;
     71)
       say "This PR changes tests only; no browser interaction is required."
@@ -324,7 +386,7 @@ show_review_steps() {
       ;;
     *)
       step "Read the PR description and exercise its stated behavior."
-      step "Check chrome://extensions for extension errors."
+      step "Check the browser's extension-debugging page for errors."
       ;;
   esac
 }
@@ -342,8 +404,20 @@ if ! gh auth status >/dev/null 2>&1; then
   warn "GitHub CLI is not authenticated. Run: gh auth login"
   exit 1
 fi
+ask BROWSER_KIND "Browser to review (chromium/firefox):"
+case "$BROWSER_KIND" in
+  chromium|firefox) ;;
+  *)
+    warn "Choose either chromium or firefox."
+    exit 1
+    ;;
+esac
+if [[ "$BROWSER_KIND" == "firefox" ]] && ! command -v unzip >/dev/null 2>&1; then
+  warn "Firefox review requires unzip."
+  exit 1
+fi
 if ! find_browser; then
-  warn "No supported Chromium browser was found."
+  warn "No supported $BROWSER_KIND browser was found."
   exit 1
 fi
 REPO_ROOT=$(git rev-parse --show-toplevel)
@@ -366,17 +440,19 @@ pause "Press Enter after reading the PR description."
 stage "Create isolated checkout"
 REVIEW_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/save-pinned-review-${PR_NUMBER}-XXXXXX")
 REVIEW_WORKTREE="$REVIEW_ROOT/worktree"
-BROWSER_PROFILE="$REVIEW_ROOT/chromium-profile"
+BROWSER_PROFILE="$REVIEW_ROOT/$BROWSER_KIND-profile"
 git -C "$REPO_ROOT" fetch origin "pull/$PR_NUMBER/head"
 git -C "$REPO_ROOT" worktree add --detach "$REVIEW_WORKTREE" FETCH_HEAD >/dev/null
+if [[ "$BROWSER_KIND" == "firefox" && "$PR_NUMBER" != "71" ]]; then
+  prepare_firefox_extension
+fi
 say "Checkout: $REVIEW_WORKTREE"
 say "Profile: $BROWSER_PROFILE"
 
 stage "Launch isolated browser"
 if [[ "$PR_NUMBER" != "71" ]]; then
   launch_browser
-  step "On chrome://extensions, confirm Save Pinned Tabs is enabled."
-  step "Pin test tabs, then open the extension from its toolbar icon."
+  show_browser_setup
   note "This browser uses a disposable profile. It cannot affect your regular browser."
   pause "Press Enter when the extension popup is ready."
 else
