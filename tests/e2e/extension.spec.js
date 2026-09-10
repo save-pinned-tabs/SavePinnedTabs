@@ -102,6 +102,66 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("a user can assign a keyboard shortcut to a saved group", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const savedUrl = `chrome-extension://${extensionId}/options.html?shortcut`;
+  await createPinnedTabs(popup, [savedUrl]);
+  await saveSet(popup, "Shortcut set");
+  await removePinnedTabs(popup);
+
+  const options = await openExtensionPage(context, extensionId, "options.html");
+  await options
+    .locator('[data-shortcut-command="load-set-1"]')
+    .selectOption({ label: "Shortcut set" });
+  await expect.poll(() => options.evaluate(async () => (
+    await chrome.storage.local.get("shortcutSets")
+  ).shortcutSets?.["load-set-1"])).toBeTruthy();
+
+  await options.evaluate(async () => {
+    const { handleShortcut } = await import(chrome.runtime.getURL("shortcuts.mjs"));
+    await handleShortcut(chrome, "load-set-1");
+  });
+
+  await expectOpenTabs(context, [savedUrl]);
+
+  const secondUrl = `chrome-extension://${extensionId}/options.html?shortcut-second`;
+  await options.evaluate(async (url) => {
+    const { shortcutSets } = await chrome.storage.local.get("shortcutSets");
+    await chrome.storage.sync.set({
+      secondShortcut: {
+        set_name: "Second shortcut",
+        autoload: 0,
+        tabs: [url],
+      },
+    });
+    await chrome.storage.local.set({
+      shortcutSets: {
+        ...shortcutSets,
+        "load-set-2": "secondShortcut",
+      },
+    });
+    const tabs = await chrome.tabs.query({ pinned: true, currentWindow: true });
+    await chrome.tabs.remove(tabs.map((tab) => tab.id));
+    const { handleShortcut } = await import(chrome.runtime.getURL("shortcuts.mjs"));
+    await Promise.all([
+      handleShortcut(chrome, "load-set-1"),
+      handleShortcut(chrome, "load-set-2"),
+    ]);
+  }, secondUrl);
+  await expectOpenTabs(context, [secondUrl], [savedUrl]);
+
+  const staleAssignment = await options.evaluate(async () => {
+    const { shortcutSets } = await chrome.storage.local.get("shortcutSets");
+    await chrome.storage.sync.remove(shortcutSets["load-set-1"]);
+    const { handleShortcut } = await import(chrome.runtime.getURL("shortcuts.mjs"));
+    await handleShortcut(chrome, "load-set-1");
+    return (await chrome.storage.local.get("shortcutSets"))
+      .shortcutSets["load-set-1"];
+  });
+  expect(staleAssignment).toBeUndefined();
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");

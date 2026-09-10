@@ -1,6 +1,8 @@
 import { Autoload } from './functions.js';
+import { registerShortcuts } from './shortcuts.mjs';
 
 var browser = globalThis.browser ?? globalThis.chrome;
+registerShortcuts(browser);
 
 export async function handleStartup() {
   await browser.storage.local.remove('activeTabs');
