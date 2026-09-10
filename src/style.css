@@ -38,6 +38,8 @@ dialog {
 dialog::backdrop { background: rgb(0 0 0 / 45%); }
 dialog h3 { margin-bottom: 0.5rem; font-size: 1.15em; }
 dialog p { padding: 0; color: #666; }
+dialog input { width: 100%; margin-top: 0.5rem; padding: 0.5rem; }
+#rename-status { margin-top: 0.5rem; color: #c62828; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
 .dialog-actions button { float: none; margin: 0; }
 .dialog-actions button[value="cancel"] { color: #333; background-color: #eee; }

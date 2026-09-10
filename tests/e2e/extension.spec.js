@@ -102,6 +102,71 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("a user can rename an existing saved tab set", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const setId = "T2xkIG5hbWU=";
+  await popup.evaluate(async (savedSetId) => {
+    const window = await chrome.windows.getCurrent();
+    await chrome.storage.sync.set({
+      [savedSetId]: {
+        set_name: "Old name",
+        autoload: 1,
+        tabs: ["https://saved.example/"],
+      },
+    });
+    await chrome.storage.local.set({ activeTabs: { [window.id]: savedSetId } });
+  }, setId);
+  await popup.reload();
+
+  await popup
+    .locator(".load-row", { hasText: "Old name" })
+    .getByRole("button", { name: "Rename" })
+    .click();
+  await popup.locator("#rename-input").fill("  ");
+  await popup.getByRole("button", { name: "Save name" }).click();
+  await expect(popup.getByRole("status")).toHaveText("Enter a name for this tab set.");
+  await popup.locator("#rename-input").fill("New name");
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup.getByRole("button", { name: "Save name" }).click(),
+  ]);
+
+  await expect(popup.locator(".load-row", { hasText: "New name" })).toBeVisible();
+  const state = await popup.evaluate(async (savedSetId) => ({
+    saved: (await chrome.storage.sync.get(savedSetId))[savedSetId],
+    activeTabs: (await chrome.storage.local.get("activeTabs")).activeTabs,
+    windowId: (await chrome.windows.getCurrent()).id,
+  }), setId);
+  expect(state.saved).toEqual({
+    set_name: "New name",
+    autoload: 1,
+    tabs: ["https://saved.example/"],
+  });
+  expect(state.activeTabs[state.windowId]).toBe(setId);
+
+  const updatedUrl = `chrome-extension://${extensionId}/options.html?renamed-update`;
+  await createPinnedTabs(popup, [updatedUrl]);
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "New name" })
+      .getByRole("button", { name: "Save", exact: true })
+      .click(),
+  ]);
+  const allSets = await popup.evaluate(async () => chrome.storage.sync.get(null));
+  expect(Object.keys(allSets)).toEqual([setId]);
+  expect(allSets[setId].tabs).toContain(updatedUrl);
+  await popup.getByPlaceholder("Enter a name for set...").fill("Old name");
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup.locator("#save-button").click(),
+  ]);
+  const setsAfterReuse = await popup.evaluate(async () => chrome.storage.sync.get(null));
+  expect(Object.keys(setsAfterReuse)).toHaveLength(2);
+  expect(setsAfterReuse[setId].set_name).toBe("New name");
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
