@@ -13,6 +13,7 @@ const runtimePaths = [
   "popup.html",
   "popup.js",
   "service_worker.js",
+  "settings.mjs",
   "style.css",
 ];
 

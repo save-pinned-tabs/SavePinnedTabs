@@ -1,6 +1,24 @@
 import { Sets } from "./functions.js";
+import { getAutoloadScope, setAutoloadScope } from "./settings.mjs";
 
+
+var browser = globalThis.browser ?? globalThis.chrome;
 var importInput = document.getElementById("import-input");
+async function initializeAutoloadScope() {
+  const scope = await getAutoloadScope(browser);
+  for (const input of document.querySelectorAll('input[name="autoload-scope"]')) {
+    input.checked = input.value === scope;
+    input.disabled = false;
+    input.addEventListener("change", handleAutoloadScopeChange);
+  }
+}
+
+async function handleAutoloadScopeChange(event) {
+  if (!event.target.checked) return;
+  await setAutoloadScope(browser, event.target.value);
+}
+
+
 
 function showNotification(message) {
   var dialog = document.getElementById("notification-dialog");
@@ -52,3 +70,5 @@ document
 document
   .getElementById("export-button")
   .addEventListener("click", handleExport);
+
+initializeAutoloadScope();

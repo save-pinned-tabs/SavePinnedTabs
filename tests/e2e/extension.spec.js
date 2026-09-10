@@ -100,6 +100,22 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await deleteSet(popup, "Work");
 });
 
+test("a user can choose which windows receive Autoload tabs", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const options = await openExtensionPage(context, extensionId, "options.html");
+  const firstWindow = options.getByRole("radio", { name: "First browser window only" });
+  const everyWindow = options.getByRole("radio", { name: "Every new browser window" });
+
+  await expect(firstWindow).toBeChecked();
+  await everyWindow.check();
+  await expect.poll(() => options.evaluate(async () => (
+    await chrome.storage.local.get("autoloadScope")
+  ).autoloadScope)).toBe("every-window");
+
+  await options.reload();
+  await expect(everyWindow).toBeChecked();
+});
+
 test("a user can export and import tab sets", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup.html");
