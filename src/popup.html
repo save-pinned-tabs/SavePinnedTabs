@@ -24,6 +24,18 @@
 		</div>
 	</form>
 </dialog>
+<dialog id="rename-dialog" aria-labelledby="rename-dialog-title">
+	<form id="rename-form" method="dialog">
+		<h3 id="rename-dialog-title">Rename tab set</h3>
+		<label for="rename-input">Name</label>
+		<input id="rename-input" maxlength="30" required>
+		<p id="rename-status" role="status"></p>
+		<div class="dialog-actions">
+			<button id="cancel-rename-button" type="button">Cancel</button>
+			<button id="save-rename-button">Save name</button>
+		</div>
+	</form>
+</dialog>
 <script src="popup.js" type="module"></script>
 </body>
 </html>

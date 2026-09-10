@@ -17,6 +17,10 @@ var browser = globalThis.browser ?? globalThis.chrome;
 function refreshPopup() {
     if (typeof window !== 'undefined') window.location.href = "popup.html";
 }
+function withTabSetsLock(operation) {
+    return navigator.locks.request('saved-tab-sets', operation);
+}
+
 
 export var Sets = (function () {
 
@@ -37,7 +41,7 @@ export var Sets = (function () {
     }
 
     return {
-        save: function (name, autoload) {
+        save: function (name, autoload, setId) {
             var urilist = [];
             return browser.tabs.query({
         		pinned: true,
@@ -47,16 +51,25 @@ export var Sets = (function () {
         			urilist[i] = tabs[i].url;
         		}
         		if (urilist.length > 0) {
-        			var saveObj = {};
-        			var uid = window.btoa(name);
-        			saveObj[uid] = {
-        				set_name: name,
-        				autoload: autoload || 0,
-        				tabs: urilist
-        			};
-                    return browser.storage.sync.set(saveObj)
-                        .then(function () { return set_active(uid, windowId); })
-                        .then(refreshPopup);
+                    return withTabSetsLock(async function () {
+                        var uid = setId ?? crypto.randomUUID();
+                        var existing = setId != null
+                            ? (await browser.storage.sync.get(uid))[uid]
+                            : undefined;
+                        if (setId != null && !existing) {
+                            refreshPopup();
+                            return;
+                        }
+                        var saveObj = {};
+                        saveObj[uid] = {
+                            set_name: existing?.set_name ?? name,
+                            autoload: autoload || 0,
+                            tabs: urilist
+                        };
+                        await browser.storage.sync.set(saveObj);
+                        await set_active(uid, windowId);
+                        refreshPopup();
+                    });
         		} else {
         			console.log('No pinned tabs found!');
         		}
@@ -71,7 +84,7 @@ export var Sets = (function () {
         delete: async function (id) {
             if (!await confirmDelete()) return;
 
-            await browser.storage.sync.remove(id);
+            await withTabSetsLock(() => browser.storage.sync.remove(id));
             window.location.href = "popup.html";
         },
         get: function () {
@@ -109,13 +122,21 @@ export var Sets = (function () {
                         autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
                         rowElement.appendChild(autoloadLabel);
 
+                        const renameButton = document.createElement('button');
+                        renameButton.classList.add('set-rename');
+                        renameButton.textContent = 'Rename';
+                        renameButton.addEventListener('click', function () {
+                            Sets.rename(property, row.set_name);
+                        });
+                        rowElement.appendChild(renameButton);
+
                         if (active === property) {
                             const saveButton = document.createElement('button');
                             saveButton.classList.add('set-save');
                             saveButton.textContent = 'Save';
                             saveButton.addEventListener('click', function () {
                                 const auto = row.autoload == 1 ? 1 : 0;
-                                Sets.save(row.set_name, auto);
+                                Sets.save(row.set_name, auto, property);
                             });
                             rowElement.appendChild(saveButton);
                         }
@@ -145,18 +166,63 @@ export var Sets = (function () {
                 });
         	});
         },
-        setAutoload: function (id) {
-            browser.storage.sync.get(null).then(function (sets) {
-        		for (var property in sets) {
-        			if (sets.hasOwnProperty(property)) {
-        				if (id && property == id) sets[property].autoload = 1;
-        				else sets[property].autoload = 0;
-        			}
-        		}
-        		browser.storage.sync.set(sets).then(function () {
-        			window.location.href = "popup.html";
-        		});
-        	});
+        rename: function (id, name) {
+            const dialog = document.getElementById('rename-dialog');
+            dialog.dataset.setId = id;
+            document.getElementById('rename-input').value = name;
+            document.getElementById('rename-status').textContent = '';
+            document.getElementById('save-rename-button').disabled = false;
+            document.getElementById('cancel-rename-button').disabled = false;
+            dialog.showModal();
+            document.getElementById('rename-input').select();
+        },
+        saveRename: async function () {
+            const dialog = document.getElementById('rename-dialog');
+            const id = dialog.dataset.setId;
+            const input = document.getElementById('rename-input');
+            const status = document.getElementById('rename-status');
+            const saveButton = document.getElementById('save-rename-button');
+            const cancelButton = document.getElementById('cancel-rename-button');
+            const name = input.value.trim();
+            if (!name) {
+                status.textContent = 'Enter a name for this tab set.';
+                return;
+            }
+            saveButton.disabled = true;
+            cancelButton.disabled = true;
+
+            try {
+                await withTabSetsLock(async function () {
+                    const latest = await browser.storage.sync.get(id);
+                    if (!latest[id]) {
+                        status.textContent = 'This tab set no longer exists.';
+                        saveButton.disabled = false;
+                        cancelButton.disabled = false;
+                        return;
+                    }
+                    latest[id].set_name = name;
+                    await browser.storage.sync.set(latest);
+                    dialog.close();
+                    refreshPopup();
+                });
+            } catch {
+                saveButton.disabled = false;
+                cancelButton.disabled = false;
+                status.textContent = 'Could not rename this tab set. Please try again.';
+            }
+        },
+        setAutoload: async function (id) {
+            await withTabSetsLock(async function () {
+                const sets = await browser.storage.sync.get(null);
+                for (var property in sets) {
+                    if (sets.hasOwnProperty(property)) {
+                        if (id && property == id) sets[property].autoload = 1;
+                        else sets[property].autoload = 0;
+                    }
+                }
+                await browser.storage.sync.set(sets);
+            });
+            window.location.href = "popup.html";
         },
 		export: function () {
 			var fileName = "SavePinnedTabs_export_" + new Date().toISOString().replaceAll(/[.:]/g, "-") + '.json';
@@ -172,7 +238,7 @@ export var Sets = (function () {
 				return Promise.reject();
 			}
 
-			return browser.storage.sync.set(sets);
+			return withTabSetsLock(() => browser.storage.sync.set(sets));
 		},
     }
 })();
