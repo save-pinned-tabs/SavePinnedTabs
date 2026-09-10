@@ -19,7 +19,7 @@ const browserLifecycle = createBrowserLifecycle(browser, {
 });
 
 registerWindowTabStateMessages(browser, windowTabState);
-registerCommands(browser, tabSetController);
+globalThis.savePinnedTabsCommandListener = registerCommands(browser, tabSetController);
 
 export function handleStartup() {
   return browserLifecycle.onBrowserStartup();

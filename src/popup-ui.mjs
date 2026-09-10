@@ -39,6 +39,8 @@ export function createPopupUi(document) {
       row.append(button('Save', 'set-save', () => actions.save(set.name, set.id)));
     }
     row.append(button('Load', 'set-load', () => actions.load(set.id)));
+    row.append(button('Append', 'set-append', () => actions.append(set.id)));
+    row.append(button('Unload', 'set-unload', () => actions.unload(set.id)));
     row.append(button('Del', 'set-delete', () => actions.delete(set.id)));
     return row;
   }

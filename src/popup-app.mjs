@@ -46,6 +46,20 @@ export async function startPopupApp(controller, view) {
         successMessage: 'Tab set loaded.',
       });
     },
+    append(setId) {
+      return runCommand({
+        loadingMessage: 'Appending tab set…',
+        command: () => controller.appendSet(setId),
+        successMessage: 'Tab set appended.',
+      });
+    },
+    unload(setId) {
+      return runCommand({
+        loadingMessage: 'Unloading tab set…',
+        command: () => controller.unloadSet(setId),
+        successMessage: 'Tab set unloaded.',
+      });
+    },
     setAutoload(setId, enabled) {
       return runCommand({
         loadingMessage: 'Updating autoload selection…',

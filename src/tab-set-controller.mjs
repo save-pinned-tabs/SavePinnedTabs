@@ -64,6 +64,22 @@ export class TabSetController {
     });
   }
 
+  appendSet(setId) {
+    return this.#execute('append tab set', async () => {
+      const windowId = await this.#getCurrentWindowId();
+      await this.#windowTabState.append(windowId, setId);
+      return { state: await this.#popupState(windowId) };
+    });
+  }
+
+  unloadSet(setId) {
+    return this.#execute('unload tab set', async () => {
+      const windowId = await this.#getCurrentWindowId();
+      await this.#windowTabState.unload(windowId, setId);
+      return { state: await this.#popupState(windowId) };
+    });
+  }
+
   deleteSet(setId) {
     return this.#execute('delete tab set', async () => {
       const windowId = await this.#getCurrentWindowId();
