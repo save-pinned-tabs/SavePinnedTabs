@@ -1,14 +1,11 @@
-import { Sets } from "./functions.js";
+import { Sets, saveWithFeedback } from "./functions.js";
 
-document.getElementById('save-button').addEventListener('click', function () {
-	var name = document.getElementById('save-name').value;
-	if (name) Sets.save(name);
+var saveForm = document.getElementById('save-form');
+
+saveForm.addEventListener('submit', function (event) {
+	event.preventDefault();
+	saveWithFeedback(document.getElementById('save-name').value);
 });
-document.getElementById('save-name').addEventListener('keydown', function (event) {
-	if (event.keyCode == 13) {
-		var name = document.getElementById('save-name').value;
-		if (name) Sets.save(name);
-	}
-});
+
 document.getElementById('save-name').focus();
 document.addEventListener('DOMContentLoaded', Sets.get);

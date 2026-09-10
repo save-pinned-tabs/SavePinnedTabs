@@ -17,6 +17,17 @@ var browser = globalThis.browser ?? globalThis.chrome;
 function refreshPopup() {
     if (typeof window !== 'undefined') window.location.href = "popup.html";
 }
+export async function saveWithFeedback(name, autoload) {
+    const status = document.getElementById('save-status');
+    status.textContent = 'Saving…';
+
+    try {
+        const saved = await Sets.save(name, autoload);
+        if (!saved) status.textContent = 'Pin at least one tab before saving.';
+    } catch {
+        status.textContent = 'Could not save this tab set. Please try again.';
+    }
+}
 
 export var Sets = (function () {
 
@@ -42,7 +53,7 @@ export var Sets = (function () {
             return browser.tabs.query({
         		pinned: true,
         		currentWindow: true
-        	}).then(function (tabs) {
+        	}).then(async function (tabs) {
         		for (var i = 0; i < tabs.length; i++) {
         			urilist[i] = tabs[i].url;
         		}
@@ -54,12 +65,12 @@ export var Sets = (function () {
         				autoload: autoload || 0,
         				tabs: urilist
         			};
-                    return browser.storage.sync.set(saveObj)
-                        .then(function () { return set_active(uid, windowId); })
-                        .then(refreshPopup);
-        		} else {
-        			console.log('No pinned tabs found!');
+                    await browser.storage.sync.set(saveObj);
+                    await set_active(uid, windowId);
+                    refreshPopup();
+                    return true;
         		}
+                return false;
         	});
         },
         load: function (id, winid) {
@@ -115,7 +126,7 @@ export var Sets = (function () {
                             saveButton.textContent = 'Save';
                             saveButton.addEventListener('click', function () {
                                 const auto = row.autoload == 1 ? 1 : 0;
-                                Sets.save(row.set_name, auto);
+                                saveWithFeedback(row.set_name, auto);
                             });
                             rowElement.appendChild(saveButton);
                         }
