@@ -66,19 +66,35 @@ export async function restoreAutoloadSet(browser, windowId) {
   await setActiveTabSet(browser, windowId, setId);
 }
 
+const STARTUP_WINDOW_ATTEMPTS = 100;
+
 export function createStartupAutoload(browser, delay = wait) {
   let restoration;
+  let createdNormalWindow;
+
+  async function findStartupWindow() {
+    for (let attempt = 0; attempt < STARTUP_WINDOW_ATTEMPTS; attempt += 1) {
+      await delay(50);
+      if (createdNormalWindow) return createdNormalWindow;
+
+      const windows = await browser.windows.getAll(null);
+      const normalWindows = windows.filter((window) => window.type === 'normal');
+      if (normalWindows.length === 1) return normalWindows[0];
+    }
+    return undefined;
+  }
 
   function restoreOnce() {
     if (!restoration) {
       restoration = (async function () {
-        await delay(50);
-        const windows = await browser.windows.getAll(null);
-        const normalWindows = windows.filter((window) => window.type === 'normal');
-        if (normalWindows.length === 1) {
-          await restoreAutoloadSet(browser, normalWindows[0].id);
+        const startupWindow = await findStartupWindow();
+        if (!startupWindow) {
+          restoration = undefined;
+          return;
         }
+        await restoreAutoloadSet(browser, startupWindow.id);
       })().catch((error) => {
+        createdNormalWindow = undefined;
         restoration = undefined;
         throw error;
       });
@@ -86,7 +102,10 @@ export function createStartupAutoload(browser, delay = wait) {
     return restoration;
   }
 
-  function windowCreated() {
+  function windowCreated(window) {
+    if (window?.type === 'normal' && !createdNormalWindow) {
+      createdNormalWindow = window;
+    }
     return restoreOnce();
   }
 
