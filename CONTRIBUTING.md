@@ -2,14 +2,47 @@
 
 ## Requirements
 
-The following node modules are required for development
+On Linux, install Nix with flakes enabled. Then enter the development shell:
 
-- ajv-cli
-- browserify
+```sh
+nix develop
+```
+
+The shell supplies Node.js 22, Chromium, Firefox Developer Edition, and GeckoDriver.
+Install the JavaScript dependencies after you enter the shell:
+
+```sh
+npm ci
+```
+
+On macOS or without Nix, install Node.js 22 and both browsers separately.
+Set `CHROMIUM_BINARY` and `FIREFOX_BINARY` to the browser executable paths.
+
+## Tests
+
+The npm scripts are the test interface for local development and CI:
+
+```sh
+npm run test:unit
+npm run test:e2e
+npm run test:e2e:firefox
+npm test
+```
+
+You can run a command without entering the development shell:
+
+```sh
+nix develop -c npm test
+```
+
+## Browser Test Parity
+
+Chromium and Firefox end-to-end suites must cover the same observable behaviors and browser edge cases.
+Use one focused test for each behavior. Keep corresponding scenario names and assertions aligned across both suites.
 
 ## Modify Sets Schema
 
-After modifying the schema of the sets object, update the JSON-Schema definition in `schema/sets.json`, then run the following commands to regenerate the validation script:
+After you modify the sets schema, update `schema/sets.json`. Then regenerate the validation script:
 
 `npm run compile-sets-schema`
 

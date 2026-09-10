@@ -4,7 +4,7 @@ h2 { font-size: 1.3em; padding: 0.3em; border-bottom: 1px solid darkgrey; }
 h2:last-of-type { margin-top: 1em; }
 h2 span { font-weight: normal; font-style: italic; color: #999; float: right; font-size: 0.8em; line-height: 1.5em; }
 p { padding: 0.5em; }
-p.save-row { display: flex; }
+form.save-row { display: flex; padding: 0.5em; }
 input#save-name { font-size: 1em; line-height: 2em; height: 2em; border: none; border-radius: 2px; background-color: #f0f0f0; padding: 0 0.5em; width: 100%; outline: none; float: left; }
 button { font-size: 1em; line-height: 2em; height: 2em; color: white; background-color: lightslategrey; border: none; border-radius: 2px; padding: 0 0.8em; float: right; margin-left: 0.5em; outline: none; }
 button:active { background-color: #af912c; }
@@ -24,6 +24,11 @@ button.set-save, button#save-button { background-color: #4fc3f7; }
 button.set-save:hover, button#save-button:hover { background-color: #29b6f6; }
 button.set-delete { background-color: #ff8a65; }
 button.set-delete:hover { background-color: #ff7043; }
+button:disabled, input:disabled, select:disabled { cursor: wait; opacity: 0.6; }
+.operation-status { min-height: 1.5em; }
+.operation-status[data-kind="error"] { color: #b3261e; }
+.operation-status[data-kind="success"] { color: #287a35; }
+.operation-status[data-kind="loading"] { color: #666; }
 
 dialog {
   width: min(22rem, calc(100% - 2rem));

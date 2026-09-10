@@ -4,16 +4,14 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 const runtimePaths = [
-  "autoload.mjs",
-  "functions.js",
+  "background",
   "images",
   "lib",
-  "options.html",
-  "options.js",
-  "popup.html",
-  "popup.js",
-  "service_worker.js",
-  "style.css",
+  "options",
+  "popup",
+  "storage",
+  "styles",
+  "tab-sets",
 ];
 
 const target = process.argv[2];
@@ -32,7 +30,7 @@ const manifest = JSON.parse(
 
 if (target === "firefox") {
   manifest.background = {
-    scripts: ["service_worker.js"],
+    scripts: ["background/service-worker.js"],
     type: "module",
   };
   manifest.permissions = manifest.permissions.filter(

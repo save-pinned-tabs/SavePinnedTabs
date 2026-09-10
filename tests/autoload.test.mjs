@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, preloadFavicons, restoreAutoloadSet } from '../src/autoload.mjs';
+import {
+  loadTabSet,
+  preloadFavicons,
+  restoreAutoloadSet,
+  restoreAutoloadSets,
+} from '../src/background/autoload.mjs';
+import { createBrowserRepositories } from '../src/storage/browser-repositories.mjs';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage/storage-schema.mjs';
 
 function deferred() {
   let resolve;
@@ -11,23 +18,60 @@ function deferred() {
   return { promise, resolve };
 }
 
-function createBrowser({ currentTabs = [], sets = {}, removeTabs, createTab } = {}) {
-  const activeTabs = {};
+function createBrowser({
+  currentTabs = [],
+  sets = {},
+  sessions = {},
+  removeTabs,
+  createTab,
+  updateTab,
+} = {}) {
+  const syncDocument = {
+    version: 2,
+    sets: Object.fromEntries(Object.entries(sets).map(([id, set]) => [id, {
+      id,
+      name: set.name ?? set.set_name ?? id,
+      tabs: [...set.tabs],
+    }])),
+    autoload: {
+      scope: 'first-window',
+      setIds: Object.entries(sets)
+        .filter(([, set]) => set.autoload === 1)
+        .map(([id]) => id),
+    },
+    deletedSetIds: [],
+  };
+  const localDocument = {
+    version: 2,
+    windowSessions: { ...sessions },
+    shortcutAssignments: {},
+  };
+  let nextTabId = 100;
 
-  return {
+  const browser = {
+    get sessionState() {
+      return localDocument.windowSessions;
+    },
     storage: {
       local: {
-        async get() {
-          return { activeTabs: { ...activeTabs } };
+        async get(key) {
+          if (key === null) return { [LOCAL_DOCUMENT_KEY]: structuredClone(localDocument) };
+          return { [LOCAL_DOCUMENT_KEY]: structuredClone(localDocument) };
         },
         async set(value) {
-          Object.assign(activeTabs, value.activeTabs);
+          Object.assign(localDocument, structuredClone(value[LOCAL_DOCUMENT_KEY]));
         },
+        async remove() {},
       },
       sync: {
-        async get() {
-          return sets;
+        async get(key) {
+          if (key === null) return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
+          return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
         },
+        async set(value) {
+          Object.assign(syncDocument, structuredClone(value[SYNC_DOCUMENT_KEY]));
+        },
+        async remove() {},
       },
     },
     tabs: {
@@ -35,13 +79,51 @@ function createBrowser({ currentTabs = [], sets = {}, removeTabs, createTab } = 
         return currentTabs;
       },
       remove: removeTabs ?? (async () => {}),
-      create: createTab ?? (async () => {}),
+      async create(properties) {
+        const created = await createTab?.(properties);
+        return created ?? { id: nextTabId++, ...properties };
+      },
+      update: updateTab ?? (async () => {}),
     },
   };
+  browser.testSyncDocument = syncDocument;
+  return browser;
 }
 
-test('removes existing pinned tabs before creating replacements', async () => {
-  const removal = deferred();
+test('multi-set Autoload replaces with the first set and appends the rest', async () => {
+  const browser = createBrowser({
+    sets: {
+      first: { tabs: ['https://first.example/'] },
+      stale: { tabs: ['https://stale.example/'] },
+      second: { tabs: ['https://second.example/'] },
+    },
+  });
+  delete browser.testSyncDocument.sets.stale;
+  const operations = [];
+  const windowTabState = {
+    async replace(windowId, setId) {
+      operations.push(['replace', windowId, setId]);
+    },
+    async append(windowId, setId) {
+      operations.push(['append', windowId, setId]);
+    },
+  };
+
+  await restoreAutoloadSets(
+    browser,
+    7,
+    { scope: 'every-window', setIds: ['first', 'missing', 'second'] },
+    windowTabState,
+  );
+
+  assert.deepEqual(operations, [
+    ['replace', 7, 'first'],
+    ['append', 7, 'second'],
+  ]);
+});
+
+test('creates and pins replacements before removing existing pinned tabs', async () => {
+  const creation = deferred();
   const operations = [];
   const browser = createBrowser({
     currentTabs: [{ id: 10, url: 'https://old.example/' }],
@@ -51,22 +133,61 @@ test('removes existing pinned tabs before creating replacements', async () => {
         tabs: ['https://new.example/'],
       },
     },
-    removeTabs: async () => {
-      operations.push('remove');
-      await removal.promise;
-    },
     createTab: async () => {
       operations.push('create');
+      await creation.promise;
+      return { id: 100 };
+    },
+    updateTab: async () => {
+      operations.push('pin');
+    },
+    removeTabs: async () => {
+      operations.push('remove');
     },
   });
 
   const restoration = restoreAutoloadSet(browser, 1);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(operations, ['remove']);
+  assert.deepEqual(operations, ['create']);
 
-  removal.resolve();
+  creation.resolve();
   await restoration;
-  assert.deepEqual(operations, ['remove', 'create']);
+  assert.deepEqual(operations, ['create', 'pin', 'remove']);
+});
+
+test('does not recreate a dangling session when its set is deleted during load', async () => {
+  const creationStarted = deferred();
+  const finishCreation = deferred();
+  const sets = {
+    saved: {
+      set_name: 'Saved',
+      autoload: 0,
+      tabs: ['https://saved.example/'],
+    },
+  };
+  const browser = createBrowser({
+    sets,
+    createTab: async () => {
+      creationStarted.resolve();
+      await finishCreation.promise;
+    },
+  });
+  browser.storage.sync.remove = async (setId) => {
+    delete sets[setId];
+  };
+
+  const loading = loadTabSet(browser, 'saved', 1);
+  await creationStarted.promise;
+
+  const repositories = createBrowserRepositories(browser);
+  await repositories.tabSets.remove('saved');
+  finishCreation.resolve();
+
+  await assert.rejects(
+    loading,
+    /changed or was deleted during the transition/,
+  );
+  assert.equal(await repositories.windowSessions.get(1), null);
 });
 
 test('preloads each saved favicon through the browser favicon cache', async () => {
@@ -209,150 +330,10 @@ test('rejects with the URL when a tab cannot be restored', async () => {
 
   await assert.rejects(
     restoreAutoloadSet(browser, 1),
-    (error) => error.message.includes(failedUrl) && error.cause?.message === 'creation failed',
+    (error) => error.message.includes(failedUrl) && error.cause?.cause?.message === 'creation failed',
   );
 });
 
-test('runs startup restoration once when both startup triggers fire', async () => {
-  const fallbackDelay = deferred();
-  let setReads = 0;
-  const browser = createBrowser();
-  browser.storage.sync.get = async () => {
-    setReads += 1;
-    return {};
-  };
-  browser.windows = {
-    async getAll() {
-      return [{ id: 1, type: 'normal' }];
-    },
-    async getCurrent() {
-      return { id: 99, type: 'popup' };
-    },
-  };
-  const autoload = createStartupAutoload(browser, () => fallbackDelay.promise);
-
-  const fallback = autoload.manual();
-  const windowEvent = autoload.windowCreated({ id: 1, type: 'normal' });
-  fallbackDelay.resolve();
-  await Promise.all([fallback, windowEvent]);
-
-  assert.equal(setReads, 1);
-});
-
-test('ignores popup windows without restoring pinned tabs', async () => {
-  let setReads = 0;
-  const browser = createBrowser();
-  browser.storage.sync.get = async () => {
-    setReads += 1;
-    return {};
-  };
-  browser.windows = {
-    async getAll() {
-      return [{ id: 1, type: 'normal' }];
-    },
-  };
-  const autoload = createStartupAutoload(browser, async () => {});
-
-  await autoload.windowCreated({ id: 99, type: 'popup' });
-
-  assert.equal(setReads, 0);
-});
-
-test('retries startup restoration when the first window is not ready', async () => {
-  let windows = [];
-  let setReads = 0;
-  const browser = createBrowser();
-  browser.storage.sync.get = async () => {
-    setReads += 1;
-    return {};
-  };
-  browser.windows = {
-    async getAll() {
-      return windows;
-    },
-  };
-  const autoload = createStartupAutoload(browser, async () => {});
-
-  await autoload.manual();
-  windows = [{ id: 1, type: 'normal' }];
-  await autoload.windowCreated(windows[0]);
-
-  assert.equal(setReads, 1);
-});
-
-test('waits for the first normal window when no creation event fires', async () => {
-  let windowReads = 0;
-  let restoredWindowId;
-  const browser = createBrowser();
-  browser.tabs.query = async ({ windowId }) => {
-    restoredWindowId = windowId;
-    return [];
-  };
-  browser.windows = {
-    async getAll() {
-      windowReads += 1;
-      return windowReads < 3 ? [] : [{ id: 5, type: 'normal' }];
-    },
-  };
-  const autoload = createStartupAutoload(browser, async () => {});
-
-  await autoload.manual();
-
-  assert.equal(restoredWindowId, 5);
-});
-
-test('uses a normal window created while startup restoration is waiting', async () => {
-  const fallbackDelay = deferred();
-  let restoredWindowId;
-  const browser = createBrowser();
-  browser.tabs.query = async ({ windowId }) => {
-    restoredWindowId = windowId;
-    return [];
-  };
-  browser.windows = {
-    async getAll() {
-      return [];
-    },
-  };
-  const autoload = createStartupAutoload(browser, () => fallbackDelay.promise);
-
-  const fallback = autoload.manual();
-  const windowEvent = autoload.windowCreated({ id: 7, type: 'normal' });
-  fallbackDelay.resolve();
-  await Promise.all([fallback, windowEvent]);
-
-  assert.equal(restoredWindowId, 7);
-});
-
-test('allows startup restoration to retry with a replacement window', async () => {
-  let attempts = 0;
-  const queriedWindowIds = [];
-  const browser = createBrowser();
-  browser.storage.sync.get = async () => {
-    attempts += 1;
-    if (attempts === 1) throw new Error('storage unavailable');
-    return {};
-  };
-  browser.tabs.query = async ({ windowId }) => {
-    queriedWindowIds.push(windowId);
-    return [];
-  };
-  browser.windows = {
-    async getAll() {
-      return [{ id: 2, type: 'normal' }];
-    },
-  };
-  const autoload = createStartupAutoload(browser, async () => {});
-
-  await assert.rejects(
-    autoload.windowCreated({ id: 1, type: 'normal' }),
-    /storage unavailable/,
-  );
-  await autoload.windowCreated({ id: 2, type: 'normal' });
-
-  assert.equal(attempts, 2);
-  assert.deepEqual(queriedWindowIds, [1, 2]);
-});
 
 test('creates restored tabs sequentially', async () => {
   let activeCreations = 0;
@@ -426,43 +407,30 @@ test('preserves restoration invariants across randomized tab states', async () =
         : { id: index + 1, url: '', pendingUrl: url }
     ));
     const originalIds = tabs.map((tab) => tab.id);
-    const localState = { unrelated: scenario };
     let nextTabId = 1000;
-    const browser = {
-      storage: {
-        local: {
-          async get() {
-            return { activeTabs: { ...localState.activeTabs } };
-          },
-          async set(value) {
-            Object.assign(localState, value);
-          },
-        },
-        sync: {
-          async get() {
-            return { saved: { autoload: 1, tabs: savedUrls } };
-          },
-        },
+    const browser = createBrowser({
+      currentTabs: tabs,
+      sets: { saved: { autoload: 1, tabs: savedUrls } },
+      async removeTabs(tabIds) {
+        const removedIds = new Set(Array.isArray(tabIds) ? tabIds : [tabIds]);
+        const remaining = tabs.filter((tab) => !removedIds.has(tab.id));
+        tabs.splice(0, tabs.length, ...remaining);
       },
-      tabs: {
-        async query() {
-          return tabs.map((tab) => ({ ...tab }));
-        },
-        async remove() {
-          tabs.length = 0;
-        },
-        async create({ url }) {
-          tabs.push({ id: nextTabId, url });
-          nextTabId += 1;
-        },
+      async createTab({ url }) {
+        const tab = { id: nextTabId, url, pinned: false };
+        tabs.push(tab);
+        nextTabId += 1;
+        return tab;
       },
-    };
+      async updateTab(tabId, changes) {
+        Object.assign(tabs.find((tab) => tab.id === tabId), changes);
+      },
+    });
 
     await restoreAutoloadSet(browser, 1);
 
     assert.deepEqual(tabs.map((tab) => tab.pendingUrl || tab.url), savedUrls);
-    assert.equal(localState.activeTabs[1], 'saved');
-    assert.equal(localState.unrelated, scenario);
+    assert.equal(browser.sessionState[1], 'saved');
     if (startsMatching) assert.deepEqual(tabs.map((tab) => tab.id), originalIds);
   }
 });
