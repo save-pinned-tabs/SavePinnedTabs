@@ -7,6 +7,11 @@ The following node modules are required for development
 - ajv-cli
 - browserify
 
+## Browser Test Parity
+
+Chromium and Firefox end-to-end suites must cover the same observable behaviors and browser edge cases.
+Use one focused test for each behavior. Keep corresponding scenario names and assertions aligned across both suites.
+
 ## Modify Sets Schema
 
 After modifying the schema of the sets object, update the JSON-Schema definition in `schema/sets.json`, then run the following commands to regenerate the validation script:
