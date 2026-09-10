@@ -123,10 +123,10 @@ test("a user can rename an existing saved tab set from the editor", async ({ ext
     .locator(".load-row", { hasText: "Old name" })
     .getByRole("button", { name: "Edit Old name" })
     .click();
-  await popup.getByLabel("Name").fill("  ");
+  await popup.getByRole("textbox", { name: "Name", exact: true }).fill("  ");
   await popup.getByRole("button", { name: "Save changes" }).click();
   await expect(popup.getByRole("status")).toHaveText("Enter a name for this tab set.");
-  await popup.getByLabel("Name").fill("New name");
+  await popup.getByRole("textbox", { name: "Name", exact: true }).fill("New name");
   await Promise.all([
     popup.waitForNavigation(),
     popup.getByRole("button", { name: "Save changes" }).click(),
