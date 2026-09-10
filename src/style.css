@@ -24,6 +24,14 @@ button.set-save, button#save-button { background-color: #4fc3f7; }
 button.set-save:hover, button#save-button:hover { background-color: #29b6f6; }
 button.set-delete { background-color: #ff8a65; }
 button.set-delete:hover { background-color: #ff7043; }
+button.set-edit {
+  flex: 0 0 2em;
+  margin: 0 0.25em;
+  padding: 0;
+  color: #777;
+  background: transparent;
+}
+button.set-edit:hover { color: #333; background-color: #eee; }
 
 dialog {
   width: min(22rem, calc(100% - 2rem));
@@ -38,8 +46,9 @@ dialog {
 dialog::backdrop { background: rgb(0 0 0 / 45%); }
 dialog h3 { margin-bottom: 0.5rem; font-size: 1.15em; }
 dialog p { padding: 0; color: #666; }
-dialog input { width: 100%; margin-top: 0.5rem; padding: 0.5rem; }
-#rename-status { margin-top: 0.5rem; color: #c62828; }
+dialog input, dialog textarea { width: 100%; margin-top: 0.25rem; padding: 0.5rem; resize: vertical; }
+dialog label { display: block; margin-top: 0.75rem; }
+#edit-status { margin-top: 0.5rem; color: #c62828; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.25rem; }
 .dialog-actions button { float: none; margin: 0; }
 .dialog-actions button[value="cancel"] { color: #333; background-color: #eee; }

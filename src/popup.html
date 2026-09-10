@@ -24,16 +24,19 @@
 		</div>
 	</form>
 </dialog>
-<dialog id="rename-dialog" aria-labelledby="rename-dialog-title">
-	<form id="rename-form" method="dialog">
-		<h3 id="rename-dialog-title">Rename tab set</h3>
-		<label for="rename-input">Name</label>
-		<input id="rename-input" maxlength="30" required>
-		<p id="rename-status" role="status"></p>
-		<div class="dialog-actions">
-			<button id="cancel-rename-button" type="button">Cancel</button>
-			<button id="save-rename-button">Save name</button>
-		</div>
+<dialog id="edit-dialog" aria-labelledby="edit-dialog-title">
+	<form method="dialog">
+	<h3 id="edit-dialog-title">Edit tab set</h3>
+	<label for="edit-name">Name</label>
+	<input id="edit-name" type="text" maxlength="30">
+	<label for="edit-urls">URLs</label>
+	<p>Enter one URL per line. Add, change, reorder, or remove entries.</p>
+	<textarea id="edit-urls" rows="8"></textarea>
+	<p id="edit-status" role="status"></p>
+	<div class="dialog-actions">
+		<button value="cancel">Cancel</button>
+		<button id="save-edit-button" type="button">Save changes</button>
+	</div>
 	</form>
 </dialog>
 <script src="popup.js" type="module"></script>

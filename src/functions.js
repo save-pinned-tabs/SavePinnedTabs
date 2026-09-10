@@ -20,12 +20,22 @@ function refreshPopup() {
 function withTabSetsLock(operation) {
     return navigator.locks.request('saved-tab-sets', operation);
 }
+const UNSAFE_URL_PROTOCOLS = new Set(['data:', 'javascript:', 'vbscript:']);
+
+function isLoadableUrl(value) {
+    try {
+        return !UNSAFE_URL_PROTOCOLS.has(new URL(value).protocol);
+    } catch {
+        return false;
+    }
+}
 
 
 export var Sets = (function () {
 
 
     var windowId = null;
+    var editGeneration = 0;
     browser.windows.getCurrent().then(function (win) {
         windowId = win.id;
     });
@@ -107,6 +117,15 @@ export var Sets = (function () {
                         const nameElement = document.createElement('span');
                         nameElement.textContent = row.set_name;
                         rowElement.appendChild(nameElement);
+                        const editButton = document.createElement('button');
+                        editButton.classList.add('set-edit');
+                        editButton.textContent = '✎';
+                        editButton.title = 'Edit';
+                        editButton.setAttribute('aria-label', `Edit ${row.set_name}`);
+                        editButton.addEventListener('click', function () {
+                            Sets.edit(property);
+                        });
+                        rowElement.appendChild(editButton);
 
                         const autoloadLabel = document.createElement('label');
                         const autoloadInput = document.createElement('input');
@@ -122,13 +141,6 @@ export var Sets = (function () {
                         autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
                         rowElement.appendChild(autoloadLabel);
 
-                        const renameButton = document.createElement('button');
-                        renameButton.classList.add('set-rename');
-                        renameButton.textContent = 'Rename';
-                        renameButton.addEventListener('click', function () {
-                            Sets.rename(property, row.set_name);
-                        });
-                        rowElement.appendChild(renameButton);
 
                         if (active === property) {
                             const saveButton = document.createElement('button');
@@ -166,26 +178,54 @@ export var Sets = (function () {
                 });
         	});
         },
-        rename: function (id, name) {
-            const dialog = document.getElementById('rename-dialog');
+        edit: async function (id) {
+            const generation = ++editGeneration;
+            const dialog = document.getElementById('edit-dialog');
+            const status = document.getElementById('edit-status');
+            const saveButton = document.getElementById('save-edit-button');
             dialog.dataset.setId = id;
-            document.getElementById('rename-input').value = name;
-            document.getElementById('rename-status').textContent = '';
-            document.getElementById('save-rename-button').disabled = false;
-            document.getElementById('cancel-rename-button').disabled = false;
+            document.getElementById('edit-dialog-title').textContent = 'Edit tab set';
+            document.getElementById('edit-urls').value = '';
+            document.getElementById('edit-name').value = '';
+            status.textContent = 'Loading…';
+            saveButton.disabled = true;
             dialog.showModal();
-            document.getElementById('rename-input').select();
+
+            try {
+                const set = (await browser.storage.sync.get(id))[id];
+                if (!dialog.open || editGeneration !== generation) return;
+                if (!set) {
+                    status.textContent = 'This tab set no longer exists.';
+                    return;
+                }
+                document.getElementById('edit-name').value = set.set_name;
+                document.getElementById('edit-urls').value = set.tabs.join('\n');
+                status.textContent = '';
+                saveButton.disabled = false;
+            } catch {
+                if (!dialog.open || editGeneration !== generation) return;
+                status.textContent = 'Could not load this tab set. Please try again.';
+            }
         },
-        saveRename: async function () {
-            const dialog = document.getElementById('rename-dialog');
+        saveEdits: async function () {
+            const dialog = document.getElementById('edit-dialog');
             const id = dialog.dataset.setId;
-            const input = document.getElementById('rename-input');
-            const status = document.getElementById('rename-status');
-            const saveButton = document.getElementById('save-rename-button');
-            const cancelButton = document.getElementById('cancel-rename-button');
-            const name = input.value.trim();
+            const generation = editGeneration;
+            const saveButton = document.getElementById('save-edit-button');
+            const status = document.getElementById('edit-status');
+            const cancelButton = dialog.querySelector('button[value="cancel"]');
+            const name = document.getElementById('edit-name').value.trim();
             if (!name) {
                 status.textContent = 'Enter a name for this tab set.';
+                return;
+            }
+            const tabs = document.getElementById('edit-urls').value
+                .split('\n')
+                .map((url) => url.trim())
+                .filter(Boolean);
+            const invalidUrl = tabs.find((url) => !isLoadableUrl(url));
+            if (invalidUrl) {
+                status.textContent = `Invalid URL: ${invalidUrl}`;
                 return;
             }
             saveButton.disabled = true;
@@ -193,22 +233,26 @@ export var Sets = (function () {
 
             try {
                 await withTabSetsLock(async function () {
-                    const latest = await browser.storage.sync.get(id);
-                    if (!latest[id]) {
+                    const saved = await browser.storage.sync.get(id);
+                    if (!dialog.open || editGeneration !== generation) return;
+                    if (!saved[id]) {
                         status.textContent = 'This tab set no longer exists.';
                         saveButton.disabled = false;
                         cancelButton.disabled = false;
                         return;
                     }
-                    latest[id].set_name = name;
-                    await browser.storage.sync.set(latest);
+                    saved[id].set_name = name;
+                    saved[id].tabs = tabs;
+                    await browser.storage.sync.set(saved);
+                    if (!dialog.open || editGeneration !== generation) return;
                     dialog.close();
                     refreshPopup();
                 });
             } catch {
+                if (!dialog.open || editGeneration !== generation) return;
                 saveButton.disabled = false;
                 cancelButton.disabled = false;
-                status.textContent = 'Could not rename this tab set. Please try again.';
+                status.textContent = 'Could not save these changes. Please try again.';
             }
         },
         setAutoload: async function (id) {

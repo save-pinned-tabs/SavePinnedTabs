@@ -11,14 +11,7 @@ document.getElementById('save-name').addEventListener('keydown', function (event
 	}
 });
 document.getElementById('save-name').focus();
-document.getElementById('rename-form').addEventListener('submit', function (event) {
-	event.preventDefault();
-	if (!document.getElementById('save-rename-button').disabled) Sets.saveRename();
-});
-document.getElementById('rename-dialog').addEventListener('cancel', function (event) {
-	if (document.getElementById('save-rename-button').disabled) event.preventDefault();
-});
-document.getElementById('cancel-rename-button').addEventListener('click', function () {
-	document.getElementById('rename-dialog').close();
+document.getElementById('save-edit-button').addEventListener('click', function () {
+	Sets.saveEdits();
 });
 document.addEventListener('DOMContentLoaded', Sets.get);
