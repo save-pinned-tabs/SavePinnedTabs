@@ -254,11 +254,10 @@ test("a shortcut assignment persists", async () => {
   const { shortcut } = await createShortcutFixture();
   const assignedValue = await shortcut.getAttribute("value");
   await driver.navigate().refresh();
-  await driver.wait(until.elementLocated(By.css('[data-shortcut-command="load-set-1"]')), 10_000);
-  assert.equal(
-    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]')).getAttribute("value"),
-    assignedValue,
-  );
+  await driver.wait(async () => (
+    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
+      .getAttribute("value")
+  ) === assignedValue, 10_000, "persisted shortcut assignment");
 });
 
 test("an assigned command dispatches through the registered listener", async () => {
