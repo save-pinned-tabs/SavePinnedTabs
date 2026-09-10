@@ -17,7 +17,31 @@ function tabsMatch(currentTabs, savedUrls) {
     && currentTabs.every((tab, index) => effectiveUrl(tab) === savedUrls[index]);
 }
 
+async function hasFaviconPermission(browser) {
+  try {
+    return await browser.permissions?.contains({ permissions: ['favicon'] }) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export async function preloadFavicons(browser, urls, fetchFavicon = fetch) {
+  if (!browser.runtime?.getURL || !await hasFaviconPermission(browser)) return;
+  await Promise.all(urls.map(async (url) => {
+    const faviconUrl = new URL(browser.runtime.getURL('/_favicon/'));
+    faviconUrl.searchParams.set('pageUrl', url);
+    faviconUrl.searchParams.set('size', '32');
+    try {
+      const response = await fetchFavicon(faviconUrl);
+      if (response.ok) await response.arrayBuffer();
+    } catch {
+      // Favicon loading is opportunistic and must not block tab restoration.
+    }
+  }));
+}
+
 async function replacePinnedTabs(browser, windowId, currentTabs, savedUrls) {
+  void preloadFavicons(browser, savedUrls);
   const tabIds = currentTabs.map((tab) => tab.id);
   if (tabIds.length > 0) await browser.tabs.remove(tabIds);
 
