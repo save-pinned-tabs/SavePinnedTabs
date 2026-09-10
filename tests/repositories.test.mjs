@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { TabSetRepository } from '../src/tab-sets/tab-set-repository.mjs';
 import {
   BrowserTabSetStorage,
   InMemoryTabSetStorage,
-  TabSetRepository,
-} from '../src/tab-sets/tab-set-repository.mjs';
+} from '../src/tab-sets/tab-set-storage.mjs';
 import {
   BrowserReferenceStorage,
   BrowserStorageMigration,
