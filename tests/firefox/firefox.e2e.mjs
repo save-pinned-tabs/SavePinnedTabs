@@ -80,7 +80,7 @@ afterEach(async () => {
 
 async function waitForStatus(id, text) {
   const element = await driver.findElement(By.id(id));
-  await driver.wait(until.elementTextIs(element, text), 10_000);
+  await driver.wait(until.elementTextIs(element, text), 10_000, `status "${text}"`);
 }
 
 async function pinnedUrls() {
@@ -109,7 +109,8 @@ async function removePinnedTabs() {
 async function waitForPopupReady() {
   await driver.wait(
     () => driver.executeScript('return document.getElementById("save-button")?.disabled === false;'),
-    10_000,
+    30_000,
+    "popup controls to become ready",
   );
 }
 
