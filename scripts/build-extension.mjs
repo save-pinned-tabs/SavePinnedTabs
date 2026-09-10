@@ -35,6 +35,9 @@ if (target === "firefox") {
     scripts: ["service_worker.js"],
     type: "module",
   };
+  manifest.permissions = manifest.permissions.filter(
+    (permission) => permission !== "favicon",
+  );
 }
 
 async function runWebExt(args) {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
+import { createStartupAutoload, preloadFavicons, restoreAutoloadSet } from '../src/autoload.mjs';
 
 function deferred() {
   let resolve;
@@ -67,6 +67,65 @@ test('removes existing pinned tabs before creating replacements', async () => {
   removal.resolve();
   await restoration;
   assert.deepEqual(operations, ['remove', 'create']);
+});
+
+test('preloads each saved favicon through the browser favicon cache', async () => {
+  const requestedUrls = [];
+  const browser = {
+    runtime: {
+      getURL(path) {
+        return `chrome-extension://extension-id${path}`;
+      },
+    },
+  };
+
+  await preloadFavicons(
+    browser,
+    ['https://first.example/', 'https://second.example/'],
+    async (url) => {
+      requestedUrls.push(url.href);
+      return {
+        ok: true,
+        async arrayBuffer() {},
+      };
+    },
+  );
+
+  assert.deepEqual(requestedUrls, [
+    'chrome-extension://extension-id/_favicon/?pageUrl=https%3A%2F%2Ffirst.example%2F&size=32',
+    'chrome-extension://extension-id/_favicon/?pageUrl=https%3A%2F%2Fsecond.example%2F&size=32',
+  ]);
+});
+
+test('does not delay restoration while favicon loading is pending', async () => {
+  const faviconResponse = deferred();
+  let created = false;
+  const browser = createBrowser({
+    sets: {
+      saved: {
+        autoload: 1,
+        tabs: ['https://saved.example/'],
+      },
+    },
+    createTab: async () => {
+      created = true;
+    },
+  });
+  browser.runtime = {
+    getURL(path) {
+      return `chrome-extension://extension-id${path}`;
+    },
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => faviconResponse.promise;
+
+  try {
+    await restoreAutoloadSet(browser, 1);
+    assert.equal(created, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    faviconResponse.resolve({ ok: false });
+  }
 });
 
 test('resolves only after every tab and active-set state are restored', async () => {

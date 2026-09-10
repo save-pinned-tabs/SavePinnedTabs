@@ -11,7 +11,7 @@
     "32": "images/icon_32.png"
   },
 
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "favicon"],
   "browser_specific_settings": {
     "gecko": {
       "id": "savepinnedtabs@buildyourweb.app",
