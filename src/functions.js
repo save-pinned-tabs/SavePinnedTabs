@@ -39,7 +39,7 @@ export var Sets = (function () {
     return {
         save: function (name, autoload) {
             var urilist = [];
-        	browser.tabs.query({
+            return browser.tabs.query({
         		pinned: true,
         		currentWindow: true
         	}).then(function (tabs) {
@@ -54,7 +54,7 @@ export var Sets = (function () {
         				autoload: autoload || 0,
         				tabs: urilist
         			};
-                    browser.storage.sync.set(saveObj)
+                    return browser.storage.sync.set(saveObj)
                         .then(function () { return set_active(uid, windowId); })
                         .then(refreshPopup);
         		} else {
