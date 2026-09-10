@@ -203,23 +203,6 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
   await expect(popup.locator(".load-row", { hasText: "Invalid" })).toHaveCount(0);
 });
 
-test("autoload logic restores the configured pinned tabs", async ({ extension }) => {
-  const { context, extensionId } = extension;
-  const popup = await openExtensionPage(context, extensionId, "popup.html");
-  const autoloadUrl = `chrome-extension://${extensionId}/options.html?manual-autoload`;
-
-  await createPinnedTabs(popup, [autoloadUrl]);
-  await saveSet(popup, "Manual startup");
-  await selectAutoloadSet(popup, "Manual startup");
-  await removePinnedTabs(popup);
-
-  await popup.evaluate(async () => {
-    const { Autoload } = await import(chrome.runtime.getURL("functions.js"));
-    await Autoload.manual();
-  });
-
-  await expectOpenTabs(context, [autoloadUrl]);
-});
 
 test("startup keeps an already restored pinned tab open", async ({ extension }) => {
   const { context, extensionId } = extension;
@@ -236,6 +219,7 @@ test("startup keeps an already restored pinned tab open", async ({ extension }) 
   }, autoloadUrl);
 
   await popup.evaluate(async () => {
+    await chrome.storage.session.remove("browserLifecycle");
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
     await handleStartup();
   });
@@ -257,6 +241,7 @@ test("startup preserves unrelated local extension state", async ({ extension }) 
       unrelated: "keep",
     });
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
+    await chrome.storage.session.remove("browserLifecycle");
     await handleStartup();
     return chrome.storage.local.get(null);
   });
@@ -275,6 +260,7 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
   await removePinnedTabs(popup);
 
   await popup.evaluate(async () => {
+    await chrome.storage.session.remove("browserLifecycle");
     const { handleStartup } = await import(chrome.runtime.getURL("service_worker.js"));
     await handleStartup();
   });

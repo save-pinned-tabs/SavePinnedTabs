@@ -58,6 +58,8 @@ jobs:
 
       - name: Set up Firefox
         uses: browser-actions/setup-firefox@v1
+        with:
+          firefox-version: latest-devedition
 
       - name: Install dependencies
         run: npm ci

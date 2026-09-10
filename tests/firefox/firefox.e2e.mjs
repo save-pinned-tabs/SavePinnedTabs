@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -13,36 +13,52 @@ const packageJson = JSON.parse(
 const buildPath = path.resolve(
   `dist/save_pinned_tabs-${packageJson.version}-firefox.zip`,
 );
+const firefoxBinary = process.env.FIREFOX_BINARY;
 let driver;
 let temporaryDirectory;
+let addonPath;
 let extensionOrigin;
+let profileDirectory;
 
 function isPageUnloading(error) {
   return /Document was unloaded|browser is not defined|can't access dead object/.test(error.message);
 }
 
-before(async () => {
-  temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-firefox-"));
-  const addonPath = path.join(temporaryDirectory, "save-pinned-tabs.xpi");
-  await copyFile(buildPath, addonPath);
-
-  const options = new firefox.Options().addArguments("-headless");
+async function launchFirefox({ installAddon = false } = {}) {
+  const options = new firefox.Options()
+    .addArguments("-headless", "-profile", profileDirectory)
+    .setPreference("xpinstall.signatures.required", false);
+  if (firefoxBinary) options.setBinary(firefoxBinary);
   const service = new firefox.ServiceBuilder().addArguments("--allow-system-access");
-  driver = await new Builder()
+  const nextDriver = await new Builder()
     .forBrowser("firefox")
     .setFirefoxOptions(options)
     .setFirefoxService(service)
     .build();
-  await driver.installAddon(addonPath, true);
+  if (installAddon) await nextDriver.installAddon(addonPath, false);
 
-  await driver.setContext(firefox.Context.CHROME);
-  const extensionUuids = await driver.executeScript(
+  await nextDriver.setContext(firefox.Context.CHROME);
+  const extensionUuids = await nextDriver.executeScript(
     'return Services.prefs.getStringPref("extensions.webextensions.uuids");',
   );
   const extensionUuid = JSON.parse(extensionUuids)[extensionId];
   assert.ok(extensionUuid, `Firefox did not register ${extensionId}`);
-  extensionOrigin = `moz-extension://${extensionUuid}`;
-  await driver.setContext(firefox.Context.CONTENT);
+  await nextDriver.setContext(firefox.Context.CONTENT);
+
+  return {
+    driver: nextDriver,
+    extensionOrigin: `moz-extension://${extensionUuid}`,
+  };
+}
+
+before(async () => {
+  temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-firefox-"));
+  addonPath = path.join(temporaryDirectory, "save-pinned-tabs.xpi");
+  profileDirectory = path.join(temporaryDirectory, "profile");
+  await mkdir(profileDirectory);
+  await copyFile(buildPath, addonPath);
+
+  ({ driver, extensionOrigin } = await launchFirefox({ installAddon: true }));
 });
 
 after(async () => {
@@ -127,4 +143,34 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
       throw error;
     }
   }, 10_000);
+});
+
+test("Firefox restores Autoload after a browser restart", async () => {
+  const autoloadUrl = `${extensionOrigin}/options.html?firefox-restart`;
+  await driver.get(`${extensionOrigin}/options.html`);
+  const setupError = await driver.executeAsyncScript((url, done) => {
+    browser.storage.sync.set({
+      firefoxRestart: {
+        autoload: 1,
+        set_name: "Firefox restart",
+        tabs: [url],
+      },
+    })
+      .then(() => browser.tabs.query({ pinned: true, currentWindow: true }))
+      .then((tabs) => browser.tabs.remove(tabs.map((tab) => tab.id)))
+      .then(() => done(null), (error) => done(error.message));
+  }, autoloadUrl);
+  assert.equal(setupError, null);
+
+  await driver.quit();
+  driver = undefined;
+  ({ driver, extensionOrigin } = await launchFirefox());
+  await driver.get(`${extensionOrigin}/options.html`);
+
+  await driver.wait(async () => driver.executeAsyncScript((url, done) => {
+    browser.tabs.query({ pinned: true, currentWindow: true }).then(
+      (tabs) => done(tabs.some((tab) => tab.url === url)),
+      () => done(false),
+    );
+  }, autoloadUrl), 10_000);
 });

@@ -1,4 +1,3 @@
-import { createStartupAutoload } from './autoload.mjs';
 import { createBrowserRepositories } from './repositories.mjs';
 import { createWindowTabStateClient } from './window-tab-state.mjs';
 
@@ -152,5 +151,3 @@ export var Sets = (function () {
 		},
     }
 })();
-
-export var Autoload = createStartupAutoload(browser);

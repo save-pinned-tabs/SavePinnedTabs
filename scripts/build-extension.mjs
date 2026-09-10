@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 
 const runtimePaths = [
   "autoload.mjs",
+  "browser-lifecycle.mjs",
   "commands.mjs",
   "functions.js",
   "repositories.mjs",

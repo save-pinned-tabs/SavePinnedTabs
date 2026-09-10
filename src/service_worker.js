@@ -1,34 +1,37 @@
-import { Autoload } from './functions.js';
+import { preloadFavicons } from './autoload.mjs';
+import {
+  AUTOLOAD_FIRST_WINDOW,
+  createBrowserLifecycle,
+} from './browser-lifecycle.mjs';
 import { registerCommands } from './commands.mjs';
 import {
   createBrowserWindowTabState,
   registerWindowTabStateMessages,
 } from './window-tab-state.mjs';
 
-var browser = globalThis.browser ?? globalThis.chrome;
-var windowTabState = createBrowserWindowTabState(browser);
+const browser = globalThis.browser ?? globalThis.chrome;
+const windowTabState = createBrowserWindowTabState(browser, {
+  onReplace(urls) {
+    void preloadFavicons(browser, urls);
+  },
+});
+const browserLifecycle = createBrowserLifecycle(browser, {
+  autoloadPolicy: AUTOLOAD_FIRST_WINDOW,
+  windowTabState,
+});
+
 registerWindowTabStateMessages(browser, windowTabState);
 registerCommands(browser, windowTabState);
 
-export async function handleWindowRemoved(windowId) {
-  await windowTabState.deactivate(windowId);
+export function handleStartup() {
+  return browserLifecycle.onBrowserStartup();
 }
 
-if (!browser.windows.onRemoved.hasListener(handleWindowRemoved)) {
-  browser.windows.onRemoved.addListener(handleWindowRemoved);
-}
-
-export async function handleStartup() {
-  await windowTabState.resetSessions();
-
-  if (!browser.windows.onCreated.hasListener(Autoload.windowCreated)) {
-    browser.windows.onCreated.addListener(Autoload.windowCreated);
-  }
-
-  // Workaround:
-  //  browser.windows.onCreated does not consistently fire in all browsers
-  //  on the first window launched
-  return Autoload.manual();
-}
 
 browser.runtime.onStartup.addListener(handleStartup);
+browser.windows.onCreated.addListener((window) => (
+  browserLifecycle.onWindowCreated(window)
+));
+browser.windows.onRemoved.addListener((windowId) => (
+  browserLifecycle.onWindowRemoved(windowId)
+));

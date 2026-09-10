@@ -1,9 +1,6 @@
 import { createBrowserRepositories } from './repositories.mjs';
 import { createBrowserWindowTabState } from './window-tab-state.mjs';
 
-function wait(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 
 
@@ -50,15 +47,18 @@ export async function unloadTabSet(browser, setId, windowId) {
   await windowTabState.unload(windowId, setId);
 }
 
-export async function restoreAutoloadSet(browser, windowId) {
-  const repositories = createBrowserRepositories(browser);
-  const sets = await repositories.tabSets.list();
-  const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
-  const windowTabState = createBrowserWindowTabState(browser, {
+export async function restoreAutoloadSet(
+  browser,
+  windowId,
+  windowTabState = createBrowserWindowTabState(browser, {
     onReplace(urls) {
       void preloadFavicons(browser, urls);
     },
-  });
+  }),
+) {
+  const repositories = createBrowserRepositories(browser);
+  const sets = await repositories.tabSets.list();
+  const entry = Object.entries(sets).find(([, set]) => set.autoload == 1);
 
   if (!entry) {
     await windowTabState.deactivate(windowId);
@@ -66,53 +66,4 @@ export async function restoreAutoloadSet(browser, windowId) {
   }
 
   await windowTabState.replace(windowId, entry[0]);
-}
-
-const STARTUP_WINDOW_ATTEMPTS = 100;
-
-export function createStartupAutoload(browser, delay = wait) {
-  let restoration;
-  let createdNormalWindow;
-
-  async function findStartupWindow() {
-    for (let attempt = 0; attempt < STARTUP_WINDOW_ATTEMPTS; attempt += 1) {
-      await delay(50);
-      if (createdNormalWindow) return createdNormalWindow;
-
-      const windows = await browser.windows.getAll(null);
-      const normalWindows = windows.filter((window) => window.type === 'normal');
-      if (normalWindows.length === 1) return normalWindows[0];
-    }
-    return undefined;
-  }
-
-  function restoreOnce() {
-    if (!restoration) {
-      restoration = (async function () {
-        const startupWindow = await findStartupWindow();
-        if (!startupWindow) {
-          restoration = undefined;
-          return;
-        }
-        await restoreAutoloadSet(browser, startupWindow.id);
-      })().catch((error) => {
-        createdNormalWindow = undefined;
-        restoration = undefined;
-        throw error;
-      });
-    }
-    return restoration;
-  }
-
-  function windowCreated(window) {
-    if (window?.type !== 'normal') return;
-    if (!createdNormalWindow) createdNormalWindow = window;
-    return restoreOnce();
-  }
-
-  function manual() {
-    return restoreOnce();
-  }
-
-  return { manual, windowCreated };
 }
