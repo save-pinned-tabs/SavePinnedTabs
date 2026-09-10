@@ -17,6 +17,10 @@ let driver;
 let temporaryDirectory;
 let extensionOrigin;
 
+function isPageUnloading(error) {
+  return /Document was unloaded|browser is not defined|can't access dead object/.test(error.message);
+}
+
 before(async () => {
   temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-firefox-"));
   const addonPath = path.join(temporaryDirectory, "save-pinned-tabs.xpi");
@@ -72,7 +76,19 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
   }, savedUrl);
 
   await driver.findElement(By.id("save-name")).sendKeys("Firefox");
-  await driver.executeScript("arguments[0].click()", await driver.findElement(By.id("save-button")));
+  const savePageLoadTime = await driver.executeScript("return performance.timeOrigin");
+  await driver.findElement(By.id("save-button")).click();
+  await driver.wait(async () => {
+    try {
+      return await driver.executeScript(
+        "return performance.timeOrigin !== arguments[0]",
+        savePageLoadTime,
+      );
+    } catch (error) {
+      if (isPageUnloading(error)) return false;
+      throw error;
+    }
+  }, 10_000);
   await driver.wait(until.elementLocated(By.css('.load-row[data-name="Firefox"]')), 10_000);
 
   const unwantedUrl = `${extensionOrigin}/options.html?firefox-unwanted`;
@@ -91,8 +107,9 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
         "return performance.timeOrigin !== arguments[0]",
         pageLoadTime,
       );
-    } catch {
-      return false;
+    } catch (error) {
+      if (isPageUnloading(error)) return false;
+      throw error;
     }
   }, 10_000);
   await driver.wait(async () => {
