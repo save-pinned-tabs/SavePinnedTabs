@@ -78,11 +78,13 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await saveSet(popup, "Work");
 
   await createPinnedTabs(popup, [secondUrl]);
-  await popup
-    .locator(".load-row", { hasText: "Work" })
-    .getByRole("button", { name: "Save", exact: true })
-    .click();
-  await expect(popup.locator(".load-row", { hasText: "Work" })).toBeVisible();
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "Work" })
+      .getByRole("button", { name: "Save", exact: true })
+      .click(),
+  ]);
 
   await createPinnedTabs(popup, [unwantedUrl]);
   await popup
@@ -98,6 +100,32 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await expect(popup.locator("#delete-dialog")).toBeHidden();
   await expect(workRow).toBeVisible();
   await deleteSet(popup, "Work");
+});
+
+test("a user can append a saved set to existing pinned tabs", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup.html");
+  const sharedUrl = `chrome-extension://${extensionId}/options.html?append-shared`;
+  const addedUrl = `chrome-extension://${extensionId}/options.html?append-added`;
+  const existingUrl = `chrome-extension://${extensionId}/options.html?append-existing`;
+
+  await createPinnedTabs(popup, [sharedUrl, addedUrl]);
+  await saveSet(popup, "Append me");
+  await removePinnedTabs(popup);
+  await createPinnedTabs(popup, [sharedUrl, existingUrl]);
+  await Promise.all([
+    popup.waitForNavigation(),
+    popup
+      .locator(".load-row", { hasText: "Append me" })
+      .getByRole("button", { name: "Append" })
+      .click(),
+  ]);
+
+  await expectOpenTabs(context, [sharedUrl, addedUrl, existingUrl]);
+  const pinnedUrls = await popup.evaluate(async () => (
+    await chrome.tabs.query({ pinned: true, currentWindow: true })
+  ).map((tab) => tab.url));
+  expect(pinnedUrls.filter((url) => url === sharedUrl)).toHaveLength(1);
 });
 
 test("a user can export and import tab sets", async ({ extension }) => {

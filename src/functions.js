@@ -1,4 +1,4 @@
-import { createStartupAutoload, loadTabSet } from './autoload.mjs';
+import { appendTabSet, createStartupAutoload, loadTabSet, runWindowOperation, setActiveTabSet } from './autoload.mjs';
 
 function confirmDelete() {
     var dialog = document.getElementById('delete-dialog');
@@ -26,47 +26,44 @@ export var Sets = (function () {
         windowId = win.id;
     });
 
-    var set_active = function (id, winid) {
-        return browser.storage.local.get(['activeTabs']).then(function(result) {
-            var atabs = result.activeTabs || {};
-            atabs[winid] = id;
-            return browser.storage.local.set({'activeTabs': atabs}).then(function() {
-                console.log('Active tabset for window '+winid+' is set to '+id);
-            });
-        });
-    }
 
     return {
-        save: function (name, autoload) {
-            var urilist = [];
-            return browser.tabs.query({
-        		pinned: true,
-        		currentWindow: true
-        	}).then(function (tabs) {
-        		for (var i = 0; i < tabs.length; i++) {
-        			urilist[i] = tabs[i].url;
-        		}
-        		if (urilist.length > 0) {
-        			var saveObj = {};
-        			var uid = window.btoa(name);
-        			saveObj[uid] = {
-        				set_name: name,
-        				autoload: autoload || 0,
-        				tabs: urilist
-        			};
-                    return browser.storage.sync.set(saveObj)
-                        .then(function () { return set_active(uid, windowId); })
-                        .then(refreshPopup);
-        		} else {
-        			console.log('No pinned tabs found!');
-        		}
-        	});
+        save: async function (name, autoload) {
+            const winid = windowId ?? (await browser.windows.getCurrent()).id;
+            return runWindowOperation(winid, async function () {
+                var urilist = [];
+                const tabs = await browser.tabs.query({
+                    pinned: true,
+                    windowId: winid
+                });
+                for (var i = 0; i < tabs.length; i++) {
+                    urilist[i] = tabs[i].url;
+                }
+                if (urilist.length === 0) {
+                    console.log('No pinned tabs found!');
+                    return;
+                }
+
+                var saveObj = {};
+                var uid = window.btoa(name);
+                saveObj[uid] = {
+                    set_name: name,
+                    autoload: autoload || 0,
+                    tabs: urilist
+                };
+                await browser.storage.sync.set(saveObj);
+                await setActiveTabSet(browser, winid, uid);
+                refreshPopup();
+            });
         },
         load: function (id, winid) {
             return loadTabSet(browser, id, winid).then(function () {
                 console.log('Loaded tabs');
                 refreshPopup();
             });
+        },
+        append: function (id, winid) {
+            return appendTabSet(browser, id, winid).then(refreshPopup);
         },
         delete: async function (id) {
             if (!await confirmDelete()) return;
@@ -127,6 +124,14 @@ export var Sets = (function () {
                             Sets.load(property, winid);
                         });
                         rowElement.appendChild(loadButton);
+
+                        const appendButton = document.createElement('button');
+                        appendButton.classList.add('set-append');
+                        appendButton.textContent = 'Append';
+                        appendButton.addEventListener('click', function () {
+                            Sets.append(property, winid);
+                        });
+                        rowElement.appendChild(appendButton);
 
                         const deleteButton = document.createElement('button');
                         deleteButton.classList.add('set-delete');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
+import { appendTabSet, createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
 
 function deferred() {
   let resolve;
@@ -67,6 +67,87 @@ test('removes existing pinned tabs before creating replacements', async () => {
   removal.resolve();
   await restoration;
   assert.deepEqual(operations, ['remove', 'create']);
+});
+
+test('appends missing saved tabs without replacing existing pins', async () => {
+  const createdUrls = [];
+  let removedTabs = false;
+  const browser = createBrowser({
+    currentTabs: [
+      { id: 10, url: 'https://existing.example/' },
+      { id: 11, url: '', pendingUrl: 'https://duplicate.example/' },
+    ],
+    sets: {
+      saved: {
+        autoload: 0,
+        tabs: [
+          'https://duplicate.example/',
+          'https://duplicate.example/',
+          'https://added.example/',
+        ],
+      },
+    },
+    removeTabs: async () => {
+      removedTabs = true;
+    },
+    createTab: async ({ url }) => {
+      createdUrls.push(url);
+    },
+  });
+  await browser.storage.local.set({ activeTabs: { 1: 'other' } });
+
+  await appendTabSet(browser, 'saved', 1);
+
+  assert.equal(removedTabs, false);
+  assert.deepEqual(createdUrls, [
+    'https://duplicate.example/',
+    'https://added.example/',
+  ]);
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
+});
+
+test('serializes concurrent appends in the same window', async () => {
+  const currentTabs = [];
+  const browser = createBrowser({
+    currentTabs,
+    sets: {
+      saved: {
+        autoload: 0,
+        tabs: ['https://added.example/'],
+      },
+    },
+    createTab: async ({ url }) => {
+      currentTabs.push({ id: currentTabs.length + 1, url });
+    },
+  });
+
+  await Promise.all([
+    appendTabSet(browser, 'saved', 1),
+    appendTabSet(browser, 'saved', 1),
+  ]);
+
+  assert.deepEqual(currentTabs.map((tab) => tab.url), ['https://added.example/']);
+});
+
+test('clears active state before a partially failed append', async () => {
+  let creations = 0;
+  const browser = createBrowser({
+    sets: {
+      saved: {
+        autoload: 0,
+        tabs: ['https://created.example/', 'https://failed.example/'],
+      },
+    },
+    createTab: async () => {
+      creations += 1;
+      if (creations === 2) throw new Error('creation failed');
+    },
+  });
+  await browser.storage.local.set({ activeTabs: { 1: 'other' } });
+
+  await assert.rejects(appendTabSet(browser, 'saved', 1), /failed\.example/);
+
+  assert.equal((await browser.storage.local.get()).activeTabs[1], null);
 });
 
 test('resolves only after every tab and active-set state are restored', async () => {
