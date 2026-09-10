@@ -1,3 +1,4 @@
+const http = require("node:http");
 const { mkdtemp, rm } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
@@ -45,7 +46,10 @@ async function selectAutoloadSet(page, name) {
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole("button", { name: "Delete", exact: true }).click(),
+  ]);
   await expect(row).toHaveCount(0);
 }
 
@@ -252,6 +256,10 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
 test("an autoload selection persists across browser restart", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-restart-"));
+  const server = http.createServer((request, response) => {
+    response.end("<!doctype html><title>Restored tab</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let firstLaunch;
   let secondLaunch;
 
@@ -262,7 +270,8 @@ test("an autoload selection persists across browser restart", async () => {
       firstLaunch.extensionId,
       "popup.html",
     );
-    const autoloadUrl = `chrome-extension://${firstLaunch.extensionId}/options.html?autoloaded`;
+    const { port } = server.address();
+    const autoloadUrl = `http://127.0.0.1:${port}/autoloaded`;
 
     await createPinnedTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
@@ -281,10 +290,14 @@ test("an autoload selection persists across browser restart", async () => {
         .locator(".load-row", { hasText: "Startup" })
         .locator("input[name=autoload]"),
     ).toBeChecked();
+    await expectOpenTabs(secondLaunch.context, [autoloadUrl]);
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
   }
 });
 

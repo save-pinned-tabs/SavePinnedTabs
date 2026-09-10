@@ -69,9 +69,16 @@ export async function restoreAutoloadSet(browser, windowId) {
 export function createStartupAutoload(browser, delay = wait) {
   let restoration;
 
-  function restoreOnce(windowId) {
+  function restoreOnce() {
     if (!restoration) {
-      restoration = restoreAutoloadSet(browser, windowId).catch((error) => {
+      restoration = (async function () {
+        await delay(50);
+        const windows = await browser.windows.getAll(null);
+        const normalWindows = windows.filter((window) => window.type === 'normal');
+        if (normalWindows.length === 1) {
+          await restoreAutoloadSet(browser, normalWindows[0].id);
+        }
+      })().catch((error) => {
         restoration = undefined;
         throw error;
       });
@@ -79,17 +86,12 @@ export function createStartupAutoload(browser, delay = wait) {
     return restoration;
   }
 
-  async function windowCreated(window) {
-    const windows = await browser.windows.getAll(null);
-    if (windows.length < 2 && window.type === 'normal') {
-      return restoreOnce(window.id);
-    }
+  function windowCreated() {
+    return restoreOnce();
   }
 
-  async function manual() {
-    await delay(50);
-    const window = await browser.windows.getCurrent();
-    return windowCreated(window);
+  function manual() {
+    return restoreOnce();
   }
 
   return { manual, windowCreated };

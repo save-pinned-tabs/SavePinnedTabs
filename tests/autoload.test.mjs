@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createStartupAutoload, restoreAutoloadSet } from '../autoload.mjs';
+import { createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
 
 function deferred() {
   let resolve;
@@ -133,13 +133,13 @@ test('runs startup restoration once when both startup triggers fire', async () =
       return [{ id: 1, type: 'normal' }];
     },
     async getCurrent() {
-      return { id: 1, type: 'normal' };
+      return { id: 99, type: 'popup' };
     },
   };
   const autoload = createStartupAutoload(browser, () => fallbackDelay.promise);
 
   const fallback = autoload.manual();
-  const windowEvent = autoload.windowCreated({ id: 1, type: 'normal' });
+  const windowEvent = autoload.windowCreated({ id: 99, type: 'popup' });
   fallbackDelay.resolve();
   await Promise.all([fallback, windowEvent]);
 
@@ -159,7 +159,7 @@ test('allows startup restoration to retry after a failed attempt', async () => {
       return [{ id: 1, type: 'normal' }];
     },
   };
-  const autoload = createStartupAutoload(browser);
+  const autoload = createStartupAutoload(browser, async () => {});
 
   await assert.rejects(
     autoload.windowCreated({ id: 1, type: 'normal' }),
