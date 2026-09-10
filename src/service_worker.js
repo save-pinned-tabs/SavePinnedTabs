@@ -1,5 +1,6 @@
 import { preloadFavicons } from './autoload.mjs';
 import { createBrowserLifecycle } from './browser-lifecycle.mjs';
+import { createBrowserTabSetController } from './browser-tab-set-controller.mjs';
 import { registerCommands } from './commands.mjs';
 import {
   createBrowserWindowTabState,
@@ -12,12 +13,13 @@ const windowTabState = createBrowserWindowTabState(browser, {
     void preloadFavicons(browser, urls);
   },
 });
+const tabSetController = createBrowserTabSetController(browser, { windowTabState });
 const browserLifecycle = createBrowserLifecycle(browser, {
   windowTabState,
 });
 
 registerWindowTabStateMessages(browser, windowTabState);
-registerCommands(browser, windowTabState);
+registerCommands(browser, tabSetController);
 
 export function handleStartup() {
   return browserLifecycle.onBrowserStartup();

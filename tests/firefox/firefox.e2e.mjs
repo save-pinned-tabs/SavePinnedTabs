@@ -20,9 +20,6 @@ let addonPath;
 let extensionOrigin;
 let profileDirectory;
 
-function isPageUnloading(error) {
-  return /Document was unloaded|browser is not defined|can't access dead object/.test(error.message);
-}
 
 async function launchFirefox({ installAddon = false } = {}) {
   const options = new firefox.Options()
@@ -69,8 +66,8 @@ after(async () => {
 test("Firefox runs the background fallback and saves and loads pinned tabs", async () => {
   await driver.get(`${extensionOrigin}/popup.html`);
   await driver.wait(
-    () => driver.executeScript('return document.activeElement?.id === "save-name";'),
-    5_000,
+    () => driver.executeScript('return document.getElementById("save-button")?.disabled === false;'),
+    10_000,
   );
 
 
@@ -94,18 +91,12 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
   await driver.findElement(By.id("save-name")).sendKeys("Firefox");
   const savePageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.findElement(By.id("save-button")).click();
-  await driver.wait(async () => {
-    try {
-      return await driver.executeScript(
-        "return performance.timeOrigin !== arguments[0]",
-        savePageLoadTime,
-      );
-    } catch (error) {
-      if (isPageUnloading(error)) return false;
-      throw error;
-    }
-  }, 10_000);
   await driver.wait(until.elementLocated(By.css('.load-row[data-name="Firefox"]')), 10_000);
+  assert.equal(
+    await driver.executeScript("return performance.timeOrigin"),
+    savePageLoadTime,
+    "saving unexpectedly reloaded the popup",
+  );
 
   const unwantedUrl = `${extensionOrigin}/options.html?firefox-unwanted`;
   await driver.executeAsyncScript((url, done) => {
@@ -117,37 +108,33 @@ test("Firefox runs the background fallback and saves and loads pinned tabs", asy
     "arguments[0].click()",
     await driver.findElement(By.css('.load-row[data-name="Firefox"] .set-load')),
   );
-  await driver.wait(async () => {
-    try {
-      return await driver.executeScript(
-        "return performance.timeOrigin !== arguments[0]",
-        pageLoadTime,
-      );
-    } catch (error) {
-      if (isPageUnloading(error)) return false;
-      throw error;
-    }
-  }, 10_000);
-  await driver.wait(async () => {
-    try {
-      return await driver.executeAsyncScript((expected, unwanted, done) => {
-        browser.tabs.query({ pinned: true, currentWindow: true }).then((tabs) => {
-          const urls = tabs.map((tab) => tab.url);
-          done(urls.includes(expected) && !urls.includes(unwanted));
-        });
-      }, savedUrl, unwantedUrl);
-    } catch (error) {
-      if (/Document was unloaded|browser is not defined|can't access dead object/.test(error.message)) {
-        return false;
-      }
-      throw error;
-    }
-  }, 10_000);
+  await driver.wait(
+    until.elementTextIs(await driver.findElement(By.id("popup-status")), "Tab set loaded."),
+    10_000,
+  );
+  assert.equal(
+    await driver.executeScript("return performance.timeOrigin"),
+    pageLoadTime,
+    "loading unexpectedly reloaded the popup",
+  );
+  await driver.wait(
+    () => driver.executeAsyncScript((expected, unwanted, done) => {
+      browser.tabs.query({ pinned: true, currentWindow: true }).then((tabs) => {
+        const urls = tabs.map((tab) => tab.url);
+        done(urls.includes(expected) && !urls.includes(unwanted));
+      });
+    }, savedUrl, unwantedUrl),
+    10_000,
+  );
 });
 
 test("Firefox restores Autoload after a browser restart", async () => {
   const autoloadUrl = `${extensionOrigin}/options.html?firefox-restart`;
   await driver.get(`${extensionOrigin}/options.html`);
+  await driver.wait(
+    () => driver.executeScript('return document.body.getAttribute("aria-busy") === "false";'),
+    10_000,
+  );
   const setupError = await driver.executeAsyncScript((url, done) => {
     Promise.all([
       browser.storage.sync.remove("savePinnedTabs:sync"),

@@ -1,16 +1,7 @@
-import { Sets } from "./functions.js";
+import { createBrowserTabSetController } from './browser-tab-set-controller.mjs';
+import { startPopupApp } from './popup-app.mjs';
+import { createPopupUi } from './popup-ui.mjs';
 
-document.getElementById('save-button').addEventListener('click', function () {
-	var name = document.getElementById('save-name').value;
-	if (name) Sets.save(name).catch(console.error);
-});
-document.getElementById('save-name').addEventListener('keydown', function (event) {
-	if (event.keyCode == 13) {
-		var name = document.getElementById('save-name').value;
-		if (name) Sets.save(name).catch(console.error);
-	}
-});
-document.getElementById('save-name').focus();
-document.addEventListener('DOMContentLoaded', function () {
-	Sets.get().catch(console.error);
-});
+const browser = globalThis.browser ?? globalThis.chrome;
+const controller = createBrowserTabSetController(browser);
+startPopupApp(controller, createPopupUi(document));

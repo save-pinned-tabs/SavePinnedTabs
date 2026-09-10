@@ -26,31 +26,27 @@ async function removePinnedTabs(page) {
 
 async function saveSet(page, name) {
   await page.getByPlaceholder("Enter a name for set...").fill(name);
-  await Promise.all([
-    page.waitForNavigation(),
-    page.getByRole("button", { name: "Save", exact: true }).click(),
-  ]);
+  const pageLoadTime = await page.evaluate(() => performance.timeOrigin);
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Tab set saved.");
   await expect(page.locator(".load-row", { hasText: name })).toBeVisible();
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 }
 
 async function selectAutoloadSet(page, name) {
-  await Promise.all([
-    page.waitForNavigation(),
-    page
-      .locator(".load-row", { hasText: name })
-      .locator("input[name=autoload]")
-      .check(),
-  ]);
+  await page
+    .locator(".load-row", { hasText: name })
+    .locator("input[name=autoload]")
+    .check();
+  await expect(page.getByRole("status")).toHaveText("Autoload selection updated.");
 }
 
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
   await expect(page.locator("#delete-dialog")).toBeVisible();
-  await Promise.all([
-    page.waitForNavigation(),
-    page.getByRole("button", { name: "Delete", exact: true }).click(),
-  ]);
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Tab set deleted.");
   await expect(row).toHaveCount(0);
 }
 
@@ -78,19 +74,20 @@ test("a user can save, update, load, and delete a pinned tab set", async ({
   await saveSet(popup, "Work");
 
   await createPinnedTabs(popup, [secondUrl]);
-  await Promise.all([
-    popup.waitForNavigation(),
-    popup
-      .locator(".load-row", { hasText: "Work" })
-      .getByRole("button", { name: "Save", exact: true })
-      .click(),
-  ]);
+  const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
+  await popup
+    .locator(".load-row", { hasText: "Work" })
+    .getByRole("button", { name: "Save", exact: true })
+    .click();
+  await expect(popup.getByRole("status")).toHaveText("Tab set saved.");
+  expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 
   await createPinnedTabs(popup, [unwantedUrl]);
   await popup
     .locator(".load-row", { hasText: "Work" })
     .getByRole("button", { name: "Load" })
     .click();
+  await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
 
   await expectOpenTabs(context, [firstUrl, secondUrl], [unwantedUrl]);
   const workRow = popup.locator(".load-row", { hasText: "Work" });
@@ -142,7 +139,7 @@ test("a user can export and import tab sets", async ({ extension }) => {
   await options.locator("#import-input").setInputFiles(exportPath);
   await options.getByRole("button", { name: "Import" }).click();
   await expect(
-    options.getByText("Successfully Imported 1 Tab Sets", { exact: true }),
+    options.getByText("Successfully imported 1 tab set.", { exact: true }),
   ).toBeVisible();
 
   await popup.reload();
@@ -168,7 +165,7 @@ test("an imported tab-set name is rendered as text", async ({ extension }) => {
   });
   await options.getByRole("button", { name: "Import" }).click();
   await expect(
-    options.getByText("Successfully Imported 1 Tab Sets", { exact: true }),
+    options.getByText("Successfully imported 1 tab set.", { exact: true }),
   ).toBeVisible();
 
   const popup = await openExtensionPage(context, extensionId, "popup.html");

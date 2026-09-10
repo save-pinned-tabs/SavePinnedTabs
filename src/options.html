@@ -12,9 +12,6 @@
       .section {
         margin: 30px 10px 30px 10px;
       }
-      .color-red {
-        color: red;
-      }
     </style>
   </head>
 
@@ -29,7 +26,7 @@
         <p><label><span data-shortcut-label="load-set-2">Shortcut 2</span> <select data-shortcut-command="load-set-2"></select></label></p>
         <p><label><span data-shortcut-label="load-set-3">Shortcut 3</span> <select data-shortcut-command="load-set-3"></select></label></p>
         <p><label><span data-shortcut-label="load-set-4">Shortcut 4</span> <select data-shortcut-command="load-set-4"></select></label></p>
-        <p id="shortcut-status" class="color-red" role="status"></p>
+        <p id="options-status" class="operation-status" role="status" aria-live="polite"></p>
       </div>
 
       <div class="section">
@@ -45,14 +42,6 @@
         <button id="import-button">Import</button>
       </div>
 
-      <dialog id="notification-dialog" aria-labelledby="notification-message">
-        <form method="dialog">
-          <p id="notification-message"></p>
-          <div class="dialog-actions">
-            <button value="close" autofocus>OK</button>
-          </div>
-        </form>
-      </dialog>
 
       <script src="lib/FileSaver.min.js"></script>
       <script src="lib/validate_sets_schema.min.js"></script>
