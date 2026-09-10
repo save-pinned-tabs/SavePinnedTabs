@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createStartupAutoload, restoreAutoloadSet } from '../src/autoload.mjs';
+import { AUTOLOAD_SCOPE_EVERY_WINDOW } from '../src/settings.mjs';
 
 function deferred() {
   let resolve;
@@ -146,6 +147,77 @@ test('runs startup restoration once when both startup triggers fire', async () =
   assert.equal(setReads, 1);
 });
 
+test('restores the Autoload set in every new window when configured', async () => {
+  const queriedWindowIds = [];
+  const createdWindowIds = [];
+  const browser = createBrowser({
+    sets: {
+      saved: {
+        autoload: 1,
+        tabs: ['https://saved.example/'],
+      },
+    },
+    createTab: async ({ windowId }) => {
+      createdWindowIds.push(windowId);
+    },
+  });
+  browser.storage.local.get = async (key) => (
+    key === 'autoloadScope'
+      ? { autoloadScope: AUTOLOAD_SCOPE_EVERY_WINDOW }
+      : { activeTabs: {} }
+  );
+  browser.tabs.query = async ({ windowId }) => {
+    queriedWindowIds.push(windowId);
+    return [];
+  };
+  browser.windows = {
+    async getAll() {
+      return [{ id: 1, type: 'normal' }];
+    },
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.windowCreated({ id: 1, type: 'normal' });
+  await autoload.windowCreated({ id: 2, type: 'normal' });
+
+  assert.deepEqual(queriedWindowIds, [1, 2]);
+  assert.deepEqual(createdWindowIds, [1, 2]);
+});
+
+test('does not restore later windows with the default scope', async () => {
+  const queriedWindowIds = [];
+  const browser = createBrowser();
+  browser.tabs.query = async ({ windowId }) => {
+    queriedWindowIds.push(windowId);
+    return [];
+  };
+  browser.windows = {
+    async getAll() {
+      return [{ id: 1, type: 'normal' }];
+    },
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.manual();
+  await autoload.windowCreated({ id: 2, type: 'normal' });
+
+  assert.deepEqual(queriedWindowIds, [1]);
+});
+
+test('does not treat a window event after worker restart as browser startup', async () => {
+  const queriedWindowIds = [];
+  const browser = createBrowser();
+  browser.tabs.query = async ({ windowId }) => {
+    queriedWindowIds.push(windowId);
+    return [];
+  };
+  const autoload = createStartupAutoload(browser, async () => {});
+
+  await autoload.windowCreated({ id: 2, type: 'normal' });
+
+  assert.deepEqual(queriedWindowIds, []);
+});
+
 test('retries startup restoration when the first window is not ready', async () => {
   let windows = [];
   let setReads = 0;
@@ -233,13 +305,13 @@ test('allows startup restoration to retry with a replacement window', async () =
   const autoload = createStartupAutoload(browser, async () => {});
 
   await assert.rejects(
-    autoload.windowCreated({ id: 1, type: 'normal' }),
+    autoload.manual(),
     /storage unavailable/,
   );
-  await autoload.windowCreated({ id: 2, type: 'normal' });
+  await autoload.windowCreated({ id: 3, type: 'normal' });
 
   assert.equal(attempts, 2);
-  assert.deepEqual(queriedWindowIds, [1, 2]);
+  assert.deepEqual(queriedWindowIds, [2, 3]);
 });
 
 test('creates restored tabs sequentially', async () => {

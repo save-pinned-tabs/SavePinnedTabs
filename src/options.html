@@ -23,6 +23,20 @@
       <h1>Save Pinned Tabs - Options</h1>
       <hr>
       <div class="section">
+        <h2>Autoload Scope</h2>
+        <p>Choose which browser windows receive the Autoload tab set.</p>
+        <label>
+          <input type="radio" name="autoload-scope" value="first-window" disabled>
+          First browser window only
+        </label>
+        <br>
+        <label>
+          <input type="radio" name="autoload-scope" value="every-window" disabled>
+          Every new browser window
+        </label>
+      </div>
+
+      <div class="section">
         <h2>Export Tab Sets</h1>
         <p>Save all your current tab sets to a file.</p>
         <button id="export-button">Export</button>

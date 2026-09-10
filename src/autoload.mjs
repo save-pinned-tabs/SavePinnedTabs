@@ -1,3 +1,5 @@
+import { AUTOLOAD_SCOPE_EVERY_WINDOW, getAutoloadScope } from './settings.mjs';
+
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -71,6 +73,8 @@ const STARTUP_WINDOW_ATTEMPTS = 100;
 export function createStartupAutoload(browser, delay = wait) {
   let restoration;
   let createdNormalWindow;
+  let restoredWindowId;
+  let startupRequested = false;
 
   async function findStartupWindow() {
     for (let attempt = 0; attempt < STARTUP_WINDOW_ATTEMPTS; attempt += 1) {
@@ -93,6 +97,7 @@ export function createStartupAutoload(browser, delay = wait) {
           return;
         }
         await restoreAutoloadSet(browser, startupWindow.id);
+        restoredWindowId = startupWindow.id;
       })().catch((error) => {
         createdNormalWindow = undefined;
         restoration = undefined;
@@ -102,14 +107,27 @@ export function createStartupAutoload(browser, delay = wait) {
     return restoration;
   }
 
-  function windowCreated(window) {
-    if (window?.type === 'normal' && !createdNormalWindow) {
-      createdNormalWindow = window;
+  async function windowCreated(window) {
+    if (window?.type !== 'normal') return;
+    if (!createdNormalWindow) createdNormalWindow = window;
+
+    if (restoration) {
+      await restoration;
+      if (window.id === restoredWindowId) return;
+      if (await getAutoloadScope(browser) === AUTOLOAD_SCOPE_EVERY_WINDOW) {
+        return restoreAutoloadSet(browser, window.id);
+      }
+      return;
     }
-    return restoreOnce();
+
+    if (startupRequested) return restoreOnce();
+    if (await getAutoloadScope(browser) === AUTOLOAD_SCOPE_EVERY_WINDOW) {
+      return restoreOnce();
+    }
   }
 
   function manual() {
+    startupRequested = true;
     return restoreOnce();
   }
 
