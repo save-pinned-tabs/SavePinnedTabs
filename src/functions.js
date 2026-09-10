@@ -120,16 +120,14 @@ export var Sets = (function () {
                         autoloadLabel.append(autoloadInput, document.createTextNode(' Autoload'));
                         rowElement.appendChild(autoloadLabel);
 
-                        if (active === property) {
-                            const saveButton = document.createElement('button');
-                            saveButton.classList.add('set-save');
-                            saveButton.textContent = 'Save';
-                            saveButton.addEventListener('click', function () {
-                                const auto = row.autoload == 1 ? 1 : 0;
-                                saveWithFeedback(row.set_name, auto);
-                            });
-                            rowElement.appendChild(saveButton);
-                        }
+                        const saveButton = document.createElement('button');
+                        saveButton.classList.add('set-save');
+                        saveButton.textContent = 'Save';
+                        saveButton.addEventListener('click', function () {
+                            const auto = row.autoload == 1 ? 1 : 0;
+                            saveWithFeedback(row.set_name, auto);
+                        });
+                        rowElement.appendChild(saveButton);
 
                         const loadButton = document.createElement('button');
                         loadButton.classList.add('set-load');
