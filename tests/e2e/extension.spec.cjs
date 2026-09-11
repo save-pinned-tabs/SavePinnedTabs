@@ -52,6 +52,24 @@ async function selectAutoloadSet(page, name) {
   await expect(page.getByRole("status")).toHaveText("Autoload selection updated.");
 }
 
+async function clearAutoloadSet(page, name) {
+  await page
+    .locator(".load-row", { hasText: name })
+    .locator("input[name=autoload]")
+    .uncheck();
+  await expect(page.getByRole("status")).toHaveText("Autoload selection updated.");
+}
+
+async function runStartupHandler(page) {
+  await page.evaluate(async () => {
+    await chrome.storage.session.remove("savePinnedTabs:lifecycle");
+    const { handleStartup } = await import(
+      chrome.runtime.getURL("background/service-worker.js")
+    );
+    await handleStartup();
+  });
+}
+
 async function deleteSet(page, name) {
   const row = page.locator(".load-row", { hasText: name });
   await row.getByRole("button", { name: "Del" }).click();
@@ -520,6 +538,179 @@ test("an autoload selection persists across browser restart", async () => {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
+  }
+});
+
+test("restart leaves pinned tabs unchanged without an autoload selection", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-no-autoload-"));
+  let firstLaunch;
+  let secondLaunch;
+
+  try {
+    firstLaunch = await launchExtension(userDataDir);
+    const popup = await openExtensionPage(
+      firstLaunch.context,
+      firstLaunch.extensionId,
+      "popup/popup.html",
+    );
+    const pinnedUrl = `chrome-extension://${firstLaunch.extensionId}/options/options.html?no-autoload`;
+    await createPinnedTabs(popup, [pinnedUrl]);
+    await firstLaunch.context.close();
+    firstLaunch = undefined;
+
+    secondLaunch = await launchExtension(userDataDir);
+    const reopenedPopup = await openExtensionPage(
+      secondLaunch.context,
+      secondLaunch.extensionId,
+      "popup/popup.html",
+    );
+    await runStartupHandler(reopenedPopup);
+    expect(await pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)))
+      .toEqual([pinnedUrl]);
+  } finally {
+    await firstLaunch?.context.close();
+    await secondLaunch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("first-window autoload does not restore into a later window", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-first-window-"));
+  const server = http.createServer((request, response) => {
+    response.end("<!doctype html><title>First window</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const { port } = server.address();
+    const autoloadUrl = `http://127.0.0.1:${port}/first-window`;
+    const secondWindowUrl = `http://127.0.0.1:${port}/second-window`;
+    await createPinnedTabs(popup, [autoloadUrl]);
+    await saveSet(popup, "First window");
+    await selectAutoloadSet(popup, "First window");
+    await removePinnedTabs(popup);
+    await launch.context.close();
+
+    launch = await launchExtension(userDataDir);
+    popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
+    await runStartupHandler(popup);
+    await expectOpenTabs(launch.context, [autoloadUrl]);
+    const secondWindow = await popup.evaluate(
+      (url) => chrome.windows.create({ url }),
+      secondWindowUrl,
+    );
+
+    await expect.poll(() => pinnedUrls(popup, secondWindow.id)).toEqual([]);
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+  }
+});
+
+test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-repeat-"));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?repeat`;
+    await createPinnedTabs(popup, [autoloadUrl]);
+    await saveSet(popup, "Repeat");
+    await selectAutoloadSet(popup, "Repeat");
+
+    for (let restart = 0; restart < 2; restart += 1) {
+      await launch.context.close();
+      launch = await launchExtension(userDataDir);
+      popup = await openExtensionPage(
+        launch.context,
+        launch.extensionId,
+        "popup/popup.html",
+      );
+      await runStartupHandler(popup);
+      const urls = await pinnedUrls(popup, await currentWindowId(popup));
+      expect(urls.filter((url) => url === autoloadUrl)).toHaveLength(1);
+    }
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("cleared autoload selection is not restored after restart", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-clear-autoload-"));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?clear`;
+    await createPinnedTabs(popup, [autoloadUrl]);
+    await saveSet(popup, "Clear");
+    await selectAutoloadSet(popup, "Clear");
+    await clearAutoloadSet(popup, "Clear");
+    await removePinnedTabs(popup);
+    await launch.context.close();
+
+    launch = await launchExtension(userDataDir);
+    popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
+    await runStartupHandler(popup);
+    expect(await pinnedUrls(popup, await currentWindowId(popup))).not.toContain(autoloadUrl);
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("deleted autoload set is not restored after restart", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-delete-autoload-"));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?deleted`;
+    await createPinnedTabs(popup, [autoloadUrl]);
+    await saveSet(popup, "Deleted");
+    await selectAutoloadSet(popup, "Deleted");
+    await deleteSet(popup, "Deleted");
+    await removePinnedTabs(popup);
+    await launch.context.close();
+
+    launch = await launchExtension(userDataDir);
+    popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
+    await runStartupHandler(popup);
+    expect(await pinnedUrls(popup, await currentWindowId(popup))).not.toContain(autoloadUrl);
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
   }
 });
 
