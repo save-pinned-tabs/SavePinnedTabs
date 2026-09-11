@@ -1,27 +1,27 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { TabSetRepository } from '../src/tab-sets/tab-set-repository.mjs';
+import { TabSetRepository } from '../.extension-build/tab-sets/tab-set-repository.js';
 import {
   BrowserTabSetStorage,
   InMemoryTabSetStorage,
-} from '../src/tab-sets/tab-set-storage.mjs';
+} from '../.extension-build/tab-sets/tab-set-storage.js';
 import {
   BrowserReferenceStorage,
   BrowserStorageMigration,
   InMemoryReferenceStorage,
   LOCAL_DOCUMENT_KEY,
   SYNC_DOCUMENT_KEY,
-} from '../src/storage/storage-schema.mjs';
+} from '../.extension-build/storage/storage-schema.js';
 import {
   ShortcutAssignmentRepository,
   ShortcutAssignmentStorage,
-} from '../src/storage/shortcut-assignment-repository.mjs';
+} from '../.extension-build/storage/shortcut-assignment-repository.js';
 import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
-} from '../src/storage/window-session-repository.mjs';
+} from '../.extension-build/storage/window-session-repository.js';
 
 const FIRST_ID = '00000000-0000-4000-8000-000000000001';
 const SECOND_ID = '00000000-0000-4000-8000-000000000002';

@@ -7,7 +7,7 @@ const {
   launchExtension,
   openExtensionPage,
   test,
-} = require("./extension.fixture");
+} = require("./extension.fixture.cjs");
 
 async function createPinnedTabs(page, urls) {
   await page.evaluate(async (tabUrls) => {

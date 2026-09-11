@@ -5,8 +5,8 @@ import {
   createBrowserWindowTabState,
   createWindowTabStateClient,
   registerWindowTabStateMessages,
-} from '../src/storage/window-tab-state.mjs';
-import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage/storage-schema.mjs';
+} from '../.extension-build/storage/window-tab-state.js';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../.extension-build/storage/storage-schema.js';
 
 function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}) {
   const state = {

@@ -1,0 +1,91 @@
+import type { ExportDocument } from '../domain.js';
+import { TabSetRepository } from '../tab-sets/tab-set-repository.js';
+import { BrowserTabSetStorage } from '../tab-sets/tab-set-storage.js';
+import {
+  BrowserReferenceStorage,
+  BrowserStorageMigration,
+} from './storage-schema.js';
+import {
+  ShortcutAssignmentRepository,
+  ShortcutAssignmentStorage,
+} from './shortcut-assignment-repository.js';
+import {
+  BrowserWindowSessionStorage,
+  WindowSessionRepository,
+} from './window-session-repository.js';
+
+type SyncStorage =
+  & ConstructorParameters<typeof BrowserStorageMigration>[0]
+  & ConstructorParameters<typeof BrowserTabSetStorage>[0];
+
+type LocalStorage =
+  & ConstructorParameters<typeof BrowserStorageMigration>[1]
+  & ConstructorParameters<typeof BrowserReferenceStorage>[0];
+
+interface BrowserApi {
+  readonly storage: {
+    readonly sync: SyncStorage;
+    readonly local: LocalStorage;
+  };
+}
+
+interface BrowserRepositories {
+  readonly tabSets: TabSetRepository;
+  readonly windowSessions: WindowSessionRepository;
+  readonly shortcutAssignments: ShortcutAssignmentRepository;
+}
+
+type ImportValidator = (
+  document: unknown,
+) => document is ExportDocument;
+
+declare global {
+  var validate20: ImportValidator | undefined;
+}
+
+const repositoriesByBrowser = new WeakMap<BrowserApi, BrowserRepositories>();
+
+export function createBrowserRepositories(
+  browser: BrowserApi,
+): BrowserRepositories {
+  const cached = repositoriesByBrowser.get(browser);
+  if (cached) return cached;
+
+  const migration = new BrowserStorageMigration(
+    browser.storage.sync,
+    browser.storage.local,
+  );
+  const referenceStorage = new BrowserReferenceStorage(
+    browser.storage.local,
+    migration,
+  );
+  const windowSessions = new WindowSessionRepository(
+    new BrowserWindowSessionStorage(referenceStorage),
+  );
+
+  let tabSets: TabSetRepository;
+  const shortcutAssignments = new ShortcutAssignmentRepository(
+    new ShortcutAssignmentStorage(referenceStorage),
+    {
+      hasSet: async (setId) => (await tabSets.get(setId)) !== undefined,
+    },
+  );
+
+  tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(browser.storage.sync, migration),
+    {
+      validateImport(document: unknown): document is ExportDocument {
+        return (
+          typeof globalThis.validate20 === 'function'
+          && globalThis.validate20(document)
+        );
+      },
+      windowSessions,
+      shortcutAssignments,
+    },
+  );
+
+  const repositories = { tabSets, windowSessions, shortcutAssignments };
+  repositoriesByBrowser.set(browser, repositories);
+  return repositories;
+}

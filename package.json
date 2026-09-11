@@ -2,6 +2,7 @@
   "name": "savepinned",
   "version": "3.0.1",
   "description": "A chrome extension to save and load groups of pinned tabs",
+  "type": "module",
   "main": "background.js",
   "scripts": {
     "new-profile:chromium": "chromium --user-data-dir=savepinned-profile-chromium --first-run",
@@ -10,17 +11,18 @@
     "new-profile:firefox-mac": "/Applications/Firefox.app/Contents/MacOS/firefox-bin -CreateProfile savepinned-profile-firefox",
     "new-profile:brave": "brave-browser --user-data-dir=savepinned-profile-brave --first-run",
     "new-profile:vivaldi": "vivaldi --user-data-dir=savepinned-profile-vivaldi --first-run",
-    "run:chromium": "web-ext run --source-dir src -t chromium --keep-profile-changes --pre-install --chromium-profile savepinned-profile-chromium -v",
-    "run:firefox": "web-ext run --source-dir src -t firefox-desktop --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
-    "run:firefox-mac": "web-ext run --source-dir src -t firefox-desktop --firefox-binary=/Applications/Firefox\\ Developer\\ Edition.app/Contents/MacOS/firefox-bin --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
-    "run:brave": "web-ext run --source-dir src -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
-    "run:vivaldi": "web-ext run --source-dir src -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
+    "run:chromium": "tsc && node scripts/prepare-extension.mjs && web-ext run --source-dir .extension-build -t chromium --keep-profile-changes --pre-install --chromium-profile savepinned-profile-chromium -v",
+    "run:firefox": "tsc && node scripts/prepare-extension.mjs && web-ext run --source-dir .extension-build -t firefox-desktop --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
+    "run:firefox-mac": "tsc && node scripts/prepare-extension.mjs && web-ext run --source-dir .extension-build -t firefox-desktop --firefox-binary=/Applications/Firefox\\ Developer\\ Edition.app/Contents/MacOS/firefox-bin --keep-profile-changes --pre-install --firefox-profile savepinned-profile-firefox -v --bc",
+    "run:brave": "tsc && node scripts/prepare-extension.mjs && web-ext run --source-dir .extension-build -t chromium --chromium-binary=brave-browser --keep-profile-changes --pre-install --chromium-profile savepinned-profile-brave",
+    "run:vivaldi": "tsc && node scripts/prepare-extension.mjs && web-ext run --source-dir .extension-build -t chromium --chromium-binary=vivaldi --keep-profile-changes --pre-install --chromium-profile savepinned-profile-vivaldi",
     "build": "node scripts/build-extension.mjs chromium",
     "build:firefox": "node scripts/build-extension.mjs firefox",
-    "compile-sets-schema": "node schema/compile-sets-validator.js",
+    "typecheck": "tsc --noEmit",
+    "compile-sets-schema": "node schema/compile-sets-validator.cjs",
     "test": "npm run test:unit && npm run test:e2e && npm run test:e2e:firefox",
-    "test:unit": "node --test tests/*.test.mjs",
-    "test:e2e": "playwright test",
+    "test:unit": "tsc && node --test tests/*.test.mjs",
+    "test:e2e": "tsc && node scripts/prepare-extension.mjs && playwright test",
     "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs"
   },
   "repository": {
@@ -37,6 +39,7 @@
     "@playwright/test": "^1.62.1",
     "ajv": "^8.20.0",
     "selenium-webdriver": "^4.48.0",
+    "typescript": "^7.0.2",
     "web-ext": "^10.6.0"
   }
 }
