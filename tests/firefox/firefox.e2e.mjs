@@ -94,9 +94,15 @@ async function openStorageFixturePage() {
 }
 
 async function createPinnedTabs(urls) {
-  const error = await driver.executeAsyncScript((tabUrls, done) => {
-    Promise.all(tabUrls.map((url) => browser.tabs.create({ url, pinned: true, active: false })))
-      .then(() => done(null), (cause) => done(cause.message));
+  const error = await driver.executeAsyncScript(async (tabUrls, done) => {
+    try {
+      for (const url of tabUrls) {
+        await browser.tabs.create({ url, pinned: true, active: false });
+      }
+      done(null);
+    } catch (cause) {
+      done(cause.message);
+    }
   }, urls);
   if (error) throw new Error(`Failed to create pinned tabs: ${error}`);
 }
@@ -121,6 +127,7 @@ async function pinnedUrls(windowId) {
     );
   }, windowId ?? null);
 }
+
 
 async function saveSet(name) {
   await driver.findElement(By.id("save-name")).sendKeys(name);
@@ -195,6 +202,56 @@ test("a user can load a pinned tab set without reloading", async () => {
   await waitForStatus("popup-status", "Tab set loaded.");
   assert.deepEqual(await pinnedUrls(), [savedUrl]);
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
+});
+
+test("loading a set changes only the initiating window and preserves pinned order", async () => {
+  await openExtensionPage("popup/popup.html");
+  const savedUrls = [
+    `${extensionOrigin}/options/options.html?ordered-first`,
+    `${extensionOrigin}/options/options.html?ordered-second`,
+  ];
+  await createPinnedTabs(savedUrls);
+  await saveSet("Ordered");
+  await removePinnedTabs();
+  const otherUrl = `${extensionOrigin}/options/options.html?other-window`;
+  const otherWindowId = await driver.executeAsyncScript(async (url, done) => {
+    const window = await browser.windows.create({ url });
+    const [tab] = await browser.tabs.query({ windowId: window.id });
+    await browser.tabs.update(tab.id, { pinned: true });
+    done(window.id);
+  }, otherUrl);
+  await openExtensionPage("popup/popup.html");
+  const initiatingWindowId = await driver.executeAsyncScript((done) => {
+    browser.windows.getCurrent().then((window) => done(window.id));
+  });
+
+  await driver.findElement(By.css('.load-row[data-name="Ordered"] .set-load')).click();
+
+  await waitForStatus("popup-status", "Tab set loaded.");
+  assert.deepEqual(await pinnedUrls(initiatingWindowId), savedUrls);
+  assert.deepEqual(await pinnedUrls(otherWindowId), [otherUrl]);
+});
+
+test("a tab creation failure preserves original pinned tabs and reports the failed URL", async () => {
+  const failedUrl = "http://[invalid";
+  await openExtensionPage("options/options.html");
+  const failingSetId = "00000000-0000-4000-8000-000000000001";
+  await importDocument({
+    version: 2,
+    sets: [{ id: failingSetId, name: "Failing", tabs: [failedUrl] }],
+    autoload: { scope: "first-window", setIds: [] },
+  }, "failing.json");
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  await openExtensionPage("popup/popup.html");
+  const originalUrl = `${extensionOrigin}/options/options.html?original`;
+  await createPinnedTabs([originalUrl]);
+
+  await driver.findElement(By.css('.load-row[data-name="Failing"] .set-load')).click();
+
+  await driver.wait(async () => (
+    (await driver.findElement(By.id("popup-status")).getText()).includes(failedUrl)
+  ), 10_000, "actionable failed URL");
+  assert.deepEqual(await pinnedUrls(), [originalUrl]);
 });
 
 test("a user can cancel deletion with Escape", async () => {
@@ -432,6 +489,47 @@ test("a schema-invalid import is rejected", async () => {
   ), 10_000);
   await openExtensionPage("popup/popup.html");
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Invalid"]'))).length, 0);
+});
+
+test("an imported every-window set autoloads in existing and new windows", async () => {
+  await openExtensionPage("popup/popup.html");
+  await driver.executeAsyncScript((url, done) => {
+    browser.windows.create({ url }).then(() => done());
+  }, `${extensionOrigin}/options/options.html?existing-window`);
+  await openExtensionPage("options/options.html");
+  const autoloadUrl = `${extensionOrigin}/options/options.html?every-window`;
+  const everyWindowSetId = "00000000-0000-4000-8000-000000000002";
+  await importDocument({
+    version: 2,
+    sets: [{ id: everyWindowSetId, name: "Every window", tabs: [autoloadUrl] }],
+    autoload: { scope: "every-window", setIds: [everyWindowSetId] },
+  }, "every-window.json");
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  const existingWindowIds = await driver.executeAsyncScript((done) => {
+    browser.windows.getAll({ windowTypes: ["normal"] }).then(
+      (windows) => done(windows.map((window) => window.id)),
+    );
+  });
+  assert.ok(existingWindowIds.length >= 2, "Firefox restored both existing windows");
+
+  await driver.wait(async () => {
+    const tabsByWindow = await Promise.all(existingWindowIds.map(pinnedUrls));
+    return tabsByWindow.every((urls) => urls.includes(autoloadUrl));
+  }, 30_000, "existing windows to receive imported every-window set");
+
+  const newWindowId = await driver.executeAsyncScript((url, done) => {
+    browser.windows.create({ url }).then((window) => done(window.id));
+  }, `${extensionOrigin}/options/options.html?new-window`);
+  await driver.wait(
+    async () => (await pinnedUrls(newWindowId)).includes(autoloadUrl),
+    30_000,
+    "new window to receive imported every-window set",
+  );
+  for (const windowId of [...existingWindowIds, newWindowId]) {
+    assert.deepEqual(await pinnedUrls(windowId), [autoloadUrl]);
+  }
 });
 
 test("startup keeps an already restored pinned tab open", async () => {
