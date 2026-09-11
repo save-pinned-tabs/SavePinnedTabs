@@ -1,27 +1,28 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { TabSetRepository } from '../src/tab-sets/tab-set-repository.mjs';
+import { createBrowserRepositories } from '../.extension-build/storage/browser-repositories.js';
+import { TabSetRepository } from '../.extension-build/tab-sets/tab-set-repository.js';
 import {
   BrowserTabSetStorage,
   InMemoryTabSetStorage,
-} from '../src/tab-sets/tab-set-storage.mjs';
+} from '../.extension-build/tab-sets/tab-set-storage.js';
 import {
   BrowserReferenceStorage,
   BrowserStorageMigration,
   InMemoryReferenceStorage,
   LOCAL_DOCUMENT_KEY,
   SYNC_DOCUMENT_KEY,
-} from '../src/storage/storage-schema.mjs';
+} from '../.extension-build/storage/storage-schema.js';
 import {
   ShortcutAssignmentRepository,
   ShortcutAssignmentStorage,
-} from '../src/storage/shortcut-assignment-repository.mjs';
+} from '../.extension-build/storage/shortcut-assignment-repository.js';
 import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
-} from '../src/storage/window-session-repository.mjs';
+} from '../.extension-build/storage/window-session-repository.js';
 
 const FIRST_ID = '00000000-0000-4000-8000-000000000001';
 const SECOND_ID = '00000000-0000-4000-8000-000000000002';
@@ -113,6 +114,68 @@ function createMemoryHarness(createId = idGenerator()) {
   });
   return { tabSets, windowSessions, shortcutAssignments };
 }
+
+test('browser repositories reject shortcut assignments to missing tab sets', async () => {
+  const browser = {
+    storage: {
+      sync: createStorageArea(),
+      local: createStorageArea(),
+    },
+  };
+  const { shortcutAssignments } = createBrowserRepositories(browser);
+
+  await assert.rejects(
+    shortcutAssignments.assign('load-set-1', FIRST_ID),
+    /does not exist/,
+  );
+});
+
+test('browser storage rejects incomplete persisted tab sets', async () => {
+  const storage = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: { [FIRST_ID]: { id: FIRST_ID } },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+    },
+  });
+
+  await assert.rejects(
+    new BrowserTabSetStorage(storage).list(),
+    /Stored tab set document is invalid/,
+  );
+});
+
+test('current schema documents recover missing optional fields', async () => {
+  const savedSet = {
+    id: FIRST_ID,
+    name: 'Recovered',
+    tabs: ['https://recovered.example/'],
+  };
+  const harness = createBrowserHarness({
+    sync: {
+      [SYNC_DOCUMENT_KEY]: {
+        version: 2,
+        sets: { [FIRST_ID]: savedSet },
+      },
+    },
+    local: {
+      [LOCAL_DOCUMENT_KEY]: {
+        version: 2,
+      },
+    },
+  });
+
+  assert.deepEqual(await harness.tabSets.list(), [savedSet]);
+  assert.deepEqual(
+    harness.syncStorage.state[SYNC_DOCUMENT_KEY].autoload,
+    { scope: 'first-window', setIds: [] },
+  );
+  assert.deepEqual(
+    harness.syncStorage.state[SYNC_DOCUMENT_KEY].deletedSetIds,
+    [],
+  );
+});
 
 for (const [name, createHarness] of [
   ['browser', createBrowserHarness],
@@ -229,6 +292,24 @@ test('legacy browser profile migrates once with valid references and no mixed sc
 
   const ids = sets.map((set) => set.id);
   assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), ids);
+});
+
+test('versioned import maps duplicate source ids to the last imported set', async () => {
+  const { tabSets } = createMemoryHarness();
+  const imported = await tabSets.import({
+    version: 2,
+    sets: [
+      { id: FIRST_ID, name: 'First', tabs: [] },
+      { id: FIRST_ID, name: 'Duplicate', tabs: [] },
+    ],
+    autoload: { scope: 'first-window', setIds: [FIRST_ID] },
+  });
+
+  assert.deepEqual(imported.map((set) => set.id), [FIRST_ID, SECOND_ID]);
+  assert.deepEqual(
+    (await tabSets.getAutoload()).setIds,
+    [SECOND_ID],
+  );
 });
 
 test('saveForWindow rolls back new and updated records when session activation fails', async () => {

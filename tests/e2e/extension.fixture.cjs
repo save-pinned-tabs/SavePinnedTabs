@@ -3,7 +3,7 @@ const { mkdtemp, rm } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 
-const extensionPath = path.resolve(__dirname, "../../src");
+const extensionPath = path.resolve(__dirname, "../../.extension-build");
 
 async function launchExtension(userDataDir) {
   const browser = process.env.CHROMIUM_BINARY

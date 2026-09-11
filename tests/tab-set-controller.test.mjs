@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { TabSetController } from '../src/tab-sets/tab-set-controller.mjs';
+import { TabSetController } from '../.extension-build/tab-sets/tab-set-controller.js';
 
 function createHarness({ failAt } = {}) {
   const calls = [];

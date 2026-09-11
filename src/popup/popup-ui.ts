@@ -1,13 +1,49 @@
-export function createPopupUi(document) {
-  const saveForm = document.getElementById('save-form');
-  const saveName = document.getElementById('save-name');
-  const loadArea = document.getElementById('load-area');
-  const status = document.getElementById('popup-status');
-  const deleteDialog = document.getElementById('delete-dialog');
-  let actions;
+import type { TabSet } from '../domain.js';
+import { requireElement } from '../dom.js';
+
+type SetId = TabSet['id'];
+type SetSummary = Pick<TabSet, 'id' | 'name'>;
+
+interface ViewState {
+  readonly sets: readonly SetSummary[];
+  readonly activeSetId: SetId | null | undefined;
+  readonly autoloadSetIds: readonly SetId[];
+}
+
+interface Actions {
+  save(name: string, setId?: SetId): void;
+  load(setId: SetId): void;
+  append(setId: SetId): void;
+  unload(setId: SetId): void;
+  delete(setId: SetId): void;
+  setAutoload(setId: SetId, enabled: boolean): void;
+}
+
+interface View {
+  bind(this: View, actions: Actions): void;
+  render(state: ViewState): void;
+  setPending(pending: boolean): void;
+  focusSaveName(): void;
+  showStatus(message: string, kind: string): void;
+  clearSaveName(): void;
+  confirmDelete(): Promise<boolean>;
+}
+
+
+export function createPopupUi(document: Document): View {
+  const saveForm = requireElement(document, 'save-form', HTMLFormElement);
+  const saveName = requireElement(document, 'save-name', HTMLInputElement);
+  const loadArea = requireElement(document, 'load-area', HTMLElement);
+  const status = requireElement(document, 'popup-status', HTMLElement);
+  const deleteDialog = requireElement(document, 'delete-dialog', HTMLDialogElement);
+  let actions: Actions;
   let isPending = false;
 
-  function button(label, className, action) {
+  function button(
+    label: string,
+    className: string,
+    action: () => void,
+  ): HTMLButtonElement {
     const element = document.createElement('button');
     element.type = 'button';
     element.classList.add(className);
@@ -16,7 +52,7 @@ export function createPopupUi(document) {
     return element;
   }
 
-  function renderSet(set, state) {
+  function renderSet(set: SetSummary, state: ViewState): HTMLDivElement {
     const row = document.createElement('div');
     row.classList.add('load-row');
     if (state.activeSetId === set.id) row.classList.add('active');
@@ -31,7 +67,9 @@ export function createPopupUi(document) {
     autoload.type = 'checkbox';
     autoload.name = 'autoload';
     autoload.checked = state.autoloadSetIds.includes(set.id);
-    autoload.addEventListener('change', () => actions.setAutoload(set.id, autoload.checked));
+    autoload.addEventListener('change', () => {
+      actions.setAutoload(set.id, autoload.checked);
+    });
     autoloadLabel.append(autoload, document.createTextNode(' Autoload'));
     row.append(autoloadLabel);
 
@@ -45,14 +83,19 @@ export function createPopupUi(document) {
     return row;
   }
 
-  function syncPendingControls() {
+  function syncPendingControls(): void {
     document.body.setAttribute('aria-busy', String(isPending));
     for (const control of document.querySelectorAll('button, input')) {
-      if (!deleteDialog.contains(control)) control.disabled = isPending;
+      if (
+        control instanceof HTMLButtonElement
+        || control instanceof HTMLInputElement
+      ) {
+        if (!deleteDialog.contains(control)) control.disabled = isPending;
+      }
     }
   }
 
-  return {
+  const view: View = {
     bind(nextActions) {
       actions = nextActions;
       saveForm.addEventListener('submit', (event) => {
@@ -65,6 +108,7 @@ export function createPopupUi(document) {
         actions.save(name);
       });
     },
+
     render(state) {
       const rows = state.sets.map((set) => renderSet(set, state));
       if (rows.length === 0) {
@@ -76,28 +120,39 @@ export function createPopupUi(document) {
       loadArea.replaceChildren(...rows);
       syncPendingControls();
     },
+
     setPending(pending) {
       isPending = pending;
       syncPendingControls();
     },
+
     focusSaveName() {
       saveName.focus();
     },
+
     showStatus(message, kind) {
       status.textContent = message;
       status.dataset.kind = kind;
     },
+
     clearSaveName() {
       saveName.value = '';
     },
+
     confirmDelete() {
       deleteDialog.returnValue = '';
       deleteDialog.showModal();
-      return new Promise((resolve) => {
-        deleteDialog.addEventListener('close', () => {
-          resolve(deleteDialog.returnValue === 'delete');
-        }, { once: true });
+      return new Promise<boolean>((resolve) => {
+        deleteDialog.addEventListener(
+          'close',
+          () => {
+            resolve(deleteDialog.returnValue === 'delete');
+          },
+          { once: true },
+        );
       });
     },
   };
+
+  return view;
 }

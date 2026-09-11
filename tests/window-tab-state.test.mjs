@@ -5,8 +5,8 @@ import {
   createBrowserWindowTabState,
   createWindowTabStateClient,
   registerWindowTabStateMessages,
-} from '../src/storage/window-tab-state.mjs';
-import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../src/storage/storage-schema.mjs';
+} from '../.extension-build/storage/window-tab-state.js';
+import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../.extension-build/storage/storage-schema.js';
 
 function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}) {
   const state = {
@@ -571,4 +571,50 @@ test('background routing serializes isolated clients without Web Locks and relea
 
   assert.equal(peakQueries, 1);
   assert.deepEqual(pinnedUrls(state), ['https://first.example/', 'https://second.example/']);
+});
+
+test('message routing distinguishes invalid arguments from unknown operations', async () => {
+  let listener;
+  const browser = {
+    runtime: {
+      onMessage: {
+        addListener(nextListener) {
+          listener = nextListener;
+        },
+      },
+    },
+  };
+  const windowTabState = {
+    snapshot() {},
+    replace() {},
+    append() {},
+    unload() {},
+    captureAndSave() {},
+  };
+  registerWindowTabStateMessages(browser, windowTabState);
+
+  await assert.rejects(
+    listener({
+      type: 'save-pinned-tabs:window-tab-state',
+      operation: 'replace',
+      args: ['invalid-window-id', 'set'],
+    }),
+    /Invalid arguments.*replace/,
+  );
+  await assert.rejects(
+    listener({
+      type: 'save-pinned-tabs:window-tab-state',
+      operation: 'erase',
+      args: [],
+    }),
+    /Unknown WindowTabState operation "erase"/,
+  );
+  await assert.rejects(
+    listener({
+      type: 'save-pinned-tabs:window-tab-state',
+      operation: 'toString',
+      args: [],
+    }),
+    /Unknown WindowTabState operation "toString"/,
+  );
 });

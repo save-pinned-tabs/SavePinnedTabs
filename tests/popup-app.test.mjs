@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { startPopupApp } from '../src/popup/popup-app.mjs';
+import { startPopupApp } from '../.extension-build/popup/popup-app.js';
 
 function deferred() {
   return Promise.withResolvers();

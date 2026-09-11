@@ -5,7 +5,7 @@ import {
   AUTOLOAD_EVERY_WINDOW,
   AUTOLOAD_FIRST_WINDOW,
   BrowserLifecycle,
-} from '../src/background/browser-lifecycle.mjs';
+} from '../.extension-build/background/browser-lifecycle.js';
 
 class EphemeralWorkerStateStorage {
   #state;
@@ -39,7 +39,7 @@ function createHarness({
 
   function createWorker() {
     return new BrowserLifecycle({
-      autoloadPolicy: policy,
+      getAutoload: () => ({ scope: policy, setIds: [] }),
       stateStorage,
       windows: {
         async getAll() {
@@ -303,7 +303,7 @@ test('listener registration occurs during service-worker module evaluation', asy
   };
 
   try {
-    await import(`../src/background/service-worker.js?listener-test=${Date.now()}`);
+    await import(`../.extension-build/background/service-worker.js?listener-test=${Date.now()}`);
   } finally {
     delete globalThis.chrome;
   }
@@ -313,4 +313,30 @@ test('listener registration occurs during service-worker module evaluation', asy
     ['message', 'command', 'startup', 'created', 'removed'],
   );
   assert.ok(registered.every(([, listener]) => typeof listener === 'function'));
+});
+
+test('lifecycle rejects Autoload configurations with non-string set ids', async () => {
+  const lifecycle = new BrowserLifecycle({
+    getAutoload: async () => ({
+      scope: AUTOLOAD_FIRST_WINDOW,
+      setIds: [1],
+    }),
+    stateStorage: new EphemeralWorkerStateStorage(),
+    windows: {
+      async getAll() {
+        return [{ id: 1, type: 'normal' }];
+      },
+    },
+    windowTabState: {
+      async resetSessions() {},
+      async deactivate() {},
+    },
+    async restoreAutoload() {},
+    startupWindowAttempts: 1,
+  });
+
+  await assert.rejects(
+    lifecycle.onBrowserStartup(),
+    /Autoload setIds must contain only strings/,
+  );
 });
