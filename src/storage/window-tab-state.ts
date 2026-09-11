@@ -1,7 +1,4 @@
-import type {
-  BrowserApi,
-  BrowserStorageArea,
-} from '../browser-api.js';
+import type { BrowserApi } from '../browser-api.js';
 import type {
   TabSet,
   TabSetDetails,
@@ -11,6 +8,7 @@ import type {
 } from '../domain.js';
 import {
   errorMessage,
+  isInteger,
   isRecord,
   isStringArray,
 } from '../validation.js';
@@ -22,6 +20,14 @@ const WINDOW_LOCK_PREFIX = 'save-pinned-tabs:window-tabs:';
 const WINDOW_TAB_STATE_ERROR = Symbol('windowTabStateError');
 const WINDOW_TAB_STATE_MESSAGE = 'save-pinned-tabs:window-tab-state';
 
+
+const WINDOW_TAB_STATE_OPERATIONS: Record<WindowTabStateOperation, true> = {
+  snapshot: true,
+  replace: true,
+  append: true,
+  unload: true,
+  captureAndSave: true,
+};
 type WindowTabStateOperation =
   | 'snapshot'
   | 'replace'
@@ -47,7 +53,7 @@ interface PinnedTabs {
 }
 
 interface TabSetStore {
-  get(setId: TabSetId): Promise<TabSet | null | undefined>;
+  get(setId: TabSetId): Promise<TabSet | null>;
   saveForWindow(
     set: TabSetDraft,
     windowId: WindowId,
@@ -82,13 +88,7 @@ interface BrowserWindowTabStateOptions {
   onReplace?: (urls: string[]) => void;
 }
 
-function isUnknownArray(value: unknown): value is unknown[] {
-  return Array.isArray(value);
-}
 
-function isInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value);
-}
 
 function isTabSetId(value: unknown): value is TabSetId {
   return typeof value === 'string';
@@ -166,7 +166,7 @@ function effectiveUrl(tab: unknown): string {
 }
 
 function normalizeSavedUrls(urls: unknown): string[] {
-  if (!isUnknownArray(urls)) {
+  if (!Array.isArray(urls)) {
     throw new TypeError('Pinned tab list must be an array');
   }
   return urls.map(normalizeUrl);
@@ -237,7 +237,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
   async queryPinned(windowId: WindowId): Promise<PinnedTab[]> {
     try {
       const result = await this.#tabs.query({ pinned: true, windowId });
-      if (!isUnknownArray(result)) {
+      if (!Array.isArray(result)) {
         throw new Error('browser returned an invalid tab list');
       }
 
@@ -475,7 +475,7 @@ export class WindowTabState {
 
   async #requiredSet(setId: TabSetId): Promise<TabSet> {
     const set = await this.#tabSets.get(setId);
-    if (set === null || set === undefined) {
+    if (set === null) {
       throw new Error(`Tab set "${String(setId)}" does not exist`);
     }
     return set;
@@ -661,7 +661,7 @@ export function createBrowserWindowTabState(
 ): WindowTabState {
   const repositories = createBrowserRepositories(browser);
   const fallbackGlobalOperation = createSerializedStorageOperation(
-    browser.storage.local satisfies BrowserStorageArea,
+    browser.storage.local,
     ALL_WINDOWS_LOCK,
   );
 
@@ -681,7 +681,7 @@ export function createBrowserWindowTabState(
     operation: () => Promise<Result>,
   ): Promise<Result> {
     return createSerializedStorageOperation(
-      browser.storage.local satisfies BrowserStorageArea,
+      browser.storage.local,
       `${WINDOW_LOCK_PREFIX}${windowId}`,
     )(operation);
   }
@@ -814,13 +814,19 @@ export function registerWindowTabStateMessages(
     }
 
     const operation = message.operation;
-    const args = message.args;
-
-    if (!isUnknownArray(args)) {
+    if (
+      typeof operation !== 'string'
+      || !Object.hasOwn(WINDOW_TAB_STATE_OPERATIONS, operation)
+    ) {
       return Promise.reject(
-        new Error(
-          `Unknown WindowTabState operation "${String(operation)}"`,
-        ),
+        new Error(`Unknown WindowTabState operation "${String(operation)}"`),
+      );
+    }
+
+    const args = message.args;
+    if (!Array.isArray(args)) {
+      return Promise.reject(
+        new Error(`Invalid arguments for WindowTabState operation "${operation}"`),
       );
     }
 
@@ -861,9 +867,7 @@ export function registerWindowTabStateMessages(
     }
 
     return Promise.reject(
-      new Error(
-        `Unknown WindowTabState operation "${String(operation)}"`,
-      ),
+      new Error(`Invalid arguments for WindowTabState operation "${operation}"`),
     );
   });
 }

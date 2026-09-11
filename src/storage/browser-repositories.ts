@@ -55,7 +55,7 @@ export function createBrowserRepositories(
   const shortcutAssignments = new ShortcutAssignmentRepository(
     new ShortcutAssignmentStorage(referenceStorage),
     {
-      hasSet: async (setId) => (await tabSets.get(setId)) !== undefined,
+      hasSet: async (setId) => (await tabSets.get(setId)) !== null,
     },
   );
 

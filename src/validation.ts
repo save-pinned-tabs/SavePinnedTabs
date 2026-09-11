@@ -7,6 +7,10 @@ export function isStringArray(value: unknown): value is string[] {
     && value.every((item: unknown) => typeof item === 'string');
 }
 
+export function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value);
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (isRecord(error) && typeof error.message === 'string') return error.message;

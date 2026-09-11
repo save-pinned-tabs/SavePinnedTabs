@@ -36,7 +36,7 @@ interface WindowTabState {
   captureAndSave(
     windowId: WindowId,
     details: TabSetDetails,
-  ): MaybePromise<TabSet | null | undefined>;
+  ): MaybePromise<TabSet | null>;
   replace(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
   append(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
   unload(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;

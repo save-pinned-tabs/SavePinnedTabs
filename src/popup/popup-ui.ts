@@ -1,8 +1,8 @@
 import type { TabSet } from '../domain.js';
+import { requireElement } from '../dom.js';
 
 type SetId = TabSet['id'];
 type SetSummary = Pick<TabSet, 'id' | 'name'>;
-type ElementConstructor<T extends Element> = abstract new () => T;
 
 interface ViewState {
   readonly sets: readonly SetSummary[];
@@ -29,17 +29,6 @@ interface View {
   confirmDelete(): Promise<boolean>;
 }
 
-function requireElement<T extends Element>(
-  document: Document,
-  id: string,
-  constructor: ElementConstructor<T>,
-): T {
-  const element = document.getElementById(id);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Required element #${id} is missing or has an unexpected type.`);
-  }
-  return element;
-}
 
 export function createPopupUi(document: Document): View {
   const saveForm = requireElement(document, 'save-form', HTMLFormElement);

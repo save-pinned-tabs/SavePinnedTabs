@@ -314,3 +314,29 @@ test('listener registration occurs during service-worker module evaluation', asy
   );
   assert.ok(registered.every(([, listener]) => typeof listener === 'function'));
 });
+
+test('lifecycle rejects Autoload configurations with non-string set ids', async () => {
+  const lifecycle = new BrowserLifecycle({
+    getAutoload: async () => ({
+      scope: AUTOLOAD_FIRST_WINDOW,
+      setIds: [1],
+    }),
+    stateStorage: new EphemeralWorkerStateStorage(),
+    windows: {
+      async getAll() {
+        return [{ id: 1, type: 'normal' }];
+      },
+    },
+    windowTabState: {
+      async resetSessions() {},
+      async deactivate() {},
+    },
+    async restoreAutoload() {},
+    startupWindowAttempts: 1,
+  });
+
+  await assert.rejects(
+    lifecycle.onBrowserStartup(),
+    /Autoload setIds must contain only strings/,
+  );
+});

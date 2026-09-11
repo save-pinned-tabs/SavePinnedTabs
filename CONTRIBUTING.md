@@ -29,6 +29,9 @@ npm run test:e2e:firefox
 npm test
 ```
 
+The extension runtime source is in `src/**/*.ts`. Test scripts compile it before they run.
+Unit and browser tests load JavaScript from `.extension-build`. This directory is generated and is not tracked.
+
 You can run a command without entering the development shell:
 
 ```sh
@@ -45,6 +48,9 @@ Use one focused test for each behavior. Keep corresponding scenario names and as
 After you modify the sets schema, update `schema/sets.json`. Then regenerate the validation script:
 
 `npm run compile-sets-schema`
+
+Storage readers normalize missing optional fields in a current-version document.
+They reject documents with invalid required fields before the data enters application modules.
 
 ## Launch extension in isolated browser profile
 

@@ -1,13 +1,14 @@
 import type {
   AutoloadConfiguration,
   AutoloadScope,
+  ExportDocument,
   TabSet,
   TabSetDraft,
   TabSetId,
   WindowId,
 } from '../domain.js';
 import {
-  AUTOLOAD_SCOPES,
+  isAutoloadScope,
   isUuid,
   newSetId,
 } from '../storage/storage-schema.js';
@@ -84,7 +85,7 @@ interface TabSetRepositoryOptions {
   ) => document is TabSetImportDocument;
   windowSessions?: WindowSessions;
   shortcutAssignments?: ShortcutAssignments;
-  createId?: () => unknown;
+  createId?: () => string;
 }
 
 function tabSetError(
@@ -131,15 +132,6 @@ function validateSetDraft(set: unknown): asserts set is TabSetDraft {
   }
 }
 
-function isAutoloadScope(value: unknown): value is AutoloadScope {
-  if (typeof value !== 'string') return false;
-
-  for (const scope of AUTOLOAD_SCOPES) {
-    if (scope === value) return true;
-  }
-
-  return false;
-}
 
 function validateAutoload(
   configuration: unknown,
@@ -179,7 +171,7 @@ export class TabSetRepository {
     | undefined;
   readonly #windowSessions: WindowSessions | undefined;
   readonly #shortcutAssignments: ShortcutAssignments | undefined;
-  readonly #createId: () => unknown;
+  readonly #createId: () => string;
 
   constructor(
     storage: TabSetStorage,
@@ -205,7 +197,7 @@ export class TabSetRepository {
     }
   }
 
-  async get(setId: string): Promise<TabSet | null | undefined> {
+  async get(setId: TabSetId): Promise<TabSet | null> {
     try {
       return await this.#storage.get(setId);
     } catch (error) {
@@ -351,11 +343,7 @@ export class TabSetRepository {
     });
   }
 
-  async export(): Promise<{
-    version: number;
-    sets: TabSet[];
-    autoload: AutoloadConfiguration;
-  }> {
+  async export(): Promise<ExportDocument> {
     try {
       return {
         version: EXPORT_VERSION,
@@ -475,11 +463,7 @@ export class TabSetRepository {
     while (true) {
       const id = this.#createId();
 
-      if (
-        typeof id === 'string'
-        && isUuid(id)
-        && !identities.has(id)
-      ) {
+      if (isUuid(id) && !identities.has(id)) {
         identities.add(id);
         return id;
       }

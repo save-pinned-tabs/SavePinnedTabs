@@ -14,8 +14,9 @@ import { createBrowserRepositories } from '../storage/browser-repositories.js';
 import {
   AUTOLOAD_EVERY_WINDOW,
   AUTOLOAD_FIRST_WINDOW,
-  AUTOLOAD_SCOPES,
+  isAutoloadScope,
 } from '../storage/storage-schema.js';
+import { isInteger } from '../validation.js';
 
 export { AUTOLOAD_EVERY_WINDOW, AUTOLOAD_FIRST_WINDOW };
 
@@ -31,6 +32,7 @@ interface BrowserLifecycleState {
   openNormalWindowIds: number[];
   restoredWindowIds: number[];
 }
+type MaybePromise<T> = T | PromiseLike<T>;
 
 interface LifecycleStateStorage {
   runExclusive<Result>(
@@ -46,21 +48,21 @@ interface LifecycleWindowTabState extends AutoloadWindowTabState {
 
 interface LifecycleRepositories {
   readonly tabSets: {
-    getAutoload(): PromiseLike<unknown> | unknown;
+    getAutoload(): Promise<AutoloadConfiguration>;
   };
 }
 
 interface BrowserLifecycleOptions {
-  autoloadPolicy?: unknown;
-  getAutoload?: (() => PromiseLike<unknown> | unknown) | null;
+  autoloadPolicy?: AutoloadScope;
+  getAutoload?: (() => MaybePromise<AutoloadConfiguration>) | null;
   stateStorage: LifecycleStateStorage;
   windows: BrowserApi['windows'];
   windowTabState: LifecycleWindowTabState;
   restoreAutoload(
     windowId: number,
     configuration: AutoloadConfiguration,
-  ): PromiseLike<unknown> | unknown;
-  delay?: (milliseconds: number) => PromiseLike<unknown> | unknown;
+  ): unknown;
+  delay?: (milliseconds: number) => unknown;
   startupWindowAttempts?: number;
 }
 
@@ -97,30 +99,7 @@ function isPropertyContainer(
   );
 }
 
-function isInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value);
-}
 
-function isAutoloadScope(value: unknown): value is AutoloadScope {
-  for (const scope of AUTOLOAD_SCOPES) {
-    if (scope === value) return true;
-  }
-  return false;
-}
-
-function isAutoloadConfiguration(
-  value: unknown,
-): value is AutoloadConfiguration {
-  return (
-    isPropertyContainer(value)
-    && isAutoloadScope(value.scope)
-    && Array.isArray(value.setIds)
-  );
-}
-
-function configurationScope(value: unknown): unknown {
-  return isPropertyContainer(value) ? value.scope : undefined;
-}
 
 function normalizedWindowIds(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
@@ -364,16 +343,25 @@ export class BrowserLifecycle {
 
   async #autoloadConfiguration(): Promise<AutoloadConfiguration> {
     const configuration = await this.#getAutoload();
-
-    if (!isAutoloadConfiguration(configuration)) {
-      throw new TypeError(
-        `Unsupported Autoload scope "${String(
-          configurationScope(configuration),
-        )}"`,
-      );
+    if (
+      !isPropertyContainer(configuration)
+      || !isAutoloadScope(configuration.scope)
+    ) {
+      const scope = isPropertyContainer(configuration)
+        ? configuration.scope
+        : undefined;
+      throw new TypeError(`Unsupported Autoload scope "${String(scope)}"`);
     }
-
-    return configuration;
+    if (!Array.isArray(configuration.setIds)) {
+      throw new TypeError('Autoload setIds must be an array');
+    }
+    if (!configuration.setIds.every((setId) => typeof setId === 'string')) {
+      throw new TypeError('Autoload setIds must contain only strings');
+    }
+    return {
+      scope: configuration.scope,
+      setIds: configuration.setIds,
+    };
   }
 }
 

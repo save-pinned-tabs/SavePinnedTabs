@@ -28,7 +28,6 @@ export interface ExportDocument {
   autoload: AutoloadConfiguration;
 }
 
-export type Result<T> = CommandResult<T>;
 
 export interface ActiveWindowSession {
   windowId: WindowId;

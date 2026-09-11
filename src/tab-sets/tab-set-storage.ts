@@ -1,8 +1,10 @@
 import type { BrowserStorageArea } from '../browser-api.js';
 import type { AutoloadConfiguration, TabSet } from '../domain.js';
 import {
+  STORAGE_SCHEMA_VERSION,
   SYNC_DOCUMENT_KEY,
   emptySyncDocument,
+  isAutoloadScope,
   type SyncDocument,
 } from '../storage/storage-schema.js';
 import {
@@ -53,7 +55,10 @@ function hasShape(value: unknown, template: unknown): boolean {
 }
 
 function isTabSet(value: unknown): value is TabSet {
-  return isRecord(value) && typeof value.id === 'string';
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && isStringArray(value.tabs);
 }
 
 function isAutoloadConfiguration(
@@ -63,12 +68,15 @@ function isAutoloadConfiguration(
     return false;
   }
 
-  const setIds = value.setIds;
-  return isStringArray(setIds);
+  return isAutoloadScope(value.scope) && isStringArray(value.setIds);
 }
 
 function isSyncDocument(value: unknown): value is SyncDocument {
-  if (!isRecord(value) || !hasShape(value, EMPTY_SYNC_DOCUMENT)) {
+  if (
+    !isRecord(value)
+    || value.version !== STORAGE_SCHEMA_VERSION
+    || !hasShape(value, EMPTY_SYNC_DOCUMENT)
+  ) {
     return false;
   }
 

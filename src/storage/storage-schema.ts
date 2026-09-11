@@ -16,10 +16,6 @@ export const AUTOLOAD_EVERY_WINDOW = 'every-window';
 
 const DEFAULT_AUTOLOAD_SCOPE: AutoloadScope = AUTOLOAD_FIRST_WINDOW;
 
-export const AUTOLOAD_SCOPES = new Set<AutoloadScope>([
-  AUTOLOAD_FIRST_WINDOW,
-  AUTOLOAD_EVERY_WINDOW,
-]);
 
 const LEGACY_SESSIONS_KEY = 'activeTabs';
 const LEGACY_SHORTCUTS_KEY = 'shortcutSets';
@@ -117,7 +113,7 @@ function isStringRecord(value: unknown): value is Record<string, string> {
     );
 }
 
-function isAutoloadScope(value: unknown): value is AutoloadScope {
+export function isAutoloadScope(value: unknown): value is AutoloadScope {
   return value === AUTOLOAD_FIRST_WINDOW
     || value === AUTOLOAD_EVERY_WINDOW;
 }

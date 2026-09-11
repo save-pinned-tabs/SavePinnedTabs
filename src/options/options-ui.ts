@@ -1,4 +1,5 @@
 import type { ExportDocument, OptionsState } from '../domain.js';
+import { requireElement } from '../dom.js';
 
 
 interface OptionsActions {
@@ -21,29 +22,6 @@ function exportFileName(now: Date): string {
   return `SavePinnedTabs_export_${now.toISOString().replaceAll(/[.:]/g, '-')}.json`;
 }
 
-function requiredElement(document: Document, id: string): HTMLElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLElement)) {
-    throw new Error(`Required element #${id} was not found.`);
-  }
-  return element;
-}
-
-function requiredInput(document: Document, id: string): HTMLInputElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLInputElement)) {
-    throw new Error(`Required input #${id} was not found.`);
-  }
-  return element;
-}
-
-function requiredButton(document: Document, id: string): HTMLButtonElement {
-  const element = document.getElementById(id);
-  if (!(element instanceof HTMLButtonElement)) {
-    throw new Error(`Required button #${id} was not found.`);
-  }
-  return element;
-}
 
 function requiredSelector(document: Document, selector: string): Element {
   const element = document.querySelector(selector);
@@ -70,8 +48,8 @@ function saveBlob(blob: Blob, filename: string): void {
 }
 
 export function createOptionsUi(document: Document): OptionsView {
-  const importInput = requiredInput(document, 'import-input');
-  const status = requiredElement(document, 'options-status');
+  const importInput = requireElement(document, 'import-input', HTMLInputElement);
+  const status = requireElement(document, 'options-status', HTMLElement);
   let actions: OptionsActions | undefined;
   let isPending = false;
 
@@ -110,11 +88,11 @@ export function createOptionsUi(document: Document): OptionsView {
         });
       }
 
-      requiredButton(document, 'export-button').addEventListener('click', () => {
+      requireElement(document, 'export-button', HTMLButtonElement).addEventListener('click', () => {
         currentActions().export();
       });
 
-      requiredButton(document, 'import-button').addEventListener('click', () => {
+      requireElement(document, 'import-button', HTMLButtonElement).addEventListener('click', () => {
         const files = importInput.files;
         if (files === null) {
           throw new Error('Import input does not expose a file list.');

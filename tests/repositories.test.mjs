@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { createBrowserRepositories } from '../.extension-build/storage/browser-repositories.js';
 import { TabSetRepository } from '../.extension-build/tab-sets/tab-set-repository.js';
 import {
   BrowserTabSetStorage,
@@ -113,6 +114,68 @@ function createMemoryHarness(createId = idGenerator()) {
   });
   return { tabSets, windowSessions, shortcutAssignments };
 }
+
+test('browser repositories reject shortcut assignments to missing tab sets', async () => {
+  const browser = {
+    storage: {
+      sync: createStorageArea(),
+      local: createStorageArea(),
+    },
+  };
+  const { shortcutAssignments } = createBrowserRepositories(browser);
+
+  await assert.rejects(
+    shortcutAssignments.assign('load-set-1', FIRST_ID),
+    /does not exist/,
+  );
+});
+
+test('browser storage rejects incomplete persisted tab sets', async () => {
+  const storage = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: { [FIRST_ID]: { id: FIRST_ID } },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+    },
+  });
+
+  await assert.rejects(
+    new BrowserTabSetStorage(storage).list(),
+    /Stored tab set document is invalid/,
+  );
+});
+
+test('current schema documents recover missing optional fields', async () => {
+  const savedSet = {
+    id: FIRST_ID,
+    name: 'Recovered',
+    tabs: ['https://recovered.example/'],
+  };
+  const harness = createBrowserHarness({
+    sync: {
+      [SYNC_DOCUMENT_KEY]: {
+        version: 2,
+        sets: { [FIRST_ID]: savedSet },
+      },
+    },
+    local: {
+      [LOCAL_DOCUMENT_KEY]: {
+        version: 2,
+      },
+    },
+  });
+
+  assert.deepEqual(await harness.tabSets.list(), [savedSet]);
+  assert.deepEqual(
+    harness.syncStorage.state[SYNC_DOCUMENT_KEY].autoload,
+    { scope: 'first-window', setIds: [] },
+  );
+  assert.deepEqual(
+    harness.syncStorage.state[SYNC_DOCUMENT_KEY].deletedSetIds,
+    [],
+  );
+});
 
 for (const [name, createHarness] of [
   ['browser', createBrowserHarness],
