@@ -7,9 +7,6 @@ import type {
   TabSetId,
 } from '../domain.js';
 
-/** Represents a value available immediately or through a promise-like object. */
-type MaybePromise<T> = T | PromiseLike<T>;
-
 /** Identifies the visual state of an operation status message. */
 type StatusKind = 'loading' | 'error' | 'success';
 
@@ -19,19 +16,19 @@ interface OptionsController {
   assignShortcut(
     command: string,
     setId: TabSetId,
-  ): MaybePromise<CommandResult<{ state: OptionsState }>>;
+  ): Promise<CommandResult<{ state: OptionsState }>>;
 
   /** Creates a portable document containing the saved tab sets. */
-  exportSets(): MaybePromise<CommandResult<ExportDocument>>;
+  exportSets(): Promise<CommandResult<ExportDocument>>;
 
   /** Imports tab sets from parsed external data and returns the updated state. */
-  importSets(document: unknown): MaybePromise<CommandResult<{
+  importSets(document: unknown): Promise<CommandResult<{
     importedCount: number;
     state: OptionsState;
   }>>;
 
   /** Loads the current options state. */
-  getOptionsState(): MaybePromise<CommandResult<{ state: OptionsState }>>;
+  getOptionsState(): Promise<CommandResult<{ state: OptionsState }>>;
 }
 
 /** Defines user actions exposed to the options view. */
@@ -61,10 +58,10 @@ interface OptionsView {
   setPending(isPending: boolean): void;
 
   /** Starts a download for an exported tab-set document. */
-  downloadExport(document: ExportDocument): MaybePromise<void>;
+  downloadExport(document: ExportDocument): void;
 
   /** Reads and parses an import file into untrusted input. */
-  readImportDocument(file: File): MaybePromise<unknown>;
+  readImportDocument(file: File): Promise<unknown>;
 
   /** Clears the selected import file and related UI state. */
   clearImport(): void;
@@ -73,10 +70,10 @@ interface OptionsView {
 /** Describes a controller operation and its UI lifecycle callbacks. */
 interface ControllerCommand<Value> {
   loadingMessage: string;
-  command(): MaybePromise<CommandResult<Value>>;
+  command(): Promise<CommandResult<Value>>;
   successMessage: string | ((value: Value) => string);
   state?(value: Value): OptionsState | undefined;
-  onSuccess?(value: Value): MaybePromise<void>;
+  onSuccess?(value: Value): Promise<void>;
   onError?(): void;
 }
 
@@ -160,7 +157,7 @@ export async function startOptionsApp(
         loadingMessage: 'Preparing tab-set export…',
         command: () => controller.exportSets(),
         successMessage: 'Tab sets exported.',
-        onSuccess: (document) => view.downloadExport(document),
+        onSuccess: async (document) => view.downloadExport(document),
       });
     },
 
@@ -176,7 +173,7 @@ export async function startOptionsApp(
             importedCount === 1 ? 'set' : 'sets'
           }.`,
         state: (value) => value.state,
-        onSuccess: () => view.clearImport(),
+        onSuccess: async () => view.clearImport(),
         onError: () => view.clearImport(),
       });
     },

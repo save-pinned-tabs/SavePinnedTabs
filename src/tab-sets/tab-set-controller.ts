@@ -14,43 +14,42 @@ import type {
 } from '../domain.js';
 import { errorMessage } from '../validation.js';
 
-/** Allows dependency operations to complete synchronously or asynchronously. */
-type MaybePromise<T> = T | PromiseLike<T>;
+
 
 /** Provides persistent storage and import/export operations for tab sets. */
 interface TabSets {
   /** Lists all saved tab sets. */
-  list(): MaybePromise<TabSet[]>;
+  list(): Promise<TabSet[]>;
 
   /** Permanently removes a saved tab set. */
-  remove(setId: TabSetId): MaybePromise<unknown>;
+  remove(setId: TabSetId): Promise<void>;
 
   /** Retrieves the current autoload configuration. */
-  getAutoload(): MaybePromise<AutoloadConfiguration>;
+  getAutoload(): Promise<AutoloadConfiguration>;
 
   /** Replaces the current autoload configuration. */
-  setAutoload(configuration: AutoloadConfiguration): MaybePromise<unknown>;
+  setAutoload(configuration: AutoloadConfiguration): Promise<void>;
 
   /** Serializes all tab-set data for external storage. */
-  export(): MaybePromise<ExportDocument>;
+  export(): Promise<ExportDocument>;
 
   /** Validates and persists tab sets from an external document. */
-  import(document: unknown): MaybePromise<TabSet[]>;
+  import(document: unknown): Promise<TabSet[]>;
 }
 
 /** Resolves the active tab set associated with a browser window. */
 interface WindowSessions {
   /** Returns no identifier when the window has no active tab set. */
-  get(windowId: WindowId): MaybePromise<TabSetId | null | undefined>;
+  get(windowId: WindowId): Promise<TabSetId | null | undefined>;
 }
 
 /** Manages associations between browser commands and saved tab sets. */
 interface ShortcutAssignments {
   /** Associates a browser command with a tab set. */
-  assign(command: string, setId: TabSetId): MaybePromise<unknown>;
+  assign(command: string, setId: TabSetId): Promise<void>;
 
   /** Lists the currently configured command assignments. */
-  list(): MaybePromise<Partial<Record<string, TabSetId>>>;
+  list(): Promise<Partial<Record<string, TabSetId>>>;
 }
 
 /** Applies saved tab sets to browser windows and captures pinned tabs. */
@@ -59,16 +58,16 @@ interface WindowTabState {
   captureAndSave(
     windowId: WindowId,
     details: TabSetDetails,
-  ): MaybePromise<TabSet | null>;
+  ): Promise<TabSet | null>;
 
   /** Replaces the window's managed tabs with a saved set. */
-  replace(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+  replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 
   /** Adds a saved set to the window without replacing existing tabs. */
-  append(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+  append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 
   /** Removes a saved set's tabs from the window. */
-  unload(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+  unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 }
 
 /** Supplies storage, browser, and window integrations used by the controller. */
@@ -79,13 +78,13 @@ export interface TabSetControllerDependencies {
   windowTabState: WindowTabState;
 
   /** Resolves the window associated with the current controller request. */
-  getCurrentWindowId(): MaybePromise<WindowId>;
+  getCurrentWindowId(): Promise<WindowId>;
 
   /** Resolves the most recently focused window, if one is available. */
-  getLastFocusedWindowId(): MaybePromise<WindowId | null | undefined>;
+  getLastFocusedWindowId(): Promise<WindowId | null | undefined>;
 
   /** Lists browser commands available for shortcut assignment. */
-  listBrowserCommands(): MaybePromise<BrowserCommand[]>;
+  listBrowserCommands(): Promise<BrowserCommand[]>;
 }
 
 /** Wraps an operation failure with context describing the attempted command. */
@@ -252,7 +251,7 @@ export class TabSetController {
   /** Executes an operation and converts thrown or rejected failures into an error result. */
   async #execute<T>(
     command: string,
-    operation: () => MaybePromise<T>,
+    operation: () => Promise<T>,
   ): Promise<CommandResult<T>> {
     try {
       return { status: 'success', value: await operation() };

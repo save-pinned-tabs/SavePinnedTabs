@@ -43,8 +43,6 @@ interface BrowserLifecycleState {
   restoredWindowIds: number[];
 }
 
-/** Allows a value to be supplied immediately or asynchronously. */
-type MaybePromise<T> = T | PromiseLike<T>;
 
 /** Serializes access to persisted lifecycle state. */
 interface LifecycleStateStorage {
@@ -73,7 +71,7 @@ interface LifecycleRepositories {
 
 /** Supplies lifecycle dependencies and startup polling behavior. */
 interface BrowserLifecycleOptions {
-  getAutoload: () => MaybePromise<AutoloadConfiguration>;
+  getAutoload: () => Promise<AutoloadConfiguration>;
   stateStorage: LifecycleStateStorage;
   windows: BrowserApi['windows'];
   windowTabState: LifecycleWindowTabState;
@@ -204,7 +202,7 @@ export class BrowserLifecycleStateStorage {
 
 /** Coordinates startup autoloading and restoration for newly created windows. */
 export class BrowserLifecycle {
-  #getAutoload: () => MaybePromise<AutoloadConfiguration>;
+  #getAutoload: () => Promise<AutoloadConfiguration>;
   #stateStorage: LifecycleStateStorage;
   #windows: BrowserApi['windows'];
   #windowTabState: LifecycleWindowTabState;
