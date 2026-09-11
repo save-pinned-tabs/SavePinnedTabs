@@ -1,3 +1,7 @@
+/**
+ * Coordinates browser startup, window tracking, and automatic tab-set restoration.
+ */
+
 import type {
   BrowserApi,
   BrowserStorageArea,
@@ -24,33 +28,48 @@ const LIFECYCLE_KEY = 'savePinnedTabs:lifecycle';
 const LIFECYCLE_LOCK = 'save-pinned-tabs:browser-lifecycle';
 const DEFAULT_STARTUP_WINDOW_ATTEMPTS = 100;
 
+/** Represents work that may complete synchronously or asynchronously. */
 type Operation<Result> = () => Result | PromiseLike<Result>;
 
+/** Tracks startup progress and restored windows for the current session. */
 interface BrowserLifecycleState {
+  /** Indicates whether browser startup initialization has completed. */
   startupObserved: boolean;
+  /** Identifies the window selected for first-window autoloading. */
   firstWindowId: number | null;
+  /** Lists known open normal browser windows. */
   openNormalWindowIds: number[];
+  /** Lists windows that have already received autoloaded sets. */
   restoredWindowIds: number[];
 }
 
+
+/** Serializes access to persisted lifecycle state. */
 interface LifecycleStateStorage {
+  /** Runs storage work without overlapping another lifecycle operation. */
   runExclusive<Result>(
     operation: Operation<Result>,
   ): Promise<Result>;
+  /** Reads the normalized state for the current browser session. */
   read(): Promise<BrowserLifecycleState>;
+  /** Persists the current lifecycle state. */
   write(state: BrowserLifecycleState): Promise<void>;
 }
 
+/** Extends window tab state with session-wide reset support. */
 interface LifecycleWindowTabState extends AutoloadWindowTabState {
+  /** Clears tab-state sessions before startup restoration begins. */
   resetSessions(): unknown;
 }
 
+/** Provides repositories needed to resolve lifecycle configuration. */
 interface LifecycleRepositories {
   readonly tabSets: {
     getAutoload(): Promise<AutoloadConfiguration>;
   };
 }
 
+/** Supplies lifecycle dependencies and startup polling behavior. */
 interface BrowserLifecycleOptions {
   getAutoload: () => Promise<AutoloadConfiguration>;
   stateStorage: LifecycleStateStorage;
@@ -61,20 +80,24 @@ interface BrowserLifecycleOptions {
     configuration: AutoloadConfiguration,
   ): unknown;
   delay?: (milliseconds: number) => unknown;
+  /** Limits attempts to discover a normal window during startup. */
   startupWindowAttempts?: number;
 }
 
+/** Allows lifecycle creation to reuse custom state and repositories. */
 interface CreateBrowserLifecycleOptions {
   windowTabState?: LifecycleWindowTabState;
   repositories?: LifecycleRepositories;
 }
 
+/** Resolves after the requested delay. */
 function wait(milliseconds: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, milliseconds);
   });
 }
 
+/** Creates an empty state for a newly observed browser session. */
 function initialState(): BrowserLifecycleState {
   return {
     startupObserved: false,
@@ -84,10 +107,12 @@ function initialState(): BrowserLifecycleState {
   };
 }
 
+/** Narrows non-null objects to records with unknown properties. */
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** Accepts objects and functions that may expose autoload properties. */
 function isPropertyContainer(
   value: unknown,
 ): value is { readonly scope?: unknown; readonly setIds?: unknown } {
@@ -99,11 +124,13 @@ function isPropertyContainer(
 
 
 
+/** Filters stored window identifiers to unique integers in original order. */
 function normalizedWindowIds(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter(isInteger))];
 }
 
+/** Converts unknown persisted data into a valid lifecycle state. */
 function normalizeState(storedState: unknown): BrowserLifecycleState {
   if (!isObjectRecord(storedState)) return initialState();
 
@@ -119,10 +146,12 @@ function normalizeState(storedState: unknown): BrowserLifecycleState {
   };
 }
 
+/** Adds an identifier in place while preserving uniqueness. */
 function addWindowId(windowIds: number[], windowId: number): void {
   if (!windowIds.includes(windowId)) windowIds.push(windowId);
 }
 
+/** Returns a copy that excludes the specified window. */
 function removeWindowId(
   windowIds: readonly number[],
   windowId: number,
@@ -132,12 +161,14 @@ function removeWindowId(
   );
 }
 
+/** Persists normalized lifecycle state with cross-operation serialization. */
 export class BrowserLifecycleStateStorage {
   #sessionStorage: BrowserStorageArea;
   readonly runExclusive: <Result>(
     operation: Operation<Result>,
   ) => Promise<Result>;
 
+  /** Creates storage access or throws when session storage is unavailable. */
   constructor(
     sessionStorage: BrowserStorageArea | null | undefined,
   ) {
@@ -155,11 +186,13 @@ export class BrowserLifecycleStateStorage {
   }
 
 
+  /** Reads and normalizes potentially malformed persisted state. */
   async read(): Promise<BrowserLifecycleState> {
     const stored = await this.#sessionStorage.get(LIFECYCLE_KEY);
     return normalizeState(stored[LIFECYCLE_KEY]);
   }
 
+  /** Normalizes and replaces the persisted lifecycle state. */
   async write(state: unknown): Promise<void> {
     await this.#sessionStorage.set({
       [LIFECYCLE_KEY]: normalizeState(state),
@@ -167,6 +200,7 @@ export class BrowserLifecycleStateStorage {
   }
 }
 
+/** Coordinates startup autoloading and restoration for newly created windows. */
 export class BrowserLifecycle {
   #getAutoload: () => Promise<AutoloadConfiguration>;
   #stateStorage: LifecycleStateStorage;
@@ -179,6 +213,7 @@ export class BrowserLifecycle {
   #delay: (milliseconds: number) => unknown;
   #startupWindowAttempts: number;
 
+  /** Configures lifecycle orchestration from injected browser services. */
   constructor({
     getAutoload,
     stateStorage,
@@ -197,6 +232,7 @@ export class BrowserLifecycle {
     this.#startupWindowAttempts = startupWindowAttempts;
   }
 
+  /** Initializes session state and restores eligible startup windows once. */
   async onBrowserStartup(): Promise<void> {
     await this.#initializeStartup();
 
@@ -213,6 +249,7 @@ export class BrowserLifecycle {
     );
   }
 
+  /** Tracks normal windows and restores them after startup is observed. */
   async onWindowCreated(
     window: BrowserWindow | null | undefined,
   ): Promise<void> {
@@ -227,6 +264,7 @@ export class BrowserLifecycle {
     }
   }
 
+  /** Removes closed-window state and deactivates its tab session. */
   async onWindowRemoved(windowId: number): Promise<void> {
     await this.#stateStorage.runExclusive(async () => {
       const state = normalizeState(await this.#stateStorage.read());
@@ -244,6 +282,7 @@ export class BrowserLifecycle {
     });
   }
 
+  /** Resets tab sessions and marks startup exactly once. */
   async #initializeStartup(): Promise<void> {
     await this.#stateStorage.runExclusive(async () => {
       const state = normalizeState(await this.#stateStorage.read());
@@ -255,6 +294,7 @@ export class BrowserLifecycle {
     });
   }
 
+  /** Records a normal window and reports whether startup has been observed. */
   async #rememberNormalWindow(windowId: number): Promise<boolean> {
     return this.#stateStorage.runExclusive(async () => {
       const state = normalizeState(await this.#stateStorage.read());
@@ -264,6 +304,7 @@ export class BrowserLifecycle {
     });
   }
 
+  /** Polls for startup windows until one appears or attempts are exhausted. */
   async #findStartupWindowIds(): Promise<number[]> {
     for (
       let attempt = 0;
@@ -278,6 +319,7 @@ export class BrowserLifecycle {
     return [];
   }
 
+  /** Combines tracked and currently reported normal window identifiers. */
   async #currentNormalWindowIds(): Promise<number[]> {
     const state = normalizeState(await this.#stateStorage.read());
     const windowIds = new Set(state.openNormalWindowIds);
@@ -292,6 +334,7 @@ export class BrowserLifecycle {
     return [...windowIds];
   }
 
+  /** Restores an eligible window once and records successful completion. */
   async #restoreWindowOnce(
     windowId: number,
     configuration: AutoloadConfiguration,
@@ -324,6 +367,7 @@ export class BrowserLifecycle {
     });
   }
 
+  /** Validates repository configuration and throws for unsupported values. */
   async #autoloadConfiguration(): Promise<AutoloadConfiguration> {
     const configuration = await this.#getAutoload();
     if (
@@ -348,6 +392,7 @@ export class BrowserLifecycle {
   }
 }
 
+/** Creates a lifecycle coordinator backed by browser storage and repositories. */
 export function createBrowserLifecycle(
   browser: BrowserApi,
   {
@@ -362,6 +407,7 @@ export function createBrowserLifecycle(
     ),
     windows: browser.windows,
     windowTabState,
+    /** Restores configured autoload sets into the target window. */
     restoreAutoload(windowId, configuration) {
       return restoreAutoloadSets(
         browser,

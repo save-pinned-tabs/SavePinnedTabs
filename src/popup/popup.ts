@@ -1,3 +1,7 @@
+/**
+ * Initializes the popup UI with the available browser API and exposes test hooks.
+ */
+
 import { selectBrowserApi, type BrowserApi } from '../browser-api.js';
 import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.js';
 import type { TabSetController } from '../tab-sets/tab-set-controller.js';
@@ -6,6 +10,7 @@ import { createPopupUi } from './popup-ui.js';
 
 
 declare global {
+  /** Extends the popup window with browser APIs and an automation-only controller hook. */
   interface Window {
     browser?: BrowserApi;
     chrome: BrowserApi;

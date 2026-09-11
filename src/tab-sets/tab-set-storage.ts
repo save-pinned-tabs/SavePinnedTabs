@@ -1,3 +1,5 @@
+/** Provides browser-backed and in-memory storage for tab sets and autoload settings. */
+
 import type { BrowserStorageArea } from '../browser-api.js';
 import type { AutoloadConfiguration, TabSet } from '../domain.js';
 import {
@@ -14,10 +16,13 @@ import {
 const TAB_SET_LOCK = 'save-pinned-tabs:tab-sets';
 
 
+/** Ensures legacy storage data is migrated before access. */
 interface Migration {
+  /** Completes any required migration before resolving. */
   ensureMigrated(): Promise<void>;
 }
 
+/** Configures the initial state of an in-memory tab set store. */
 interface InMemoryTabSetStorageOptions {
   sets?: readonly TabSet[];
   autoload?: AutoloadConfiguration;
@@ -30,11 +35,13 @@ const NOOP_MIGRATION: Migration = {
 
 
 
+/** Persists tab sets and autoload settings in browser synchronization storage. */
 export class BrowserTabSetStorage {
   #storage: BrowserStorageArea;
   #migration: Migration;
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
 
+  /** Creates a store that coordinates access through a shared storage lock. */
   constructor(
     syncStorage: BrowserStorageArea,
     migration: Migration = NOOP_MIGRATION,
@@ -47,6 +54,7 @@ export class BrowserTabSetStorage {
     );
   }
 
+  /** Runs an operation exclusively after completing any pending migration. */
   runExclusive<Result>(operation: () => Promise<Result>): Promise<Result> {
     return this.#runExclusive(async () => {
       await this.#migration.ensureMigrated();
@@ -54,28 +62,33 @@ export class BrowserTabSetStorage {
     });
   }
 
+  /** Lists independent copies of all stored tab sets. */
   async list(): Promise<TabSet[]> {
     const document = await this.#read();
     return Object.values(document.sets).map((set) => structuredClone(set));
   }
 
+  /** Retrieves an independent copy of a tab set, or null when absent. */
   async get(setId: string): Promise<TabSet | null> {
     const document = await this.#read();
     const set = document.sets[setId];
     return set ? structuredClone(set) : null;
   }
 
+  /** Collects identifiers for current and previously deleted tab sets. */
   async identities(): Promise<Set<string>> {
     const document = await this.#read();
     return new Set(Object.keys(document.sets).concat(document.deletedSetIds));
   }
 
+  /** Stores an independent copy of a tab set by its identifier. */
   async save(set: TabSet): Promise<void> {
     const document = await this.#read();
     document.sets[set.id] = structuredClone(set);
     await this.#write(document);
   }
 
+  /** Restores a previous value or records the identifier as deleted. */
   async restore(setId: string, previousSet?: TabSet | null): Promise<void> {
     const document = await this.#read();
 
@@ -92,11 +105,13 @@ export class BrowserTabSetStorage {
     await this.#write(document);
   }
 
+  /** Retrieves an independent copy of the autoload configuration. */
   async getAutoload(): Promise<AutoloadConfiguration> {
     const document = await this.#read();
     return structuredClone(document.autoload);
   }
 
+  /** Replaces the stored autoload configuration with an independent copy. */
   async setAutoload(
     configuration: AutoloadConfiguration,
   ): Promise<void> {
@@ -105,6 +120,7 @@ export class BrowserTabSetStorage {
     await this.#write(document);
   }
 
+  /** Deletes a tab set, records its identity, and removes autoload references. */
   async remove(setId: string): Promise<void> {
     const document = await this.#read();
 
@@ -123,6 +139,7 @@ export class BrowserTabSetStorage {
     await this.#write(document);
   }
 
+  /** Merges tab sets into storage and replaces the autoload configuration. */
   async import(
     sets: readonly TabSet[],
     autoload: AutoloadConfiguration,
@@ -136,6 +153,7 @@ export class BrowserTabSetStorage {
     await this.#write(document);
   }
 
+  /** Reads and validates the synchronized document after migration. */
   async #read(): Promise<SyncDocument> {
     await this.#migration.ensureMigrated();
 
@@ -147,6 +165,7 @@ export class BrowserTabSetStorage {
     }
   }
 
+  /** Writes an independent copy of the complete synchronized document. */
   async #write(document: SyncDocument): Promise<void> {
     await this.#storage.set({
       [SYNC_DOCUMENT_KEY]: structuredClone(document),
@@ -154,12 +173,16 @@ export class BrowserTabSetStorage {
   }
 }
 
+/** Stores tab sets and autoload settings in memory for isolated use. */
 export class InMemoryTabSetStorage {
   #document: SyncDocument;
+
+  /** Serializes operations within this in-memory store. */
   readonly runExclusive = createSerializedOperation(
     'save-pinned-tabs:memory-tab-sets',
   );
 
+  /** Creates a store containing independent copies of the initial values. */
   constructor({ sets = [], autoload }: InMemoryTabSetStorageOptions = {}) {
     this.#document = emptySyncDocument();
 
@@ -173,17 +196,20 @@ export class InMemoryTabSetStorage {
   }
 
 
+  /** Lists independent copies of all stored tab sets. */
   async list(): Promise<TabSet[]> {
     return Object.values(this.#document.sets).map((set) =>
       structuredClone(set),
     );
   }
 
+  /** Retrieves an independent copy of a tab set, or null when absent. */
   async get(setId: string): Promise<TabSet | null> {
     const set = this.#document.sets[setId];
     return set ? structuredClone(set) : null;
   }
 
+  /** Collects identifiers for current and previously deleted tab sets. */
   async identities(): Promise<Set<string>> {
     return new Set(
       Object.keys(this.#document.sets).concat(
@@ -192,10 +218,12 @@ export class InMemoryTabSetStorage {
     );
   }
 
+  /** Stores an independent copy of a tab set by its identifier. */
   async save(set: TabSet): Promise<void> {
     this.#document.sets[set.id] = structuredClone(set);
   }
 
+  /** Restores a previous value or records the identifier as deleted. */
   async restore(setId: string, previousSet?: TabSet | null): Promise<void> {
     if (previousSet) {
       this.#document.sets[setId] = structuredClone(previousSet);
@@ -208,16 +236,19 @@ export class InMemoryTabSetStorage {
     }
   }
 
+  /** Retrieves an independent copy of the autoload configuration. */
   async getAutoload(): Promise<AutoloadConfiguration> {
     return structuredClone(this.#document.autoload);
   }
 
+  /** Replaces the stored autoload configuration with an independent copy. */
   async setAutoload(
     configuration: AutoloadConfiguration,
   ): Promise<void> {
     this.#document.autoload = structuredClone(configuration);
   }
 
+  /** Deletes a tab set, records its identity, and removes autoload references. */
   async remove(setId: string): Promise<void> {
     if (this.#document.sets[setId]) {
       delete this.#document.sets[setId];
@@ -231,6 +262,7 @@ export class InMemoryTabSetStorage {
       this.#document.autoload.setIds.filter((id) => id !== setId);
   }
 
+  /** Merges tab sets into memory and replaces the autoload configuration. */
   async import(
     sets: readonly TabSet[],
     autoload: AutoloadConfiguration,

@@ -1,3 +1,7 @@
+/**
+ * Restores configured tab sets and opportunistically preloads their favicons.
+ */
+
 import type { BrowserApi } from '../browser-api.js';
 import type {
   AutoloadConfiguration,
@@ -7,19 +11,24 @@ import type {
 import { createBrowserRepositories } from '../storage/browser-repositories.js';
 import { createBrowserWindowTabState } from '../storage/window-tab-state.js';
 
+/** Defines the response capabilities needed to preload a favicon. */
 interface FaviconResponse {
   readonly ok: boolean;
   arrayBuffer(): Promise<unknown>;
 }
 
 
+/** Fetches a favicon resource for cache warming. */
 type FaviconFetch = (url: URL) => Promise<FaviconResponse>;
+
+/** Provides tab-set restoration operations for a browser window. */
 export interface AutoloadWindowTabState {
   replace(windowId: WindowId, setId: TabSetId): unknown;
   append(windowId: WindowId, setId: TabSetId): unknown;
   deactivate(windowId: WindowId): unknown;
 }
 
+/** Checks favicon access and treats unavailable or failed permission checks as denied. */
 async function hasFaviconPermission(browser: BrowserApi): Promise<boolean> {
   try {
     return (
@@ -30,6 +39,7 @@ async function hasFaviconPermission(browser: BrowserApi): Promise<boolean> {
   }
 }
 
+/** Warms the browser favicon cache without propagating loading failures. */
 export async function preloadFavicons(
   browser: BrowserApi,
   urls: readonly string[],
@@ -53,6 +63,7 @@ export async function preloadFavicons(
 }
 
 
+/** Restores existing configured sets in order, replacing first and appending the rest. */
 export async function restoreAutoloadSets(
   browser: BrowserApi,
   windowId: WindowId,
