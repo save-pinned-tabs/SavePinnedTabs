@@ -5,20 +5,19 @@ import type {
   TabSetId,
 } from '../domain.js';
 
-type MaybePromise<T> = T | PromiseLike<T>;
 type StatusKind = 'loading' | 'error' | 'success';
 
 interface OptionsController {
   assignShortcut(
     command: string,
     setId: TabSetId,
-  ): MaybePromise<CommandResult<{ state: OptionsState }>>;
-  exportSets(): MaybePromise<CommandResult<ExportDocument>>;
-  importSets(document: unknown): MaybePromise<CommandResult<{
+  ): Promise<CommandResult<{ state: OptionsState }>>;
+  exportSets(): Promise<CommandResult<ExportDocument>>;
+  importSets(document: unknown): Promise<CommandResult<{
     importedCount: number;
     state: OptionsState;
   }>>;
-  getOptionsState(): MaybePromise<CommandResult<{ state: OptionsState }>>;
+  getOptionsState(): Promise<CommandResult<{ state: OptionsState }>>;
 }
 
 interface OptionsActions {
@@ -32,17 +31,17 @@ interface OptionsView {
   render(state: OptionsState): void;
   showStatus(message: string, status: StatusKind): void;
   setPending(isPending: boolean): void;
-  downloadExport(document: ExportDocument): MaybePromise<void>;
-  readImportDocument(file: File): MaybePromise<unknown>;
+  downloadExport(document: ExportDocument): void;
+  readImportDocument(file: File): Promise<unknown>;
   clearImport(): void;
 }
 
 interface ControllerCommand<Value> {
   loadingMessage: string;
-  command(): MaybePromise<CommandResult<Value>>;
+  command(): Promise<CommandResult<Value>>;
   successMessage: string | ((value: Value) => string);
   state?(value: Value): OptionsState | undefined;
-  onSuccess?(value: Value): MaybePromise<void>;
+  onSuccess?(value: Value): Promise<void>;
   onError?(): void;
 }
 
@@ -119,7 +118,7 @@ export async function startOptionsApp(
         loadingMessage: 'Preparing tab-set export…',
         command: () => controller.exportSets(),
         successMessage: 'Tab sets exported.',
-        onSuccess: (document) => view.downloadExport(document),
+        onSuccess: async (document) => view.downloadExport(document),
       });
     },
     import(file) {
@@ -133,7 +132,7 @@ export async function startOptionsApp(
             importedCount === 1 ? 'set' : 'sets'
           }.`,
         state: (value) => value.state,
-        onSuccess: () => view.clearImport(),
+        onSuccess: async () => view.clearImport(),
         onError: () => view.clearImport(),
       });
     },

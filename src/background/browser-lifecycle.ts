@@ -32,7 +32,6 @@ interface BrowserLifecycleState {
   openNormalWindowIds: number[];
   restoredWindowIds: number[];
 }
-type MaybePromise<T> = T | PromiseLike<T>;
 
 interface LifecycleStateStorage {
   runExclusive<Result>(
@@ -53,7 +52,7 @@ interface LifecycleRepositories {
 }
 
 interface BrowserLifecycleOptions {
-  getAutoload: () => MaybePromise<AutoloadConfiguration>;
+  getAutoload: () => Promise<AutoloadConfiguration>;
   stateStorage: LifecycleStateStorage;
   windows: BrowserApi['windows'];
   windowTabState: LifecycleWindowTabState;
@@ -169,7 +168,7 @@ export class BrowserLifecycleStateStorage {
 }
 
 export class BrowserLifecycle {
-  #getAutoload: () => MaybePromise<AutoloadConfiguration>;
+  #getAutoload: () => Promise<AutoloadConfiguration>;
   #stateStorage: LifecycleStateStorage;
   #windows: BrowserApi['windows'];
   #windowTabState: LifecycleWindowTabState;

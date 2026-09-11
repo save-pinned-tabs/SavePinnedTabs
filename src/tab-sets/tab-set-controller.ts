@@ -12,34 +12,33 @@ import type {
 } from '../domain.js';
 import { errorMessage } from '../validation.js';
 
-type MaybePromise<T> = T | PromiseLike<T>;
 
 interface TabSets {
-  list(): MaybePromise<TabSet[]>;
-  remove(setId: TabSetId): MaybePromise<unknown>;
-  getAutoload(): MaybePromise<AutoloadConfiguration>;
-  setAutoload(configuration: AutoloadConfiguration): MaybePromise<unknown>;
-  export(): MaybePromise<ExportDocument>;
-  import(document: unknown): MaybePromise<TabSet[]>;
+  list(): Promise<TabSet[]>;
+  remove(setId: TabSetId): Promise<void>;
+  getAutoload(): Promise<AutoloadConfiguration>;
+  setAutoload(configuration: AutoloadConfiguration): Promise<void>;
+  export(): Promise<ExportDocument>;
+  import(document: unknown): Promise<TabSet[]>;
 }
 
 interface WindowSessions {
-  get(windowId: WindowId): MaybePromise<TabSetId | null | undefined>;
+  get(windowId: WindowId): Promise<TabSetId | null | undefined>;
 }
 
 interface ShortcutAssignments {
-  assign(command: string, setId: TabSetId): MaybePromise<unknown>;
-  list(): MaybePromise<Partial<Record<string, TabSetId>>>;
+  assign(command: string, setId: TabSetId): Promise<void>;
+  list(): Promise<Partial<Record<string, TabSetId>>>;
 }
 
 interface WindowTabState {
   captureAndSave(
     windowId: WindowId,
     details: TabSetDetails,
-  ): MaybePromise<TabSet | null>;
-  replace(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
-  append(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
-  unload(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+  ): Promise<TabSet | null>;
+  replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 }
 
 export interface TabSetControllerDependencies {
@@ -47,9 +46,9 @@ export interface TabSetControllerDependencies {
   windowSessions: WindowSessions;
   shortcutAssignments: ShortcutAssignments;
   windowTabState: WindowTabState;
-  getCurrentWindowId(): MaybePromise<WindowId>;
-  getLastFocusedWindowId(): MaybePromise<WindowId | null | undefined>;
-  listBrowserCommands(): MaybePromise<BrowserCommand[]>;
+  getCurrentWindowId(): Promise<WindowId>;
+  getLastFocusedWindowId(): Promise<WindowId | null | undefined>;
+  listBrowserCommands(): Promise<BrowserCommand[]>;
 }
 
 function commandError(command: string, cause: unknown): Error {
@@ -197,7 +196,7 @@ export class TabSetController {
 
   async #execute<T>(
     command: string,
-    operation: () => MaybePromise<T>,
+    operation: () => Promise<T>,
   ): Promise<CommandResult<T>> {
     try {
       return { status: 'success', value: await operation() };
