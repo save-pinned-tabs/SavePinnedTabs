@@ -1,3 +1,5 @@
+/** Coordinates popup commands, view bindings, status updates, and rendered state. */
+
 import type {
   CommandResult,
   PopupState,
@@ -5,12 +7,15 @@ import type {
 } from '../domain.js';
 import { errorMessage } from '../validation.js';
 
+/** Identifies the visual state of a popup status message. */
 type StatusKind = 'loading' | 'error' | 'success';
 
+/** Carries the latest popup state returned by a command. */
 interface PopupCommandValue {
   state: PopupState;
 }
 
+/** Provides commands that read or mutate saved tab sets. */
 interface PopupController {
   saveSet(
     name: string,
@@ -27,6 +32,7 @@ interface PopupController {
   getPopupState(): Promise<CommandResult<PopupCommandValue>>;
 }
 
+/** Exposes user-triggered operations to the popup view. */
 interface PopupActions {
   save(name: string, setId?: TabSetId): Promise<void>;
   load(setId: TabSetId): Promise<void>;
@@ -36,6 +42,7 @@ interface PopupActions {
   delete(setId: TabSetId): Promise<void>;
 }
 
+/** Defines rendering, feedback, confirmation, and event-binding behavior. */
 interface PopupView {
   render(state: PopupState): void;
   showStatus(message: string, status: StatusKind): void;
@@ -46,6 +53,7 @@ interface PopupView {
   focusSaveName(): void;
 }
 
+/** Configures status messages and callbacks for a serialized command. */
 interface RunCommandOptions {
   loadingMessage: string;
   command(): Promise<CommandResult<PopupCommandValue>>;
@@ -53,6 +61,7 @@ interface RunCommandOptions {
   successMessage: string;
 }
 
+/** Binds popup actions, loads initial state, and focuses the save-name input. */
 export async function startPopupApp(
   controller: PopupController,
   view: PopupView,
@@ -60,11 +69,13 @@ export async function startPopupApp(
   let isPending = false;
   let currentState: PopupState | undefined;
 
+  /** Caches the latest state before rendering it. */
   function render(state: PopupState): void {
     currentState = state;
     view.render(state);
   }
 
+  /** Runs one command at a time and synchronizes status, pending, and rendered state. */
   async function runCommand({
     loadingMessage,
     command,

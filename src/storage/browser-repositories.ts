@@ -1,3 +1,5 @@
+/** Constructs and caches browser-backed repositories for tab sets, window sessions, and shortcuts. */
+
 import type { BrowserApi } from '../browser-api.js';
 import type { TabSetImportDocument } from '../tab-sets/tab-set-import.js';
 import { TabSetRepository } from '../tab-sets/tab-set-repository.js';
@@ -15,22 +17,27 @@ import {
   WindowSessionRepository,
 } from './window-session-repository.js';
 
+/** Groups repositories that share a browser instance and storage migration. */
 interface BrowserRepositories {
   readonly tabSets: TabSetRepository;
   readonly windowSessions: WindowSessionRepository;
   readonly shortcutAssignments: ShortcutAssignmentRepository;
 }
 
+/** Narrows an unknown value to a valid tab-set import document. */
 type ImportValidator = (
   document: unknown,
 ) => document is TabSetImportDocument;
 
 declare global {
+  /** Holds the generated import-schema validator when it has been loaded. */
   var validate20: ImportValidator | undefined;
 }
 
+/** Caches one repository group per browser API instance without retaining discarded instances. */
 const repositoriesByBrowser = new WeakMap<BrowserApi, BrowserRepositories>();
 
+/** Creates or retrieves repositories that share storage and cross-repository dependencies. */
 export function createBrowserRepositories(
   browser: BrowserApi,
 ): BrowserRepositories {

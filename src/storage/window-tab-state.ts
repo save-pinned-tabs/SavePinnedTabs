@@ -1,3 +1,7 @@
+/**
+ * Manages pinned-tab snapshots, tab-set transitions, persistence, and cross-context messaging.
+ */
+
 import type { BrowserApi } from '../browser-api.js';
 import type {
   TabSet,
@@ -28,6 +32,8 @@ const WINDOW_TAB_STATE_OPERATIONS: Record<WindowTabStateOperation, true> = {
   unload: true,
   captureAndSave: true,
 };
+
+/** Identifies an operation supported by the window tab-state message protocol. */
 type WindowTabStateOperation =
   | 'snapshot'
   | 'replace'
@@ -35,16 +41,25 @@ type WindowTabStateOperation =
   | 'unload'
   | 'captureAndSave';
 
+/** Describes a pinned browser tab in display order. */
 interface PinnedTab {
   id: number;
   index: number;
   url: string;
 }
 
+/** Provides the browser tab operations required by state transitions. */
 interface PinnedTabs {
+  /** Queries pinned tabs and returns them in display order. */
   queryPinned(windowId: WindowId): Promise<PinnedTab[]>;
+
+  /** Creates an inactive tab and returns its browser-assigned identifier. */
   create(windowId: WindowId, url: string): Promise<number>;
+
+  /** Pins an existing tab, reporting contextual errors on failure. */
   pin(tabId: number, windowId: WindowId, url: string): Promise<void>;
+
+  /** Removes tabs and does nothing when the identifier list is empty. */
   remove(
     tabIds: number[],
     windowId: WindowId,
@@ -52,12 +67,18 @@ interface PinnedTabs {
   ): Promise<void>;
 }
 
+/** Provides tab-set persistence and session activation operations. */
 interface TabSetStore {
+  /** Loads a tab set or returns null when it no longer exists. */
   get(setId: TabSetId): Promise<TabSet | null>;
+
+  /** Saves captured tabs and associates the result with a window. */
   saveForWindow(
     set: TabSetDraft,
     windowId: WindowId,
   ): Promise<TabSet>;
+
+  /** Activates a session only if the supplied tab set remains current. */
   activateWindowSession(
     setId: TabSetId,
     set: TabSet,
@@ -65,35 +86,50 @@ interface TabSetStore {
   ): Promise<boolean>;
 }
 
+/** Clears active tab-set associations for browser windows. */
 interface WindowSessionStore {
+  /** Clears the active session for one window. */
   clear(windowId: WindowId): Promise<void>;
+
+  /** Clears active sessions for every window. */
   clearAll(): Promise<void>;
 }
 
+/** Supplies storage, browser, locking, and notification dependencies. */
 interface WindowTabStateDependencies {
   tabs: PinnedTabs;
   tabSets: TabSetStore;
   windowSessions: WindowSessionStore;
+
+  /** Serializes a transition against other transitions for the same window. */
   runTransition: <Result>(
     windowId: WindowId,
     operation: () => Promise<Result>,
   ) => Promise<Result>;
+
+  /** Runs an operation exclusively against transitions for all windows. */
   runAllExclusive: <Result>(
     operation: () => Promise<Result>,
   ) => Promise<Result>;
+
+  /** Observes replacement URLs before browser tabs are changed. */
   onReplace?: (urls: string[]) => void;
 }
 
+/** Configures browser-backed window tab-state behavior. */
 interface BrowserWindowTabStateOptions {
+  /** Observes replacement URLs before browser tabs are changed. */
   onReplace?: (urls: string[]) => void;
 }
 
 
 
+/** Checks whether a value is a valid tab-set identifier. */
 function isTabSetId(value: unknown): value is TabSetId {
   return typeof value === 'string';
 }
 
+/** Checks whether a value contains valid tab-set metadata. */
 function isTabSetDetails(value: unknown): value is TabSetDetails {
   return isRecord(value)
     && typeof value.name === 'string'
@@ -103,6 +139,7 @@ function isTabSetDetails(value: unknown): value is TabSetDetails {
     );
 }
 
+/** Checks whether a value is a complete persisted tab set. */
 function isTabSet(value: unknown): value is TabSet {
   return isRecord(value)
     && isTabSetId(value.id)
@@ -110,12 +147,14 @@ function isTabSet(value: unknown): value is TabSet {
     && isStringArray(value.tabs);
 }
 
+/** Formats absent identifiers as "new" for operation messages. */
 function displaySetId(set: TabSetDetails): string {
   return set.id === null || set.id === undefined
     ? 'new'
     : String(set.id);
 }
 
+/** Creates a marked transition error with optional rollback failure context. */
 function operationError(
   operation: string,
   windowId: WindowId,
@@ -132,21 +171,25 @@ function operationError(
   return Object.assign(error, { [WINDOW_TAB_STATE_ERROR]: true });
 }
 
+/** Detects errors already enriched with window tab-state context. */
 function isWindowTabStateError(error: unknown): boolean {
   return error instanceof Error
     && WINDOW_TAB_STATE_ERROR in error
     && error[WINDOW_TAB_STATE_ERROR] === true;
 }
 
+/** Preserves created tab identifiers when a multi-tab creation fails partway. */
 class PartialTabCreationError extends Error {
   readonly createdTabIds: number[];
 
+  /** Records successfully created tabs alongside the original failure. */
   constructor(createdTabIds: number[], cause: unknown) {
     super(errorMessage(cause), { cause });
     this.createdTabIds = createdTabIds;
   }
 }
 
+/** Canonicalizes absolute URLs while preserving nonstandard browser URL strings. */
 export function normalizeUrl(url: unknown): string {
   if (typeof url !== 'string' || url.length === 0) {
     throw new TypeError('Pinned tab URL must be a non-empty string');
@@ -159,12 +202,14 @@ export function normalizeUrl(url: unknown): string {
   }
 }
 
+/** Resolves a tab's pending URL before its committed URL. */
 function effectiveUrl(tab: unknown): string {
   const pendingUrl = isRecord(tab) ? tab.pendingUrl : undefined;
   const url = isRecord(tab) ? tab.url : undefined;
   return normalizeUrl(pendingUrl || url);
 }
 
+/** Validates and normalizes a saved URL list. */
 function normalizeSavedUrls(urls: unknown): string[] {
   if (!Array.isArray(urls)) {
     throw new TypeError('Pinned tab list must be an array');
@@ -172,15 +217,18 @@ function normalizeSavedUrls(urls: unknown): string[] {
   return urls.map(normalizeUrl);
 }
 
+/** Normalizes URLs read from a persisted tab set. */
 function storedTabUrls(set: TabSet): string[] {
   return set.tabs.map(normalizeUrl);
 }
 
+/** Compares current tabs with saved URLs using order and multiplicity. */
 function urlsMatch(tabs: PinnedTab[], urls: string[]): boolean {
   return tabs.length === urls.length
     && tabs.every((tab, index) => tab.url === urls[index]);
 }
 
+/** Finds saved URL occurrences not represented by current tabs. */
 function missingUrls(tabs: PinnedTab[], savedUrls: string[]): string[] {
   const existingMultiplicity = new Map<string, number>();
   for (const tab of tabs) {
@@ -198,6 +246,7 @@ function missingUrls(tabs: PinnedTab[], savedUrls: string[]): string[] {
   });
 }
 
+/** Selects current tab identifiers matching saved URL multiplicities. */
 function matchingTabIds(
   tabs: PinnedTab[],
   savedUrls: string[],
@@ -220,6 +269,7 @@ function matchingTabIds(
   return tabIds;
 }
 
+/** Creates a tab-set draft without mutating the supplied details. */
 function withTabs(
   set: TabSetDetails,
   tabs: string[],
@@ -227,13 +277,16 @@ function withTabs(
   return Object.assign({}, set, { tabs });
 }
 
+/** Adapts browser tab APIs to validated pinned-tab operations. */
 export class BrowserTabsAdapter implements PinnedTabs {
   #tabs: BrowserApi['tabs'];
 
+  /** Wraps a browser tab API implementation. */
   constructor(tabs: BrowserApi['tabs']) {
     this.#tabs = tabs;
   }
 
+  /** Queries, validates, normalizes, and orders pinned tabs. */
   async queryPinned(windowId: WindowId): Promise<PinnedTab[]> {
     try {
       const result = await this.#tabs.query({ pinned: true, windowId });
@@ -264,6 +317,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
     }
   }
 
+  /** Creates an inactive replacement tab and validates its identifier. */
   async create(windowId: WindowId, url: string): Promise<number> {
     try {
       const tab = await this.#tabs.create({
@@ -283,6 +337,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
     }
   }
 
+  /** Pins a replacement tab and adds window and URL context to failures. */
   async pin(
     tabId: number,
     windowId: WindowId,
@@ -298,6 +353,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
     }
   }
 
+  /** Removes tabs, skipping browser access when none are supplied. */
   async remove(
     tabIds: number[],
     windowId: WindowId,
@@ -316,6 +372,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
   }
 }
 
+/** Coordinates atomic pinned-tab transitions and window session state. */
 export class WindowTabState {
   #tabs: PinnedTabs;
   #tabSets: TabSetStore;
@@ -324,6 +381,7 @@ export class WindowTabState {
   #runAllExclusive: WindowTabStateDependencies['runAllExclusive'];
   #onReplace: (urls: string[]) => void;
 
+  /** Initializes transition coordination with injected persistence and locking. */
   constructor({
     tabs,
     tabSets,
@@ -340,6 +398,7 @@ export class WindowTabState {
     this.#onReplace = onReplace;
   }
 
+  /** Captures normalized pinned-tab URLs in display order. */
   snapshot(windowId: WindowId): Promise<string[]> {
     return this.#run(windowId, 'snapshot', async () => {
       const tabs = await this.#tabs.queryPinned(windowId);
@@ -347,6 +406,7 @@ export class WindowTabState {
     });
   }
 
+  /** Replaces pinned tabs with a saved set and activates its window session. */
   replace(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
@@ -375,6 +435,7 @@ export class WindowTabState {
     );
   }
 
+  /** Adds missing saved URL occurrences without duplicating existing matches. */
   append(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
@@ -392,6 +453,7 @@ export class WindowTabState {
     );
   }
 
+  /** Removes current tabs matching a saved set while preserving multiplicity. */
   unload(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
@@ -413,6 +475,7 @@ export class WindowTabState {
     );
   }
 
+  /** Captures pinned tabs and saves them, returning null when none exist. */
   captureAndSave(
     windowId: WindowId,
     set: TabSetDetails,
@@ -454,12 +517,14 @@ export class WindowTabState {
     );
   }
 
+  /** Clears the active tab-set session for a window. */
   deactivate(windowId: WindowId): Promise<void> {
     return this.#run(windowId, 'deactivate tab set', async () => {
       await this.#windowSessions.clear(windowId);
     });
   }
 
+  /** Clears all window sessions while blocking concurrent transitions. */
   resetSessions(): Promise<void> {
     return this.#runAllExclusive(async () => {
       try {
@@ -473,6 +538,7 @@ export class WindowTabState {
     });
   }
 
+  /** Loads a tab set or throws when it does not exist. */
   async #requiredSet(setId: TabSetId): Promise<TabSet> {
     const set = await this.#tabSets.get(setId);
     if (set === null) {
@@ -481,6 +547,7 @@ export class WindowTabState {
     return set;
   }
 
+  /** Clears prior state and activates a session with rollback on failure. */
   async #activateSession(
     windowId: WindowId,
     setId: TabSetId,
@@ -511,6 +578,7 @@ export class WindowTabState {
     }
   }
 
+  /** Creates replacements before activation and removes them if transition fails. */
   async #replaceTabs(
     windowId: WindowId,
     setId: TabSetId,
@@ -572,6 +640,7 @@ export class WindowTabState {
     }
   }
 
+  /** Creates pinned tabs and removes partial results after a failure. */
   async #createPinnedTabs(
     windowId: WindowId,
     urls: string[],
@@ -610,6 +679,7 @@ export class WindowTabState {
     }
   }
 
+  /** Creates and pins URLs sequentially, preserving partial progress on failure. */
   async #createAndPinTabs(
     windowId: WindowId,
     urls: string[],
@@ -628,6 +698,7 @@ export class WindowTabState {
     }
   }
 
+  /** Attempts session cleanup and returns any rollback failure. */
   async #clearSessionAfterFailure(
     windowId: WindowId,
   ): Promise<unknown[]> {
@@ -639,6 +710,7 @@ export class WindowTabState {
     }
   }
 
+  /** Serializes a transition and adds consistent operation context to failures. */
   #run<Result>(
     windowId: WindowId,
     operation: string,
@@ -655,6 +727,7 @@ export class WindowTabState {
   }
 }
 
+/** Creates browser-backed tab-state coordination with global and per-window locks. */
 export function createBrowserWindowTabState(
   browser: BrowserApi,
   { onReplace }: BrowserWindowTabStateOptions = {},
@@ -665,6 +738,7 @@ export function createBrowserWindowTabState(
     ALL_WINDOWS_LOCK,
   );
 
+  /** Runs under a Web Lock when available, otherwise using serialized storage. */
   function runGlobal<Result>(
     mode: 'shared' | 'exclusive',
     operation: () => Promise<Result>,
@@ -676,6 +750,7 @@ export function createBrowserWindowTabState(
     return fallbackGlobalOperation(operation);
   }
 
+  /** Serializes operations that target the same browser window. */
   function runWindowExclusive<Result>(
     windowId: WindowId,
     operation: () => Promise<Result>,
@@ -703,6 +778,7 @@ export function createBrowserWindowTabState(
   });
 }
 
+/** Sends a tab-state request to the background context with contextual errors. */
 function sendWindowTabStateMessage(
   browser: BrowserApi,
   operation: WindowTabStateOperation,
@@ -720,6 +796,7 @@ function sendWindowTabStateMessage(
   });
 }
 
+/** Sends a URL-producing operation and validates the response. */
 async function sendWindowTabUrls(
   browser: BrowserApi,
   operation: 'snapshot' | 'replace' | 'append' | 'unload',
@@ -730,17 +807,28 @@ async function sendWindowTabUrls(
   );
 }
 
+/** Exposes window tab-state operations through background messaging. */
 export interface WindowTabStateClient {
+  /** Captures pinned-tab URLs in display order. */
   snapshot(windowId: WindowId): Promise<string[]>;
+
+  /** Replaces pinned tabs with a saved tab set. */
   replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+
+  /** Adds missing tabs from a saved tab set. */
   append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+
+  /** Removes tabs matching a saved tab set. */
   unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+
+  /** Captures and saves pinned tabs, or returns null when none exist. */
   captureAndSave(
     windowId: WindowId,
     set: TabSetDetails,
   ): Promise<TabSet | null>;
 }
 
+/** Creates a validated messaging client for background tab-state operations. */
 export function createWindowTabStateClient(
   browser: BrowserApi,
 ): WindowTabStateClient {
@@ -779,6 +867,7 @@ export function createWindowTabStateClient(
   };
 }
 
+/** Registers and validates background requests for tab-state operations. */
 export function registerWindowTabStateMessages(
   browser: BrowserApi,
   windowTabState: WindowTabState,
