@@ -317,6 +317,13 @@ function normalizeAutoload(
     : [];
 }
 
+export function parseSyncDocument(value: unknown): SyncDocument {
+  assertVersion(value, 'synchronized');
+  const document = structuredClone(value);
+  normalizeAutoload(document);
+  return document;
+}
+
 function migrateReference(
   reference: unknown,
   legacyIds: Record<string, string>,
@@ -438,10 +445,7 @@ export class BrowserStorageMigration implements StorageMigration {
       await this.#syncStorage.set({ [SYNC_DOCUMENT_KEY]: syncDocument });
       syncChanged = true;
     } else {
-      assertVersion(storedSyncDocument, 'synchronized');
-      const normalizedDocument = structuredClone(storedSyncDocument);
-      normalizeAutoload(normalizedDocument);
-      syncDocument = normalizedDocument;
+      syncDocument = parseSyncDocument(storedSyncDocument);
       syncChanged =
         JSON.stringify(syncDocument) !== JSON.stringify(storedSyncDocument);
     }
@@ -532,14 +536,10 @@ export class BrowserReferenceStorage {
 
 export class InMemoryReferenceStorage {
   #document: LocalDocument = emptyLocalDocument();
-  #runExclusive = createSerializedStorageOperation(
+  readonly runExclusive = createSerializedStorageOperation(
     this,
     'save-pinned-tabs:memory-references',
   );
-
-  runExclusive<T>(operation: StorageOperation<T>): Promise<T> {
-    return this.#runExclusive(operation);
-  }
 
   async read(): Promise<LocalDocument> {
     return structuredClone(this.#document);

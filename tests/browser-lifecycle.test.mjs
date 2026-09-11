@@ -39,7 +39,7 @@ function createHarness({
 
   function createWorker() {
     return new BrowserLifecycle({
-      autoloadPolicy: policy,
+      getAutoload: () => ({ scope: policy, setIds: [] }),
       stateStorage,
       windows: {
         async getAll() {

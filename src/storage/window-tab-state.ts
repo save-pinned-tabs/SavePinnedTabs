@@ -720,6 +720,16 @@ function sendWindowTabStateMessage(
   });
 }
 
+async function sendWindowTabUrls(
+  browser: BrowserApi,
+  operation: 'snapshot' | 'replace' | 'append' | 'unload',
+  args: unknown[],
+): Promise<string[]> {
+  return normalizeSavedUrls(
+    await sendWindowTabStateMessage(browser, operation, args),
+  );
+}
+
 export interface WindowTabStateClient {
   snapshot(windowId: WindowId): Promise<string[]>;
   replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
@@ -735,49 +745,17 @@ export function createWindowTabStateClient(
   browser: BrowserApi,
 ): WindowTabStateClient {
   return {
-    async snapshot(windowId: WindowId): Promise<string[]> {
-      const result = await sendWindowTabStateMessage(
-        browser,
-        'snapshot',
-        [windowId],
-      );
-      return normalizeSavedUrls(result);
+    snapshot(windowId) {
+      return sendWindowTabUrls(browser, 'snapshot', [windowId]);
     },
-
-    async replace(
-      windowId: WindowId,
-      setId: TabSetId,
-    ): Promise<string[]> {
-      const result = await sendWindowTabStateMessage(
-        browser,
-        'replace',
-        [windowId, setId],
-      );
-      return normalizeSavedUrls(result);
+    replace(windowId, setId) {
+      return sendWindowTabUrls(browser, 'replace', [windowId, setId]);
     },
-
-    async append(
-      windowId: WindowId,
-      setId: TabSetId,
-    ): Promise<string[]> {
-      const result = await sendWindowTabStateMessage(
-        browser,
-        'append',
-        [windowId, setId],
-      );
-      return normalizeSavedUrls(result);
+    append(windowId, setId) {
+      return sendWindowTabUrls(browser, 'append', [windowId, setId]);
     },
-
-    async unload(
-      windowId: WindowId,
-      setId: TabSetId,
-    ): Promise<string[]> {
-      const result = await sendWindowTabStateMessage(
-        browser,
-        'unload',
-        [windowId, setId],
-      );
-      return normalizeSavedUrls(result);
+    unload(windowId, setId) {
+      return sendWindowTabUrls(browser, 'unload', [windowId, setId]);
     },
 
     async captureAndSave(

@@ -53,8 +53,7 @@ interface LifecycleRepositories {
 }
 
 interface BrowserLifecycleOptions {
-  autoloadPolicy?: AutoloadScope;
-  getAutoload?: (() => MaybePromise<AutoloadConfiguration>) | null;
+  getAutoload: () => MaybePromise<AutoloadConfiguration>;
   stateStorage: LifecycleStateStorage;
   windows: BrowserApi['windows'];
   windowTabState: LifecycleWindowTabState;
@@ -136,7 +135,7 @@ function removeWindowId(
 
 export class BrowserLifecycleStateStorage {
   #sessionStorage: BrowserStorageArea;
-  #runExclusive: <Result>(
+  readonly runExclusive: <Result>(
     operation: Operation<Result>,
   ) => Promise<Result>;
 
@@ -150,17 +149,12 @@ export class BrowserLifecycleStateStorage {
     }
 
     this.#sessionStorage = sessionStorage;
-    this.#runExclusive = createSerializedStorageOperation(
+    this.runExclusive = createSerializedStorageOperation(
       sessionStorage,
       LIFECYCLE_LOCK,
     );
   }
 
-  runExclusive<Result>(
-    operation: Operation<Result>,
-  ): Promise<Result> {
-    return this.#runExclusive(operation);
-  }
 
   async read(): Promise<BrowserLifecycleState> {
     const stored = await this.#sessionStorage.get(LIFECYCLE_KEY);
@@ -175,19 +169,18 @@ export class BrowserLifecycleStateStorage {
 }
 
 export class BrowserLifecycle {
-  #getAutoload: () => PromiseLike<unknown> | unknown;
+  #getAutoload: () => MaybePromise<AutoloadConfiguration>;
   #stateStorage: LifecycleStateStorage;
   #windows: BrowserApi['windows'];
   #windowTabState: LifecycleWindowTabState;
   #restoreAutoload: (
     windowId: number,
     configuration: AutoloadConfiguration,
-  ) => PromiseLike<unknown> | unknown;
-  #delay: (milliseconds: number) => PromiseLike<unknown> | unknown;
+  ) => unknown;
+  #delay: (milliseconds: number) => unknown;
   #startupWindowAttempts: number;
 
   constructor({
-    autoloadPolicy,
     getAutoload,
     stateStorage,
     windows,
@@ -196,16 +189,7 @@ export class BrowserLifecycle {
     delay = wait,
     startupWindowAttempts = DEFAULT_STARTUP_WINDOW_ATTEMPTS,
   }: BrowserLifecycleOptions) {
-    if (!getAutoload && !isAutoloadScope(autoloadPolicy)) {
-      throw new TypeError(
-        `Unsupported Autoload scope "${String(autoloadPolicy)}"`,
-      );
-    }
-
-    this.#getAutoload = getAutoload ?? (() => ({
-      scope: autoloadPolicy,
-      setIds: [],
-    }));
+    this.#getAutoload = getAutoload;
     this.#stateStorage = stateStorage;
     this.#windows = windows;
     this.#windowTabState = windowTabState;

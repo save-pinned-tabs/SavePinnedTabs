@@ -1,17 +1,15 @@
 import type { BrowserStorageArea } from '../browser-api.js';
 import type { AutoloadConfiguration, TabSet } from '../domain.js';
 import {
-  STORAGE_SCHEMA_VERSION,
   SYNC_DOCUMENT_KEY,
   emptySyncDocument,
-  isAutoloadScope,
+  parseSyncDocument,
   type SyncDocument,
 } from '../storage/storage-schema.js';
 import {
   createSerializedOperation,
   createSerializedStorageOperation,
 } from '../storage/serialized-operation.js';
-import { isRecord, isStringArray } from '../validation.js';
 
 const TAB_SET_LOCK = 'save-pinned-tabs:tab-sets';
 
@@ -25,72 +23,11 @@ interface InMemoryTabSetStorageOptions {
   autoload?: AutoloadConfiguration;
 }
 
-const EMPTY_SYNC_DOCUMENT = emptySyncDocument();
 
 const NOOP_MIGRATION: Migration = {
   ensureMigrated: () => Promise.resolve(),
 };
 
-function hasShape(value: unknown, template: unknown): boolean {
-  if (Array.isArray(template)) {
-    return Array.isArray(value);
-  }
-
-  if (isRecord(template)) {
-    if (!isRecord(value)) {
-      return false;
-    }
-
-    return Object.entries(template).every(
-      ([key, expectedValue]) =>
-        key in value && hasShape(value[key], expectedValue),
-    );
-  }
-
-  if (template === null) {
-    return value === null;
-  }
-
-  return typeof value === typeof template;
-}
-
-function isTabSet(value: unknown): value is TabSet {
-  return isRecord(value)
-    && typeof value.id === 'string'
-    && typeof value.name === 'string'
-    && isStringArray(value.tabs);
-}
-
-function isAutoloadConfiguration(
-  value: unknown,
-): value is AutoloadConfiguration {
-  if (!isRecord(value) || !hasShape(value, EMPTY_SYNC_DOCUMENT.autoload)) {
-    return false;
-  }
-
-  return isAutoloadScope(value.scope) && isStringArray(value.setIds);
-}
-
-function isSyncDocument(value: unknown): value is SyncDocument {
-  if (
-    !isRecord(value)
-    || value.version !== STORAGE_SCHEMA_VERSION
-    || !hasShape(value, EMPTY_SYNC_DOCUMENT)
-  ) {
-    return false;
-  }
-
-  const sets = value.sets;
-  const deletedSetIds = value.deletedSetIds;
-  const autoload = value.autoload;
-
-  return (
-    isRecord(sets) &&
-    Object.values(sets).every(isTabSet) &&
-    isStringArray(deletedSetIds) &&
-    isAutoloadConfiguration(autoload)
-  );
-}
 
 
 export class BrowserTabSetStorage {
@@ -202,19 +139,12 @@ export class BrowserTabSetStorage {
   async #read(): Promise<SyncDocument> {
     await this.#migration.ensureMigrated();
 
-    const stored: unknown = await this.#storage.get(SYNC_DOCUMENT_KEY);
-
-    if (!isRecord(stored)) {
-      throw new TypeError('Stored tab set document is invalid');
+    const stored = await this.#storage.get(SYNC_DOCUMENT_KEY);
+    try {
+      return parseSyncDocument(stored[SYNC_DOCUMENT_KEY]);
+    } catch (cause: unknown) {
+      throw new TypeError('Stored tab set document is invalid', { cause });
     }
-
-    const value = stored[SYNC_DOCUMENT_KEY];
-
-    if (!isSyncDocument(value)) {
-      throw new TypeError('Stored tab set document is invalid');
-    }
-
-    return structuredClone(value);
   }
 
   async #write(document: SyncDocument): Promise<void> {
@@ -226,7 +156,7 @@ export class BrowserTabSetStorage {
 
 export class InMemoryTabSetStorage {
   #document: SyncDocument;
-  #runExclusive = createSerializedOperation(
+  readonly runExclusive = createSerializedOperation(
     'save-pinned-tabs:memory-tab-sets',
   );
 
@@ -242,9 +172,6 @@ export class InMemoryTabSetStorage {
     }
   }
 
-  runExclusive<Result>(operation: () => Promise<Result>): Promise<Result> {
-    return this.#runExclusive(operation);
-  }
 
   async list(): Promise<TabSet[]> {
     return Object.values(this.#document.sets).map((set) =>

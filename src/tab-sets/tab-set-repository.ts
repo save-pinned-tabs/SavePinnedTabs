@@ -17,42 +17,13 @@ import {
   isRecord,
   isStringArray,
 } from '../validation.js';
+import {
+  normalizeImportDocument,
+  type TabSetImportDocument,
+} from './tab-set-import.js';
 
 const EXPORT_VERSION = 2;
 
-interface LegacyTabSet {
-  set_name: string;
-  tabs: string[];
-  autoload?: 0 | 1;
-}
-
-interface VersionedTabSetDocument {
-  version: 2;
-  sets: TabSet[];
-  autoload: AutoloadConfiguration;
-}
-
-interface VersionedLegacyDocument {
-  version: 1;
-  sets: Record<string, LegacyTabSet>;
-}
-
-export type TabSetImportDocument =
-  | VersionedTabSetDocument
-  | VersionedLegacyDocument
-  | Record<string, LegacyTabSet>;
-
-function isVersionedTabSetDocument(
-  document: TabSetImportDocument,
-): document is VersionedTabSetDocument {
-  return 'version' in document && document.version === EXPORT_VERSION;
-}
-
-function isVersionedLegacyDocument(
-  document: TabSetImportDocument,
-): document is VersionedLegacyDocument {
-  return 'version' in document && document.version === 1;
-}
 
 interface TabSetStorage {
   list(): Promise<TabSet[]>;
@@ -373,56 +344,30 @@ export class TabSetRepository {
           throw new TypeError('Import validation failed');
         }
 
+        const normalized = normalizeImportDocument(document);
         const identities = await this.#storage.identities();
         const imported: TabSet[] = [];
         const importedAutoloadIds: string[] = [];
-        let importedScope: AutoloadScope | undefined;
+        const importedIdBySource = new Map<TabSetId, TabSetId>();
 
-        if (isVersionedTabSetDocument(document)) {
-          importedScope = document.autoload.scope;
-
-          const idMap = new Map<string, string>();
-
-          for (const set of document.sets) {
-            const id = identities.has(set.id)
-              ? this.#newId(identities)
-              : set.id;
-
-            identities.add(id);
-            imported.push({ ...set, id });
-            idMap.set(set.id, id);
-          }
-
-          for (const sourceId of document.autoload.setIds) {
-            const importedId = idMap.get(sourceId);
-
-            if (importedId !== undefined) {
-              importedAutoloadIds.push(importedId);
-            }
-          }
-        } else {
-          const legacySets = isVersionedLegacyDocument(document)
-            ? document.sets
-            : document;
-
-          for (const set of Object.values(legacySets)) {
-            const id = this.#newId(identities);
-            imported.push({
-              id,
-              name: set.set_name,
-              tabs: [...set.tabs],
-            });
-
-            if (set.autoload === 1) {
-              importedAutoloadIds.push(id);
-            }
-          }
+        for (const set of normalized.sets) {
+          const id = set.sourceId !== null && !identities.has(set.sourceId)
+            ? set.sourceId
+            : this.#newId(identities);
+          identities.add(id);
+          imported.push({ id, name: set.name, tabs: [...set.tabs] });
+          if (set.sourceId !== null) importedIdBySource.set(set.sourceId, id);
+          if (set.isAutoload) importedAutoloadIds.push(id);
+        }
+        for (const sourceId of normalized.autoloadSourceIds) {
+          const importedId = importedIdBySource.get(sourceId);
+          if (importedId !== undefined) importedAutoloadIds.push(importedId);
         }
 
         const currentAutoload = await this.#storage.getAutoload();
 
         await this.#storage.import(imported, {
-          scope: importedScope ?? currentAutoload.scope,
+          scope: normalized.scope ?? currentAutoload.scope,
           setIds: [
             ...new Set([
               ...currentAutoload.setIds,

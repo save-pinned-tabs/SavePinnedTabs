@@ -2,13 +2,27 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  loadTabSet,
   preloadFavicons,
-  restoreAutoloadSet,
   restoreAutoloadSets,
 } from '../.extension-build/background/autoload.js';
+import { createBrowserWindowTabState } from '../.extension-build/storage/window-tab-state.js';
 import { createBrowserRepositories } from '../.extension-build/storage/browser-repositories.js';
 import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../.extension-build/storage/storage-schema.js';
+
+async function restoreAutoloadSet(browser, windowId, windowTabState) {
+  const configuration =
+    await createBrowserRepositories(browser).tabSets.getAutoload();
+  return restoreAutoloadSets(browser, windowId, configuration, windowTabState);
+}
+
+async function loadTabSet(browser, setId, windowId) {
+  const windowTabState = createBrowserWindowTabState(browser, {
+    onReplace(urls) {
+      void preloadFavicons(browser, urls);
+    },
+  });
+  await windowTabState.replace(windowId, setId);
+}
 
 function deferred() {
   let resolve;

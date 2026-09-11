@@ -294,6 +294,24 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), ids);
 });
 
+test('versioned import maps duplicate source ids to the last imported set', async () => {
+  const { tabSets } = createMemoryHarness();
+  const imported = await tabSets.import({
+    version: 2,
+    sets: [
+      { id: FIRST_ID, name: 'First', tabs: [] },
+      { id: FIRST_ID, name: 'Duplicate', tabs: [] },
+    ],
+    autoload: { scope: 'first-window', setIds: [FIRST_ID] },
+  });
+
+  assert.deepEqual(imported.map((set) => set.id), [FIRST_ID, SECOND_ID]);
+  assert.deepEqual(
+    (await tabSets.getAutoload()).setIds,
+    [SECOND_ID],
+  );
+});
+
 test('saveForWindow rolls back new and updated records when session activation fails', async () => {
   const generatedIds = [FIRST_ID, FIRST_ID, SECOND_ID];
   const harness = createBrowserHarness({ createId: () => generatedIds.shift() });

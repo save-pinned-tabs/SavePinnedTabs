@@ -1,8 +1,6 @@
 import type { BrowserApi } from '../browser-api.js';
-import {
-  TabSetRepository,
-  type TabSetImportDocument,
-} from '../tab-sets/tab-set-repository.js';
+import type { TabSetImportDocument } from '../tab-sets/tab-set-import.js';
+import { TabSetRepository } from '../tab-sets/tab-set-repository.js';
 import { BrowserTabSetStorage } from '../tab-sets/tab-set-storage.js';
 import {
   BrowserReferenceStorage,

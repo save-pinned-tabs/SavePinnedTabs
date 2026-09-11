@@ -52,36 +52,6 @@ export async function preloadFavicons(
   }));
 }
 
-export async function loadTabSet(
-  browser: BrowserApi,
-  setId: TabSetId,
-  windowId: WindowId,
-): Promise<void> {
-  const windowTabState = createBrowserWindowTabState(browser, {
-    onReplace(urls) {
-      void preloadFavicons(browser, urls);
-    },
-  });
-  await windowTabState.replace(windowId, setId);
-}
-
-export async function appendTabSet(
-  browser: BrowserApi,
-  setId: TabSetId,
-  windowId: WindowId,
-): Promise<void> {
-  const windowTabState = createBrowserWindowTabState(browser);
-  await windowTabState.append(windowId, setId);
-}
-
-export async function unloadTabSet(
-  browser: BrowserApi,
-  setId: TabSetId,
-  windowId: WindowId,
-): Promise<void> {
-  const windowTabState = createBrowserWindowTabState(browser);
-  await windowTabState.unload(windowId, setId);
-}
 
 export async function restoreAutoloadSets(
   browser: BrowserApi,
@@ -120,19 +90,4 @@ export async function restoreAutoloadSets(
       await windowTabState.append(windowId, setId);
     }
   }
-}
-
-export async function restoreAutoloadSet(
-  browser: BrowserApi,
-  windowId: WindowId,
-  windowTabState?: AutoloadWindowTabState,
-): Promise<void> {
-  const configuration =
-    await createBrowserRepositories(browser).tabSets.getAutoload();
-  return restoreAutoloadSets(
-    browser,
-    windowId,
-    configuration,
-    windowTabState,
-  );
 }
