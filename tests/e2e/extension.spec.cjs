@@ -514,7 +514,40 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
   await expect(popup.locator(".load-row", { hasText: "Invalid" })).toHaveCount(0);
 });
 
-test("an imported every-window set autoloads in existing and new windows", async () => {
+test("an imported every-window set autoloads in existing and new windows", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const autoloadUrl = `chrome-extension://${extensionId}/options/options.html?every-window`;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const secondWindow = await popup.evaluate(
+    (url) => chrome.windows.create({ url }),
+    `chrome-extension://${extensionId}/options/options.html?existing-window`,
+  );
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  const everyWindowSetId = "00000000-0000-4000-8000-000000000002";
+  await importDocument(options, {
+    version: 2,
+    sets: [{ id: everyWindowSetId, name: "Every window", tabs: [autoloadUrl] }],
+    autoload: { scope: "every-window", setIds: [everyWindowSetId] },
+  }, "every-window.json");
+  await expect(
+    options.getByText("Successfully imported 1 tab set.", { exact: true }),
+  ).toBeVisible();
+  await runStartupHandler(popup);
+  const firstWindowId = await currentWindowId(popup);
+
+  await expect.poll(() => pinnedUrls(popup, firstWindowId)).toEqual([autoloadUrl]);
+  await expect.poll(() => pinnedUrls(popup, secondWindow.id)).toEqual([autoloadUrl]);
+
+  const thirdWindow = await popup.evaluate(
+    (url) => chrome.windows.create({ url }),
+    `chrome-extension://${extensionId}/options/options.html?new-window`,
+  );
+  await expect.poll(() => pinnedUrls(popup, thirdWindow.id)).toEqual([autoloadUrl]);
+});
+
+test("installed Chrome delivers runtime.onStartup without command-line extension loading", async () => {
   test.skip(
     process.env.CHROME_INSTALLED_PROFILE_E2E !== "1",
     "Chrome cannot load an unpacked extension through its native directory picker in headless mode; run under Xvfb with a window manager and CHROME_INSTALLED_PROFILE_E2E=1.",

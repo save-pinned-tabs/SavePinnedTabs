@@ -163,6 +163,22 @@ async function restartFirefox() {
   ({ driver, extensionOrigin } = await launchFirefox());
 }
 
+async function runStartupHandler() {
+  const error = await driver.executeAsyncScript(async (done) => {
+    try {
+      await browser.storage.session.remove("savePinnedTabs:lifecycle");
+      const { handleStartup } = await import(
+        browser.runtime.getURL("background/service-worker.js")
+      );
+      await handleStartup();
+      done(null);
+    } catch (cause) {
+      done(cause.message);
+    }
+  });
+  if (error) throw new Error(`Failed to run startup handler: ${error}`);
+}
+
 async function importDocument(document, fileName = "import.json") {
   const importPath = path.join(temporaryDirectory, fileName);
   await writeFile(importPath, JSON.stringify(document));
@@ -505,8 +521,7 @@ test("an imported every-window set autoloads in existing and new windows", async
     autoload: { scope: "every-window", setIds: [everyWindowSetId] },
   }, "every-window.json");
   await waitForStatus("options-status", "Successfully imported 1 tab set.");
-  await restartFirefox();
-  await openExtensionPage("popup/popup.html");
+  await runStartupHandler();
   const existingWindowIds = await driver.executeAsyncScript((done) => {
     browser.windows.getAll({ windowTypes: ["normal"] }).then(
       (windows) => done(windows.map((window) => window.id)),
