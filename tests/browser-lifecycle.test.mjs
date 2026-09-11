@@ -249,7 +249,7 @@ test('lifecycle uses the stored Autoload scope and passes selected IDs to restor
   const restored = [];
   const configuration = {
     scope: AUTOLOAD_EVERY_WINDOW,
-    setIds: ['first-id', 'second-id'],
+    setIds: ['first-id'],
   };
   const lifecycle = new BrowserLifecycle({
     getAutoload: async () => configuration,
@@ -338,5 +338,31 @@ test('lifecycle rejects Autoload configurations with non-string set ids', async 
   await assert.rejects(
     lifecycle.onBrowserStartup(),
     /Autoload setIds must contain only strings/,
+  );
+});
+
+test('lifecycle rejects multiple Autoload set ids', async () => {
+  const lifecycle = new BrowserLifecycle({
+    getAutoload: async () => ({
+      scope: AUTOLOAD_FIRST_WINDOW,
+      setIds: ['first-id', 'second-id'],
+    }),
+    stateStorage: new EphemeralWorkerStateStorage(),
+    windows: {
+      async getAll() {
+        return [{ id: 1, type: 'normal' }];
+      },
+    },
+    windowTabState: {
+      async resetSessions() {},
+      async deactivate() {},
+    },
+    async restoreAutoload() {},
+    startupWindowAttempts: 1,
+  });
+
+  await assert.rejects(
+    lifecycle.onBrowserStartup(),
+    /Autoload supports at most one tab set/,
   );
 });

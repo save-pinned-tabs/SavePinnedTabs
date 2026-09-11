@@ -360,9 +360,8 @@ function normalizeAutoload(
               typeof id === 'string' && knownIds.has(id),
           ),
         ),
-      ]
+      ].slice(0, 1)
     : [];
-
   document.autoload = { scope, setIds };
   document.deletedSetIds = Array.isArray(document.deletedSetIds)
     ? [

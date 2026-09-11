@@ -162,6 +162,9 @@ function validateAutoload(
   if (!isStringArray(configuration.setIds)) {
     throw new TypeError('Autoload setIds must be an array');
   }
+  if (configuration.setIds.length > 1) {
+    throw new TypeError('Autoload supports at most one tab set');
+  }
 }
 
 /** Reads an import version, defaulting legacy documents to version 1. */
@@ -433,14 +436,11 @@ export class TabSetRepository {
 
         const currentAutoload = await this.#storage.getAutoload();
 
+        const selectedSetId =
+          currentAutoload.setIds[0] ?? importedAutoloadIds[0];
         await this.#storage.import(imported, {
           scope: normalized.scope ?? currentAutoload.scope,
-          setIds: [
-            ...new Set([
-              ...currentAutoload.setIds,
-              ...importedAutoloadIds,
-            ]),
-          ],
+          setIds: selectedSetId === undefined ? [] : [selectedSetId],
         });
 
         return imported;

@@ -247,110 +247,6 @@ test('replacement injects failures at each session and tab cleanup await', async
   }
 });
 
-test('append preserves ordering and duplicate multiplicity while clearing the session', async () => {
-  const { browser, state } = createHarness({
-    tabs: [
-      { id: 10, url: 'https://a.example/' },
-      { id: 11, url: 'https://unrelated.example/' },
-    ],
-    sets: {
-      appended: {
-        set_name: 'Appended',
-        autoload: 0,
-        tabs: ['https://a.example', 'https://a.example/', 'https://b.example/'],
-      },
-    },
-    sessions: { 1: 'active-before-append' },
-  });
-
-  await createBrowserWindowTabState(browser).append(1, 'appended');
-
-  assert.deepEqual(pinnedUrls(state), [
-    'https://a.example/',
-    'https://unrelated.example/',
-    'https://a.example/',
-    'https://b.example/',
-  ]);
-  assert.equal(state.sessions[1] ?? null, null);
-});
-
-test('each append mutation failure rolls back additions and cannot retain a false session', async () => {
-  const options = {
-    sets: { appended: { set_name: 'Appended', autoload: 0, tabs: ['https://a.example/', 'https://b.example/'] } },
-    sessions: { 1: 'old' },
-  };
-  const successful = createHarness(options);
-  await createBrowserWindowTabState(successful.browser).append(1, 'appended');
-
-  for (let failAt = 1; failAt <= successful.state.calls.length; failAt += 1) {
-    const { browser, state } = createHarness({ ...options, failAt });
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).append(1, 'appended'),
-      undefined,
-      `fault ${failAt}`,
-    );
-
-    assert.deepEqual(pinnedUrls(state), [], `fault ${failAt}`);
-    assert.ok(['old', null].includes(state.sessions[1] ?? null), `fault ${failAt}`);
-  }
-});
-
-test('append reports a failure while removing partially appended tabs', async () => {
-  const { browser } = createHarness({
-    sets: { appended: { set_name: 'Appended', autoload: 0, tabs: ['https://a.example/', 'https://b.example/'] } },
-    sessions: { 1: 'old' },
-    failAt: [7, 8],
-  });
-
-  await assert.rejects(
-    createBrowserWindowTabState(browser).append(1, 'appended'),
-    (error) => error.message.includes('rollback also failed')
-      && error.message.includes('injected failure at tabs.remove'),
-  );
-});
-
-test('unload removes only the saved duplicate multiplicity and clears the session first', async () => {
-  const { browser, state } = createHarness({
-    tabs: [
-      { id: 10, url: 'https://a.example/' },
-      { id: 11, url: 'https://a.example/' },
-      { id: 12, url: 'https://b.example/' },
-    ],
-    sets: { unloaded: { set_name: 'Unload', autoload: 0, tabs: ['https://a.example/'] } },
-    sessions: { 1: 'unloaded' },
-  });
-
-  await createBrowserWindowTabState(browser).unload(1, 'unloaded');
-
-  assert.deepEqual(pinnedUrls(state), ['https://a.example/', 'https://b.example/']);
-  assert.equal(state.sessions[1] ?? null, null);
-  assert.ok(state.calls.indexOf('storage.local.set') < state.calls.indexOf('tabs.remove'));
-});
-
-test('each unload browser or storage failure avoids a false session', async () => {
-  const options = {
-    tabs: [{ id: 10, url: 'https://a.example/' }],
-    sets: { unloaded: { set_name: 'Unload', autoload: 0, tabs: ['https://a.example/'] } },
-    sessions: { 1: 'unloaded' },
-  };
-  const successful = createHarness(options);
-  await createBrowserWindowTabState(successful.browser).unload(1, 'unloaded');
-
-  for (let failAt = 1; failAt <= successful.state.calls.length; failAt += 1) {
-    const { browser, state } = createHarness({ ...options, failAt });
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).unload(1, 'unloaded'),
-      undefined,
-      `fault ${failAt}`,
-    );
-
-    assert.deepEqual(pinnedUrls(state), ['https://a.example/'], `fault ${failAt}`);
-    const expectedSession = failAt <= 4 ? 'unloaded' : null;
-    assert.equal(state.sessions[1] ?? null, expectedSession, `fault ${failAt}`);
-  }
-});
 
 test('capture and save persists normalized ordered URLs and activates the saved set', async () => {
   const { browser, state } = createHarness({
@@ -457,11 +353,7 @@ class SharedLockManager {
 test('window transitions and startup reset serialize across extension contexts', async () => {
   const { browser, state } = createHarness({
     tabs: [{ id: 10, url: 'https://old.example/' }],
-    sets: {
-      replacement: replacementSet,
-      appended: { set_name: 'Append', autoload: 0, tabs: ['https://appended.example/'] },
-      unloaded: { set_name: 'Unload', autoload: 0, tabs: ['https://first.example/'] },
-    },
+    sets: { replacement: replacementSet },
     sessions: { 1: 'old' },
   });
   const lockManager = new SharedLockManager();
@@ -472,7 +364,7 @@ test('window transitions and startup reset serialize across extension contexts',
   });
 
   try {
-    const contexts = Array.from({ length: 5 }, () => createBrowserWindowTabState({
+    const contexts = Array.from({ length: 3 }, () => createBrowserWindowTabState({
       ...browser,
       storage: {
         local: { ...browser.storage.local },
@@ -481,10 +373,8 @@ test('window transitions and startup reset serialize across extension contexts',
     }));
     await Promise.all([
       contexts[0].replace(1, 'replacement'),
-      contexts[1].append(1, 'appended'),
-      contexts[2].unload(1, 'unloaded'),
-      contexts[3].captureAndSave(1, { name: 'Captured' }),
-      contexts[4].resetSessions(),
+      contexts[1].captureAndSave(1, { name: 'Captured' }),
+      contexts[2].resetSessions(),
     ]);
   } finally {
     Object.defineProperty(globalThis, 'navigator', {
@@ -498,12 +388,12 @@ test('window transitions and startup reset serialize across extension contexts',
     lockManager.requests
       .filter(({ name }) => name === 'save-pinned-tabs:all-window-tabs')
       .map(({ mode }) => mode),
-    ['shared', 'shared', 'shared', 'shared', 'exclusive'],
+    ['shared', 'shared', 'exclusive'],
   );
-  assert.deepEqual(pinnedUrls(state), ['https://second.example/', 'https://appended.example/']);
+  assert.deepEqual(pinnedUrls(state), ['https://first.example/', 'https://second.example/']);
   assert.deepEqual(
     Object.values(state.sets).find((set) => set.name === 'Captured').tabs,
-    ['https://second.example/', 'https://appended.example/'],
+    ['https://first.example/', 'https://second.example/'],
   );
   assert.equal(state.sessions[1] ?? null, null);
 });
@@ -511,10 +401,7 @@ test('window transitions and startup reset serialize across extension contexts',
 test('background routing serializes isolated clients without Web Locks and releases after failure', async () => {
   const { browser, state } = createHarness({
     tabs: [{ id: 10, url: 'https://old.example/' }],
-    sets: {
-      replacement: replacementSet,
-      appended: { set_name: 'Append', autoload: 0, tabs: ['https://appended.example/'] },
-    },
+    sets: { replacement: replacementSet },
   });
   let onMessage;
   browser.runtime = {
@@ -558,10 +445,10 @@ test('background routing serializes isolated clients without Web Locks and relea
     const secondContext = isolatedClient();
     await Promise.all([
       firstContext.replace(1, 'replacement'),
-      secondContext.append(1, 'appended'),
+      secondContext.replace(1, 'replacement'),
     ]);
     await assert.rejects(firstContext.replace(1, 'missing'), /does not exist/);
-    await secondContext.unload(1, 'appended');
+    await secondContext.snapshot(1);
   } finally {
     Object.defineProperty(globalThis, 'navigator', {
       configurable: true,
@@ -587,8 +474,6 @@ test('message routing distinguishes invalid arguments from unknown operations', 
   const windowTabState = {
     snapshot() {},
     replace() {},
-    append() {},
-    unload() {},
     captureAndSave() {},
   };
   registerWindowTabStateMessages(browser, windowTabState);

@@ -28,8 +28,6 @@ const WINDOW_TAB_STATE_MESSAGE = 'save-pinned-tabs:window-tab-state';
 const WINDOW_TAB_STATE_OPERATIONS: Record<WindowTabStateOperation, true> = {
   snapshot: true,
   replace: true,
-  append: true,
-  unload: true,
   captureAndSave: true,
 };
 
@@ -37,8 +35,6 @@ const WINDOW_TAB_STATE_OPERATIONS: Record<WindowTabStateOperation, true> = {
 type WindowTabStateOperation =
   | 'snapshot'
   | 'replace'
-  | 'append'
-  | 'unload'
   | 'captureAndSave';
 
 /** Describes a pinned browser tab in display order. */
@@ -228,46 +224,6 @@ function urlsMatch(tabs: PinnedTab[], urls: string[]): boolean {
     && tabs.every((tab, index) => tab.url === urls[index]);
 }
 
-/** Finds saved URL occurrences not represented by current tabs. */
-function missingUrls(tabs: PinnedTab[], savedUrls: string[]): string[] {
-  const existingMultiplicity = new Map<string, number>();
-  for (const tab of tabs) {
-    existingMultiplicity.set(
-      tab.url,
-      (existingMultiplicity.get(tab.url) ?? 0) + 1,
-    );
-  }
-
-  return savedUrls.filter((url) => {
-    const remaining = existingMultiplicity.get(url) ?? 0;
-    if (remaining === 0) return true;
-    existingMultiplicity.set(url, remaining - 1);
-    return false;
-  });
-}
-
-/** Selects current tab identifiers matching saved URL multiplicities. */
-function matchingTabIds(
-  tabs: PinnedTab[],
-  savedUrls: string[],
-): number[] {
-  const remainingMultiplicity = new Map<string, number>();
-  for (const url of savedUrls) {
-    remainingMultiplicity.set(
-      url,
-      (remainingMultiplicity.get(url) ?? 0) + 1,
-    );
-  }
-
-  const tabIds: number[] = [];
-  for (const tab of tabs) {
-    const remaining = remainingMultiplicity.get(tab.url) ?? 0;
-    if (remaining === 0) continue;
-    remainingMultiplicity.set(tab.url, remaining - 1);
-    tabIds.push(tab.id);
-  }
-  return tabIds;
-}
 
 /** Creates a tab-set draft without mutating the supplied details. */
 function withTabs(
@@ -435,45 +391,6 @@ export class WindowTabState {
     );
   }
 
-  /** Adds missing saved URL occurrences without duplicating existing matches. */
-  append(windowId: WindowId, setId: TabSetId): Promise<string[]> {
-    return this.#run(
-      windowId,
-      `append tab set "${String(setId)}"`,
-      async () => {
-        const set = await this.#requiredSet(setId);
-        const savedUrls = storedTabUrls(set);
-        const currentTabs = await this.#tabs.queryPinned(windowId);
-        const urlsToCreate = missingUrls(currentTabs, savedUrls);
-
-        await this.#windowSessions.clear(windowId);
-        await this.#createPinnedTabs(windowId, urlsToCreate, 'appended');
-        return currentTabs.map((tab) => tab.url).concat(urlsToCreate);
-      },
-    );
-  }
-
-  /** Removes current tabs matching a saved set while preserving multiplicity. */
-  unload(windowId: WindowId, setId: TabSetId): Promise<string[]> {
-    return this.#run(
-      windowId,
-      `unload tab set "${String(setId)}"`,
-      async () => {
-        const set = await this.#requiredSet(setId);
-        const savedUrls = storedTabUrls(set);
-        const currentTabs = await this.#tabs.queryPinned(windowId);
-        const tabIds = matchingTabIds(currentTabs, savedUrls);
-
-        await this.#windowSessions.clear(windowId);
-        await this.#tabs.remove(tabIds, windowId, 'unloaded');
-
-        const removedIds = new Set(tabIds);
-        return currentTabs
-          .filter((tab) => !removedIds.has(tab.id))
-          .map((tab) => tab.url);
-      },
-    );
-  }
 
   /** Captures pinned tabs and saves them, returning null when none exist. */
   captureAndSave(
@@ -640,44 +557,6 @@ export class WindowTabState {
     }
   }
 
-  /** Creates pinned tabs and removes partial results after a failure. */
-  async #createPinnedTabs(
-    windowId: WindowId,
-    urls: string[],
-    purpose: string,
-  ): Promise<void> {
-    let createdTabIds: number[] = [];
-
-    try {
-      createdTabIds = await this.#createAndPinTabs(windowId, urls);
-    } catch (error: unknown) {
-      const primaryError = error instanceof PartialTabCreationError
-        ? error.cause
-        : error;
-
-      if (error instanceof PartialTabCreationError) {
-        createdTabIds = error.createdTabIds;
-      }
-
-      const rollbackErrors: unknown[] = [];
-      try {
-        await this.#tabs.remove(
-          createdTabIds,
-          windowId,
-          `${purpose} rollback`,
-        );
-      } catch (rollbackError: unknown) {
-        rollbackErrors.push(rollbackError);
-      }
-
-      throw operationError(
-        purpose,
-        windowId,
-        primaryError,
-        rollbackErrors,
-      );
-    }
-  }
 
   /** Creates and pins URLs sequentially, preserving partial progress on failure. */
   async #createAndPinTabs(
@@ -799,7 +678,7 @@ function sendWindowTabStateMessage(
 /** Sends a URL-producing operation and validates the response. */
 async function sendWindowTabUrls(
   browser: BrowserApi,
-  operation: 'snapshot' | 'replace' | 'append' | 'unload',
+  operation: 'snapshot' | 'replace',
   args: unknown[],
 ): Promise<string[]> {
   return normalizeSavedUrls(
@@ -815,11 +694,6 @@ export interface WindowTabStateClient {
   /** Replaces pinned tabs with a saved tab set. */
   replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 
-  /** Adds missing tabs from a saved tab set. */
-  append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
-
-  /** Removes tabs matching a saved tab set. */
-  unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 
   /** Captures and saves pinned tabs, or returns null when none exist. */
   captureAndSave(
@@ -838,12 +712,6 @@ export function createWindowTabStateClient(
     },
     replace(windowId, setId) {
       return sendWindowTabUrls(browser, 'replace', [windowId, setId]);
-    },
-    append(windowId, setId) {
-      return sendWindowTabUrls(browser, 'append', [windowId, setId]);
-    },
-    unload(windowId, setId) {
-      return sendWindowTabUrls(browser, 'unload', [windowId, setId]);
     },
 
     async captureAndSave(
@@ -909,21 +777,6 @@ export function registerWindowTabStateMessages(
       return windowTabState.replace(args[0], args[1]);
     }
 
-    if (
-      operation === 'append'
-      && isInteger(args[0])
-      && isTabSetId(args[1])
-    ) {
-      return windowTabState.append(args[0], args[1]);
-    }
-
-    if (
-      operation === 'unload'
-      && isInteger(args[0])
-      && isTabSetId(args[1])
-    ) {
-      return windowTabState.unload(args[0], args[1]);
-    }
 
     if (
       operation === 'captureAndSave'

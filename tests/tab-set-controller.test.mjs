@@ -72,6 +72,16 @@ test('popup commands return refreshed state without navigation', async () => {
   ]);
 });
 
+test('selecting Autoload replaces the previous selection', async () => {
+  const { controller } = createHarness();
+
+  await controller.setAutoload('set-1', true);
+  const result = await controller.setAutoload('set-2', true);
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.value.state.autoloadSetIds, ['set-2']);
+});
+
 test('controller commands return contextual errors instead of rejecting', async () => {
   const { controller } = createHarness({ failAt: 'windowTabState.replace:7:set-1' });
 
