@@ -22,8 +22,6 @@ interface PopupController {
     setId?: TabSetId,
   ): Promise<CommandResult<PopupCommandValue>>;
   loadSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
-  appendSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
-  unloadSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
   setAutoload(
     setId: TabSetId,
     enabled: boolean,
@@ -36,8 +34,6 @@ interface PopupController {
 interface PopupActions {
   save(name: string, setId?: TabSetId): Promise<void>;
   load(setId: TabSetId): Promise<void>;
-  append(setId: TabSetId): Promise<void>;
-  unload(setId: TabSetId): Promise<void>;
   setAutoload(setId: TabSetId, enabled: boolean): Promise<void>;
   delete(setId: TabSetId): Promise<void>;
 }
@@ -118,20 +114,6 @@ export async function startPopupApp(
         loadingMessage: 'Loading tab set…',
         command: () => controller.loadSet(setId),
         successMessage: 'Tab set loaded.',
-      });
-    },
-    append(setId) {
-      return runCommand({
-        loadingMessage: 'Appending tab set…',
-        command: () => controller.appendSet(setId),
-        successMessage: 'Tab set appended.',
-      });
-    },
-    unload(setId) {
-      return runCommand({
-        loadingMessage: 'Unloading tab set…',
-        command: () => controller.unloadSet(setId),
-        successMessage: 'Tab set unloaded.',
       });
     },
     setAutoload(setId, enabled) {

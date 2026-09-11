@@ -19,6 +19,7 @@ function createHarness({ failAt } = {}) {
     tabSets: {
       list: () => operation('tabSets.list', sets),
       getAutoload: () => operation('tabSets.getAutoload', autoload),
+      getPopupData: () => operation('tabSets.getPopupData', { sets, autoload }),
       setAutoload(configuration) {
         autoload = structuredClone(configuration);
         return operation('tabSets.setAutoload');
@@ -66,9 +67,8 @@ test('popup commands return refreshed state without navigation', async () => {
   assert.deepEqual(calls, [
     'windows.getCurrent',
     'windowTabState.captureAndSave:7',
-    'tabSets.list',
+    'tabSets.getPopupData',
     'windowSessions.get:7',
-    'tabSets.getAutoload',
   ]);
 });
 

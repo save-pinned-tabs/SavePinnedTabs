@@ -73,37 +73,6 @@ test('popup disables controls and blocks duplicate submissions while pending', a
   ]);
 });
 
-test('popup routes append and unload through distinct controller commands', async () => {
-  const view = createView();
-  const calls = [];
-  const controller = {
-    getPopupState: async () => ({ status: 'success', value: { state } }),
-    appendSet: async (setId) => {
-      calls.push(['append', setId]);
-      return { status: 'success', value: { state } };
-    },
-    unloadSet: async (setId) => {
-      calls.push(['unload', setId]);
-      return { status: 'success', value: { state } };
-    },
-  };
-  await startPopupApp(controller, view);
-
-  await view.actions.append('set-1');
-  await view.actions.unload('set-1');
-
-  assert.deepEqual(calls, [
-    ['append', 'set-1'],
-    ['unload', 'set-1'],
-  ]);
-  assert.deepEqual(
-    view.events.filter((event) => event[0] === 'status' && event[1] === 'success').slice(-2),
-    [
-      ['status', 'success', 'Tab set appended.'],
-      ['status', 'success', 'Tab set unloaded.'],
-    ],
-  );
-});
 
 test('delete cancellation invokes no controller command', async () => {
   const view = createView();

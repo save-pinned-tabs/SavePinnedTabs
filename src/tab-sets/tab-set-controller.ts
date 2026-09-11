@@ -20,6 +20,11 @@ import { errorMessage } from '../validation.js';
 interface TabSets {
   /** Lists all saved tab sets. */
   list(): Promise<TabSet[]>;
+  /** Reads tab sets and Autoload settings from one persistence snapshot. */
+  getPopupData(): Promise<{
+    sets: TabSet[];
+    autoload: AutoloadConfiguration;
+  }>;
 
   /** Permanently removes a saved tab set. */
   remove(setId: TabSetId): Promise<void>;
@@ -124,17 +129,11 @@ export class TabSetController {
 
   /** Replaces the current window's managed tabs and refreshes popup state. */
   loadSet(setId: TabSetId) {
-    return this.#updatePopupState('load tab set', setId, 'replace');
-  }
-
-  /** Appends a saved set to the current window and refreshes popup state. */
-  appendSet(setId: TabSetId) {
-    return this.#updatePopupState('append tab set', setId, 'append');
-  }
-
-  /** Removes a saved set from the current window and refreshes popup state. */
-  unloadSet(setId: TabSetId) {
-    return this.#updatePopupState('unload tab set', setId, 'unload');
+    return this.#execute('load tab set', async () => {
+      const windowId = await this.#dependencies.getCurrentWindowId();
+      await this.#dependencies.windowTabState.replace(windowId, setId);
+      return { state: await this.#popupState(windowId) };
+    });
   }
 
   /** Deletes a saved set and refreshes popup state for the current window. */
@@ -211,30 +210,17 @@ export class TabSetController {
     });
   }
 
-  /** Applies a tab-set operation to the current window and refreshes popup state. */
-  async #updatePopupState(
-    command: string,
-    setId: TabSetId,
-    operation: 'replace' | 'append' | 'unload',
-  ) {
-    return this.#execute(command, async () => {
-      const windowId = await this.#dependencies.getCurrentWindowId();
-      await this.#dependencies.windowTabState[operation](windowId, setId);
-      return { state: await this.#popupState(windowId) };
-    });
-  }
 
   /** Builds popup state for a window from saved sets, session data, and autoload settings. */
   async #popupState(windowId: WindowId): Promise<PopupState> {
-    const [sets, activeSetId, autoload] = await Promise.all([
-      this.#dependencies.tabSets.list(),
+    const [popupData, activeSetId] = await Promise.all([
+      this.#dependencies.tabSets.getPopupData(),
       this.#dependencies.windowSessions.get(windowId),
-      this.#dependencies.tabSets.getAutoload(),
     ]);
     return {
-      sets,
+      sets: popupData.sets,
       activeSetId: activeSetId ?? null,
-      autoloadSetIds: autoload.setIds,
+      autoloadSetIds: popupData.autoload.setIds,
     };
   }
 
