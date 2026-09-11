@@ -136,6 +136,20 @@ async function selectAutoloadSet(name) {
   await waitForStatus("popup-status", "Autoload selection updated.");
 }
 
+async function clearAutoloadSet(name) {
+  await driver.findElement(
+    By.css(`.load-row[data-name="${name}"] input[name=autoload]`),
+  ).click();
+  await waitForStatus("popup-status", "Autoload selection updated.");
+}
+
+async function deleteSet(name) {
+  const row = await driver.findElement(By.css(`.load-row[data-name="${name}"]`));
+  await row.findElement(By.css(".set-delete")).click();
+  await driver.findElement(By.css("#delete-dialog button[value=delete]")).click();
+  await waitForStatus("popup-status", "Tab set deleted.");
+}
+
 async function restartFirefox() {
   await driver.quit();
   driver = undefined;
@@ -470,4 +484,85 @@ test("an autoload selection persists across browser restart", async () => {
       .isSelected(),
     true,
   );
+});
+
+test("restart does not restore a saved set without an autoload selection", async () => {
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?no-autoload`;
+  await createPinnedTabs([url]);
+  await saveSet("No autoload");
+  await removePinnedTabs();
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+
+  assert.equal((await pinnedUrls()).includes(url), false);
+});
+
+test("first-window autoload does not restore into a later window", async () => {
+  await openExtensionPage("popup/popup.html");
+  const autoloadUrl = `${extensionOrigin}/options/options.html?first-window`;
+  const secondWindowUrl = `${extensionOrigin}/options/options.html?second-window`;
+  await createPinnedTabs([autoloadUrl]);
+  await saveSet("First window");
+  await selectAutoloadSet("First window");
+  await removePinnedTabs();
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  const firstWindowId = await driver.executeAsyncScript((done) => {
+    browser.windows.getCurrent().then((window) => done(window.id));
+  });
+  await driver.wait(async () => (await pinnedUrls(firstWindowId)).includes(autoloadUrl), 30_000);
+  const secondWindowId = await driver.executeAsyncScript((url, done) => {
+    browser.windows.create({ url }).then((window) => done(window.id));
+  }, secondWindowUrl);
+
+  await driver.wait(async () => (await pinnedUrls(secondWindowId)).length === 0, 30_000);
+});
+
+test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?repeat`;
+  await createPinnedTabs([url]);
+  await saveSet("Repeat");
+  await selectAutoloadSet("Repeat");
+
+  for (let restart = 0; restart < 2; restart += 1) {
+    await restartFirefox();
+    await openExtensionPage("popup/popup.html");
+    await driver.wait(
+      async () => (await pinnedUrls()).filter((tabUrl) => tabUrl === url).length === 1,
+      30_000,
+    );
+  }
+});
+
+test("cleared autoload selection is not restored after restart", async () => {
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?clear`;
+  await createPinnedTabs([url]);
+  await saveSet("Clear");
+  await selectAutoloadSet("Clear");
+  await clearAutoloadSet("Clear");
+  await removePinnedTabs();
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+
+  assert.equal((await pinnedUrls()).includes(url), false);
+});
+
+test("deleted autoload set is not restored after restart", async () => {
+  await openExtensionPage("popup/popup.html");
+  const url = `${extensionOrigin}/options/options.html?deleted`;
+  await createPinnedTabs([url]);
+  await saveSet("Deleted");
+  await selectAutoloadSet("Deleted");
+  await deleteSet("Deleted");
+  await removePinnedTabs();
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+
+  assert.equal((await pinnedUrls()).includes(url), false);
 });
