@@ -544,6 +544,10 @@ test("an autoload selection persists across browser restart", async () => {
 test("restart leaves pinned tabs unchanged without an autoload selection", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-no-autoload-"));
+  const server = http.createServer((request, response) => {
+    response.end("<!doctype html><title>Pinned tab</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let firstLaunch;
   let secondLaunch;
 
@@ -554,7 +558,8 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
       firstLaunch.extensionId,
       "popup/popup.html",
     );
-    const pinnedUrl = `chrome-extension://${firstLaunch.extensionId}/options/options.html?no-autoload`;
+    const { port } = server.address();
+    const pinnedUrl = `http://127.0.0.1:${port}/no-autoload`;
     await createPinnedTabs(popup, [pinnedUrl]);
     await firstLaunch.context.close();
     firstLaunch = undefined;
@@ -572,6 +577,9 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
   }
 });
 
