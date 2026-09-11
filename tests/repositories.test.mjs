@@ -207,7 +207,7 @@ for (const [name, createHarness] of [
     const { tabSets, windowSessions, shortcutAssignments } = createHarness();
     const first = await tabSets.save({ name: 'First', tabs: [] });
     const second = await tabSets.save({ name: 'Second', tabs: [] });
-    await tabSets.setAutoload({ scope: 'every-window', setIds: [first.id, second.id] });
+    await tabSets.setAutoload({ scope: 'every-window', setIds: [first.id] });
     await windowSessions.set(1, first.id);
     await windowSessions.set(2, second.id);
     await shortcutAssignments.assign('load-set-1', first.id);
@@ -215,7 +215,7 @@ for (const [name, createHarness] of [
 
     await tabSets.remove(first.id);
 
-    assert.deepEqual(await tabSets.getAutoload(), { scope: 'every-window', setIds: [second.id] });
+    assert.deepEqual(await tabSets.getAutoload(), { scope: 'every-window', setIds: [] });
     assert.equal(await windowSessions.get(1), null);
     assert.equal(await windowSessions.get(2), second.id);
     assert.deepEqual(await shortcutAssignments.list(), { 'load-set-2': second.id });
@@ -230,13 +230,13 @@ for (const [name, createHarness] of [
         { id: existing.id, name: 'Collision', tabs: ['https://collision.example/'] },
         { id: SECOND_ID, name: 'Unicode 日本語', tabs: [] },
       ],
-      autoload: { scope: 'every-window', setIds: [existing.id, SECOND_ID] },
+      autoload: { scope: 'every-window', setIds: [existing.id] },
     });
 
     assert.deepEqual(imported.map((set) => set.id), [SECOND_ID, THIRD_ID]);
     assert.deepEqual(await tabSets.getAutoload(), {
       scope: 'every-window',
-      setIds: [SECOND_ID, THIRD_ID],
+      setIds: [SECOND_ID],
     });
     const exported = await tabSets.export();
     assert.equal(exported.version, 2);
@@ -278,7 +278,7 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   assert.deepEqual(sets.map((set) => set.name), ['First', 'Second', '日本語']);
   assert.deepEqual(await harness.tabSets.getAutoload(), {
     scope: 'first-window',
-    setIds: [sets[0].id, sets[1].id],
+    setIds: [sets[0].id],
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);

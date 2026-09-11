@@ -255,41 +255,6 @@ test("an unassigned command is a no-op", async () => {
   assert.deepEqual(await pinnedUrls(), before);
 });
 
-test("multi-set Autoload replaces then appends in every normal window and ignores popups", async () => {
-  await openExtensionPage("options/options.html");
-  const firstId = "11111111-1111-4111-8111-111111111111";
-  const secondId = "22222222-2222-4222-8222-222222222222";
-  const firstUrl = `${extensionOrigin}/options/options.html?autoload-first`;
-  const secondUrl = `${extensionOrigin}/options/options.html?autoload-second`;
-  const duplicateUrl = `${extensionOrigin}/options/options.html?autoload-duplicate`;
-  await importDocument({
-    version: 2,
-    sets: [
-      { id: firstId, name: "First Autoload", tabs: [firstUrl, duplicateUrl] },
-      { id: secondId, name: "Second Autoload", tabs: [duplicateUrl, secondUrl] },
-    ],
-    autoload: { scope: "every-window", setIds: [firstId, secondId] },
-  }, "autoload.json");
-  await waitForStatus("options-status", "Successfully imported 2 tab sets.");
-  await restartFirefox();
-  await openExtensionPage("options/options.html");
-  await driver.wait(async () => (
-    JSON.stringify(await pinnedUrls()) === JSON.stringify([firstUrl, duplicateUrl, secondUrl])
-  ), 30_000);
-
-  const normalWindowId = await driver.executeAsyncScript((done) => {
-    browser.windows.create({ type: "normal" }).then((window) => done(window.id));
-  });
-  await driver.wait(async () => (
-    JSON.stringify(await pinnedUrls(normalWindowId))
-      === JSON.stringify([firstUrl, duplicateUrl, secondUrl])
-  ), 30_000);
-  const popupWindowId = await driver.executeAsyncScript((done) => {
-    browser.windows.create({ type: "popup", url: browser.runtime.getURL("popup/popup.html") })
-      .then((window) => done(window.id));
-  });
-  await driver.wait(async () => (await pinnedUrls(popupWindowId)).length === 0, 10_000);
-});
 
 test("a pending failure blocks duplicate commands and recovers in place", async () => {
   await openExtensionPage("popup/popup.html");

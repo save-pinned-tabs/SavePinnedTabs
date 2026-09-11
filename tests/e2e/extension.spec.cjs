@@ -179,61 +179,6 @@ test("an unassigned command is a no-op", async ({ extension }) => {
   expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual(before);
 });
 
-test("multi-set Autoload replaces then appends in every normal window and ignores popups", async ({
-  extension,
-}) => {
-  const { context, extensionId } = extension;
-  const options = await openExtensionPage(context, extensionId, "options/options.html");
-  const firstId = "11111111-1111-4111-8111-111111111111";
-  const secondId = "22222222-2222-4222-8222-222222222222";
-  const firstUrl = `chrome-extension://${extensionId}/options/options.html?autoload-first`;
-  const secondUrl = `chrome-extension://${extensionId}/options/options.html?autoload-second`;
-  const duplicateUrl = `chrome-extension://${extensionId}/options/options.html?autoload-duplicate`;
-  const document = {
-    version: 2,
-    sets: [
-      { id: firstId, name: "First Autoload", tabs: [firstUrl, duplicateUrl] },
-      { id: secondId, name: "Second Autoload", tabs: [duplicateUrl, secondUrl] },
-    ],
-    autoload: { scope: "every-window", setIds: [firstId, secondId] },
-  };
-  await options.locator("#import-input").setInputFiles({
-    name: "autoload.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(document)),
-  });
-  await options.getByRole("button", { name: "Import" }).click();
-  await expect(options.getByRole("status")).toHaveText("Successfully imported 2 tab sets.");
-  await options.evaluate(async () => {
-    const { handleStartup } = await import(chrome.runtime.getURL("background/service-worker.js"));
-    await chrome.storage.session.remove("savePinnedTabs:lifecycle");
-    await handleStartup();
-  });
-  const existingWindowId = await currentWindowId(options);
-  await expect.poll(() => pinnedUrls(options, existingWindowId)).toEqual([
-    firstUrl,
-    duplicateUrl,
-    secondUrl,
-  ]);
-
-  const normalWindowId = await options.evaluate(async () => (
-    await chrome.windows.create({ type: "normal" })
-  ).id);
-  await expect.poll(() => pinnedUrls(options, normalWindowId)).toEqual([
-    firstUrl,
-    duplicateUrl,
-    secondUrl,
-  ]);
-
-  const popupWindowId = await options.evaluate(async () => (
-    await chrome.windows.create({ type: "popup", url: chrome.runtime.getURL("popup/popup.html") })
-  ).id);
-  await expect.poll(() => pinnedUrls(options, popupWindowId)).toEqual([]);
-  await options.evaluate(
-    async (windowIds) => Promise.all(windowIds.map((id) => chrome.windows.remove(id))),
-    [normalWindowId, popupWindowId],
-  );
-});
 
 test("a pending failure blocks duplicate commands and recovers in place", async ({
   extension,

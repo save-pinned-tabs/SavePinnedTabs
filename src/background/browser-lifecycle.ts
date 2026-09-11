@@ -385,6 +385,9 @@ export class BrowserLifecycle {
     if (!configuration.setIds.every((setId) => typeof setId === 'string')) {
       throw new TypeError('Autoload setIds must contain only strings');
     }
+    if (configuration.setIds.length > 1) {
+      throw new TypeError('Autoload supports at most one tab set');
+    }
     return {
       scope: configuration.scope,
       setIds: configuration.setIds,

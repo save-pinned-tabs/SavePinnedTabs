@@ -68,11 +68,6 @@ interface WindowTabState {
   /** Replaces the window's managed tabs with a saved set. */
   replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 
-  /** Adds a saved set to the window without replacing existing tabs. */
-  append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
-
-  /** Removes a saved set's tabs from the window. */
-  unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
 }
 
 /** Supplies storage, browser, and window integrations used by the controller. */
@@ -150,12 +145,12 @@ export class TabSetController {
     return this.#execute('update autoload selection', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
       const configuration = await this.#dependencies.tabSets.getAutoload();
-      const setIds = new Set(configuration.setIds);
-      if (enabled) setIds.add(setId);
-      else setIds.delete(setId);
+      const setIds = enabled
+        ? [setId]
+        : configuration.setIds.filter((id) => id !== setId);
       await this.#dependencies.tabSets.setAutoload({
         scope: configuration.scope,
-        setIds: [...setIds],
+        setIds,
       });
       return { state: await this.#popupState(windowId) };
     });

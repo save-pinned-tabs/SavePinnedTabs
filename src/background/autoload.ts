@@ -24,7 +24,6 @@ type FaviconFetch = (url: URL) => Promise<FaviconResponse>;
 /** Provides tab-set restoration operations for a browser window. */
 export interface AutoloadWindowTabState {
   replace(windowId: WindowId, setId: TabSetId): unknown;
-  append(windowId: WindowId, setId: TabSetId): unknown;
   deactivate(windowId: WindowId): unknown;
 }
 
@@ -63,7 +62,7 @@ export async function preloadFavicons(
 }
 
 
-/** Restores existing configured sets in order, replacing first and appending the rest. */
+/** Restores the first existing configured set. */
 export async function restoreAutoloadSets(
   browser: BrowserApi,
   windowId: WindowId,
@@ -87,18 +86,11 @@ export async function restoreAutoloadSets(
     storedSetIds.has(setId)
   );
 
-  if (setIds.length === 0) {
+  const selectedSetId = setIds[0];
+  if (selectedSetId === undefined) {
     await windowTabState.deactivate(windowId);
     return;
   }
 
-  let replace = true;
-  for (const setId of setIds) {
-    if (replace) {
-      await windowTabState.replace(windowId, setId);
-      replace = false;
-    } else {
-      await windowTabState.append(windowId, setId);
-    }
-  }
+  await windowTabState.replace(windowId, selectedSetId);
 }

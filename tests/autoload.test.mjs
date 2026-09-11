@@ -104,36 +104,27 @@ function createBrowser({
   return browser;
 }
 
-test('multi-set Autoload replaces with the first set and appends the rest', async () => {
+test('Autoload restores the selected existing set', async () => {
   const browser = createBrowser({
     sets: {
       first: { tabs: ['https://first.example/'] },
-      stale: { tabs: ['https://stale.example/'] },
-      second: { tabs: ['https://second.example/'] },
     },
   });
-  delete browser.testSyncDocument.sets.stale;
   const operations = [];
   const windowTabState = {
     async replace(windowId, setId) {
       operations.push(['replace', windowId, setId]);
-    },
-    async append(windowId, setId) {
-      operations.push(['append', windowId, setId]);
     },
   };
 
   await restoreAutoloadSets(
     browser,
     7,
-    { scope: 'every-window', setIds: ['first', 'missing', 'second'] },
+    { scope: 'every-window', setIds: ['first'] },
     windowTabState,
   );
 
-  assert.deepEqual(operations, [
-    ['replace', 7, 'first'],
-    ['append', 7, 'second'],
-  ]);
+  assert.deepEqual(operations, [['replace', 7, 'first']]);
 });
 
 test('creates and pins replacements before removing existing pinned tabs', async () => {
