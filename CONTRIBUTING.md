@@ -18,6 +18,19 @@ npm ci
 On macOS or without Nix, install Node.js 22 and both browsers separately.
 Set `CHROMIUM_BINARY` and `FIREFOX_BINARY` to the browser executable paths.
 
+## Commit Messages
+
+All commit messages must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+```
+<type>(<optional scope>): <description>
+```
+
+- Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`, `build`, `ci`.
+- Description in lowercase, imperative mood, no trailing period.
+- Breaking changes: append `!` after the type/scope and note them in a `BREAKING CHANGE:` footer.
+- Examples: `feat(popup): add search filter for pinned tabs`, `fix: persist pinned set on browser restart!`
+
 ## Tests
 
 The npm scripts are the test interface for local development and CI:
