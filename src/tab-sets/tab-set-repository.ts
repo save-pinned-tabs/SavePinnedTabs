@@ -32,6 +32,11 @@ const EXPORT_VERSION = 2;
 interface TabSetStorage {
   /** Returns every persisted tab set. */
   list(): Promise<TabSet[]>;
+  /** Returns tab sets and Autoload settings from one storage snapshot. */
+  getPopupData(): Promise<{
+    sets: TabSet[];
+    autoload: AutoloadConfiguration;
+  }>;
 
   /** Returns the matching set or null when it does not exist. */
   get(setId: TabSetId): Promise<TabSet | null>;
@@ -199,6 +204,17 @@ export class TabSetRepository {
     this.#windowSessions = windowSessions;
     this.#shortcutAssignments = shortcutAssignments;
     this.#createId = createId;
+  }
+  /** Returns the popup data and wraps storage failures with repository context. */
+  async getPopupData(): Promise<{
+    sets: TabSet[];
+    autoload: AutoloadConfiguration;
+  }> {
+    try {
+      return await this.#storage.getPopupData();
+    } catch (error) {
+      throw tabSetError('load popup data for', 'all', error);
+    }
   }
 
   /** Returns all sets and wraps storage failures with repository context. */

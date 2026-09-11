@@ -31,11 +31,6 @@ interface Actions {
   /** Replaces the current tabs with a saved set. */
   load(setId: SetId): void;
 
-  /** Adds a saved set to the current tabs. */
-  append(setId: SetId): void;
-
-  /** Removes a saved set's tabs from the current window. */
-  unload(setId: SetId): void;
 
   /** Requests deletion of a saved set. */
   delete(setId: SetId): void;
@@ -76,8 +71,10 @@ export function createPopupUi(document: Document): View {
   const loadArea = requireElement(document, 'load-area', HTMLElement);
   const status = requireElement(document, 'popup-status', HTMLElement);
   const deleteDialog = requireElement(document, 'delete-dialog', HTMLDialogElement);
+  const statusDurationMilliseconds = 3_000;
   let actions: Actions;
   let isPending = false;
+  let clearStatusTimer: number | undefined;
 
   /** Creates a button that invokes an action when clicked. */
   function button(
@@ -119,8 +116,6 @@ export function createPopupUi(document: Document): View {
       row.append(button('Save', 'set-save', () => actions.save(set.name, set.id)));
     }
     row.append(button('Load', 'set-load', () => actions.load(set.id)));
-    row.append(button('Append', 'set-append', () => actions.append(set.id)));
-    row.append(button('Unload', 'set-unload', () => actions.unload(set.id)));
     row.append(button('Del', 'set-delete', () => actions.delete(set.id)));
     return row;
   }
@@ -177,10 +172,19 @@ export function createPopupUi(document: Document): View {
       saveName.focus();
     },
 
-    /** Replaces the visible status and its presentation category. */
+    /** Replaces the visible status and clears completed messages after a delay. */
     showStatus(message, kind) {
+      clearTimeout(clearStatusTimer);
+      clearStatusTimer = undefined;
       status.textContent = message;
       status.dataset.kind = kind;
+      if (kind !== 'loading' && message) {
+        clearStatusTimer = setTimeout(() => {
+          status.textContent = '';
+          delete status.dataset.kind;
+          clearStatusTimer = undefined;
+        }, statusDurationMilliseconds);
+      }
     },
 
     /** Empties the set-name input. */

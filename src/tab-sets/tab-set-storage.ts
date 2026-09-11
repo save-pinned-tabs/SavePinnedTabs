@@ -61,6 +61,17 @@ export class BrowserTabSetStorage {
       return operation();
     });
   }
+  /** Reads tab sets and Autoload settings from one storage snapshot. */
+  async getPopupData(): Promise<{
+    sets: TabSet[];
+    autoload: AutoloadConfiguration;
+  }> {
+    const document = await this.#read();
+    return {
+      sets: Object.values(document.sets).map((set) => structuredClone(set)),
+      autoload: structuredClone(document.autoload),
+    };
+  }
 
   /** Lists independent copies of all stored tab sets. */
   async list(): Promise<TabSet[]> {
@@ -196,6 +207,18 @@ export class InMemoryTabSetStorage {
   }
 
 
+  /** Reads tab sets and Autoload settings from one storage snapshot. */
+  async getPopupData(): Promise<{
+    sets: TabSet[];
+    autoload: AutoloadConfiguration;
+  }> {
+    return {
+      sets: Object.values(this.#document.sets).map((set) =>
+        structuredClone(set)
+      ),
+      autoload: structuredClone(this.#document.autoload),
+    };
+  }
   /** Lists independent copies of all stored tab sets. */
   async list(): Promise<TabSet[]> {
     return Object.values(this.#document.sets).map((set) =>

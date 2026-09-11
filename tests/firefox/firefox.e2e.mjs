@@ -208,35 +208,6 @@ test("a user can delete a pinned tab set without reloading", async () => {
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
 
-test("Append preserves ordering and duplicate multiplicity without reloading", async () => {
-  await openExtensionPage("popup/popup.html");
-  const firstUrl = `${extensionOrigin}/options/options.html?append-first`;
-  const duplicateUrl = `${extensionOrigin}/options/options.html?append-duplicate`;
-  const trailingUrl = `${extensionOrigin}/options/options.html?append-trailing`;
-  await createPinnedTabs([firstUrl, duplicateUrl, duplicateUrl]);
-  await saveSet("Appendable");
-  await removePinnedTabs();
-  await createPinnedTabs([trailingUrl, duplicateUrl]);
-  const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
-  await driver.findElement(By.css('.load-row[data-name="Appendable"] .set-append')).click();
-  await waitForStatus("popup-status", "Tab set appended.");
-  assert.deepEqual(await pinnedUrls(), [trailingUrl, duplicateUrl, firstUrl, duplicateUrl]);
-  assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
-});
-
-test("Unload removes saved duplicate multiplicity without reloading", async () => {
-  await openExtensionPage("popup/popup.html");
-  const duplicateUrl = `${extensionOrigin}/options/options.html?unload-duplicate`;
-  const trailingUrl = `${extensionOrigin}/options/options.html?unload-trailing`;
-  await createPinnedTabs([duplicateUrl, duplicateUrl]);
-  await saveSet("Unloadable");
-  await createPinnedTabs([trailingUrl, duplicateUrl]);
-  const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
-  await driver.findElement(By.css('.load-row[data-name="Unloadable"] .set-unload')).click();
-  await waitForStatus("popup-status", "Tab set unloaded.");
-  assert.deepEqual(await pinnedUrls(), [trailingUrl, duplicateUrl]);
-  assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
-});
 
 async function createShortcutFixture() {
   await openExtensionPage("popup/popup.html");

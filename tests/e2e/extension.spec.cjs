@@ -76,6 +76,11 @@ test("a user can save a pinned tab set without reloading", async ({ extension })
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   await createPinnedTabs(popup, [`chrome-extension://${extensionId}/options/options.html?save`]);
   await saveSet(popup, "Work");
+  const row = popup.locator(".load-row", { hasText: "Work" });
+  await expect(row.getByRole("button", { name: "Append" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Unload" })).toHaveCount(0);
+  await popup.bringToFront();
+  await expect(popup.getByRole("status")).toBeEmpty({ timeout: 4_000 });
 });
 
 test("a user can update a pinned tab set without reloading", async ({ extension }) => {
@@ -132,41 +137,6 @@ test("a user can delete a pinned tab set without reloading", async ({ extension 
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 });
 
-test("Append preserves ordering and duplicate multiplicity without reloading", async ({ extension }) => {
-  const { context, extensionId } = extension;
-  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  const firstUrl = `chrome-extension://${extensionId}/options/options.html?append-first`;
-  const duplicateUrl = `chrome-extension://${extensionId}/options/options.html?append-duplicate`;
-  const trailingUrl = `chrome-extension://${extensionId}/options/options.html?append-trailing`;
-  await createPinnedTabs(popup, [firstUrl, duplicateUrl, duplicateUrl]);
-  await saveSet(popup, "Appendable");
-  await removePinnedTabs(popup);
-  await createPinnedTabs(popup, [trailingUrl, duplicateUrl]);
-  const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
-  await popup.locator(".load-row", { hasText: "Appendable" })
-    .getByRole("button", { name: "Append" }).click();
-  await expect(popup.getByRole("status")).toHaveText("Tab set appended.");
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([
-    trailingUrl, duplicateUrl, firstUrl, duplicateUrl,
-  ]);
-  expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
-});
-
-test("Unload removes saved duplicate multiplicity without reloading", async ({ extension }) => {
-  const { context, extensionId } = extension;
-  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  const duplicateUrl = `chrome-extension://${extensionId}/options/options.html?unload-duplicate`;
-  const trailingUrl = `chrome-extension://${extensionId}/options/options.html?unload-trailing`;
-  await createPinnedTabs(popup, [duplicateUrl, duplicateUrl]);
-  await saveSet(popup, "Unloadable");
-  await createPinnedTabs(popup, [trailingUrl, duplicateUrl]);
-  const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
-  await popup.locator(".load-row", { hasText: "Unloadable" })
-    .getByRole("button", { name: "Unload" }).click();
-  await expect(popup.getByRole("status")).toHaveText("Tab set unloaded.");
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([trailingUrl, duplicateUrl]);
-  expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
-});
 
 async function createShortcutFixture(extension, command = "load-set-1") {
   const { context, extensionId } = extension;
