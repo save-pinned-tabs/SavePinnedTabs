@@ -1,3 +1,5 @@
+/** Initializes the extension options page with browser APIs, tab-set control, and UI bindings. */
+
 import { selectBrowserApi, type BrowserApi } from '../browser-api.js';
 import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.js';
 import { startOptionsApp } from './options-app.js';

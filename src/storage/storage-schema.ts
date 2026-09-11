@@ -1,3 +1,7 @@
+/**
+ * Defines storage documents, validation, migration, and reference storage adapters.
+ */
+
 import type { BrowserStorageArea } from '../browser-api.js';
 import type {
   AutoloadConfiguration,
@@ -7,32 +11,52 @@ import type {
 import { isRecord, isStringArray } from '../validation.js';
 import { createSerializedStorageOperation } from './serialized-operation.js';
 
+/** Identifies the current persisted document format. */
 export const STORAGE_SCHEMA_VERSION = 2;
+
+/** Stores the synchronized document under a stable browser storage key. */
 export const SYNC_DOCUMENT_KEY = 'savePinnedTabs:sync';
+
+/** Stores the device-local document under a stable browser storage key. */
 export const LOCAL_DOCUMENT_KEY = 'savePinnedTabs:local';
+
+/** Limits automatic loading to the first opened window. */
 export const AUTOLOAD_FIRST_WINDOW = 'first-window';
+
+/** Enables automatic loading in every opened window. */
 export const AUTOLOAD_EVERY_WINDOW = 'every-window';
 
 
+/** Applies first-window loading when no valid scope is stored. */
 const DEFAULT_AUTOLOAD_SCOPE: AutoloadScope = AUTOLOAD_FIRST_WINDOW;
 
 
+/** Identifies the legacy window-session record. */
 const LEGACY_SESSIONS_KEY = 'activeTabs';
+
+/** Identifies the legacy shortcut-assignment record. */
 const LEGACY_SHORTCUTS_KEY = 'shortcutSets';
+
+/** Serializes schema migrations across extension contexts. */
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
+
+/** Matches supported canonical UUID strings. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 
 
+/** Maps legacy storage identifiers to generated set identifiers. */
 interface MigrationMetadata {
   legacyIds: Record<string, string>;
 }
 
+/** Represents unvalidated autoload data read from storage. */
 interface LooseAutoloadConfiguration {
   scope?: unknown;
   setIds?: unknown;
 }
 
+/** Represents a structurally valid synchronized document before normalization. */
 interface StoredSyncDocument {
   version: typeof STORAGE_SCHEMA_VERSION;
   sets: Record<string, TabSet>;
@@ -41,54 +65,70 @@ interface StoredSyncDocument {
   migration?: MigrationMetadata;
 }
 
+/** Represents a normalized synchronized document with complete configuration. */
 export interface SyncDocument extends StoredSyncDocument {
   autoload: AutoloadConfiguration;
   deletedSetIds: string[];
 }
 
+/** Represents a structurally valid local document before reference cleanup. */
 interface StoredLocalDocument {
   version: typeof STORAGE_SCHEMA_VERSION;
   windowSessions?: Record<string, unknown> | null;
   shortcutAssignments?: Record<string, unknown> | null;
 }
 
+/** Represents a normalized local document containing valid set references. */
 interface LocalDocument extends StoredLocalDocument {
   windowSessions: Record<string, string>;
   shortcutAssignments: Record<string, string>;
 }
 
+/** Represents a tab set stored by the legacy schema. */
 interface LegacySet {
   set_name: string;
   tabs: string[];
   autoload: 0 | 1;
 }
 
+/** Represents arbitrary entries returned by a browser storage area. */
 type StorageRecord = Record<string, unknown>;
+
+/** Represents work executed while holding a storage serialization lock. */
 type StorageOperation<T> = () => T | Promise<T>;
 
 
+/** Configures identifier generation during legacy migration. */
 interface MigrationOptions {
+  /** Supplies candidate UUIDs, primarily for deterministic migration. */
   createId?: () => string;
 }
 
+/** Ensures persisted documents use the current storage schema. */
 export interface StorageMigration {
+  /** Completes migration before resolving and rejects if migration fails. */
   ensureMigrated(): Promise<void>;
 }
 
+/** Provides a migration strategy that performs no work. */
 const NO_STORAGE_MIGRATION: StorageMigration = {
+  /** Resolves immediately without changing storage. */
   ensureMigrated(): Promise<void> {
     return Promise.resolve();
   },
 };
 
+/** Checks whether a value has a supported UUID representation. */
 export function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_PATTERN.test(value);
 }
 
+/** Generates a set identifier using the Web Crypto API. */
 export function newSetId(): string {
   return globalThis.crypto.randomUUID();
 }
 
+/** Creates a synchronized document with no sets or deleted identifiers. */
 export function emptySyncDocument(): SyncDocument {
   return {
     version: STORAGE_SCHEMA_VERSION,
@@ -98,6 +138,7 @@ export function emptySyncDocument(): SyncDocument {
   };
 }
 
+/** Creates a local document with no session or shortcut references. */
 export function emptyLocalDocument(): LocalDocument {
   return {
     version: STORAGE_SCHEMA_VERSION,
@@ -106,6 +147,7 @@ export function emptyLocalDocument(): LocalDocument {
   };
 }
 
+/** Checks whether every property value in a record is a string. */
 function isStringRecord(value: unknown): value is Record<string, string> {
   return isRecord(value)
     && Object.values(value).every(
@@ -113,11 +155,13 @@ function isStringRecord(value: unknown): value is Record<string, string> {
     );
 }
 
+/** Checks whether a value is a supported autoload scope. */
 export function isAutoloadScope(value: unknown): value is AutoloadScope {
   return value === AUTOLOAD_FIRST_WINDOW
     || value === AUTOLOAD_EVERY_WINDOW;
 }
 
+/** Checks the persisted shape required for a tab set. */
 function isStoredSet(value: unknown): value is TabSet {
   return isRecord(value)
     && typeof value['id'] === 'string'
@@ -125,10 +169,12 @@ function isStoredSet(value: unknown): value is TabSet {
     && isStringArray(value['tabs']);
 }
 
+/** Checks the legacy identifier mapping stored during migration. */
 function isMigrationMetadata(value: unknown): value is MigrationMetadata {
   return isRecord(value) && isStringRecord(value['legacyIds']);
 }
 
+/** Checks synchronized document structure without normalizing optional data. */
 function isStoredSyncDocument(
   document: unknown,
 ): document is StoredSyncDocument {
@@ -153,6 +199,7 @@ function isStoredSyncDocument(
     || isMigrationMetadata(document['migration']);
 }
 
+/** Checks local document structure without validating stored references. */
 function isStoredLocalDocument(
   document: unknown,
 ): document is StoredLocalDocument {
@@ -178,14 +225,19 @@ function isStoredLocalDocument(
   );
 }
 
+/** Validates and narrows a synchronized storage document. */
 function assertVersion(
   document: unknown,
   location: 'synchronized',
 ): asserts document is StoredSyncDocument;
+
+/** Validates and narrows a local storage document. */
 function assertVersion(
   document: unknown,
   location: 'local',
 ): asserts document is StoredLocalDocument;
+
+/** Rejects unsupported schema versions and malformed storage documents. */
 function assertVersion(
   document: unknown,
   location: 'synchronized' | 'local',
@@ -211,6 +263,7 @@ function assertVersion(
   }
 }
 
+/** Validates a complete local document and rejects non-string references. */
 function assertLocalDocument(
   document: unknown,
 ): asserts document is LocalDocument {
@@ -224,6 +277,7 @@ function assertLocalDocument(
   }
 }
 
+/** Checks whether a legacy key encodes the associated set name. */
 function matchesLegacyIdentity(key: string, name: string): boolean {
   try {
     const decoded = atob(key);
@@ -239,6 +293,7 @@ function matchesLegacyIdentity(key: string, name: string): boolean {
   }
 }
 
+/** Extracts well-formed legacy tab sets while excluding the current document. */
 function legacySetEntries(stored: StorageRecord): Array<[string, LegacySet]> {
   return Object.entries(stored).filter(
     (entry): entry is [string, LegacySet] => {
@@ -253,6 +308,7 @@ function legacySetEntries(stored: StorageRecord): Array<[string, LegacySet]> {
   );
 }
 
+/** Generates an unused valid UUID and reserves it in the supplied set. */
 function uniqueId(usedIds: Set<string>, createId: () => string): string {
   let id: string;
   do {
@@ -262,6 +318,7 @@ function uniqueId(usedIds: Set<string>, createId: () => string): string {
   return id;
 }
 
+/** Converts legacy synchronized entries into a current document. */
 function createMigratedSyncDocument(
   stored: StorageRecord,
   createId: () => string,
@@ -287,6 +344,7 @@ function createMigratedSyncDocument(
   return document;
 }
 
+/** Normalizes autoload and deletion data in place, discarding invalid entries. */
 function normalizeAutoload(
   document: StoredSyncDocument,
 ): asserts document is SyncDocument {
@@ -317,6 +375,7 @@ function normalizeAutoload(
     : [];
 }
 
+/** Validates, clones, and normalizes a synchronized document. */
 export function parseSyncDocument(value: unknown): SyncDocument {
   assertVersion(value, 'synchronized');
   const document = structuredClone(value);
@@ -324,6 +383,7 @@ export function parseSyncDocument(value: unknown): SyncDocument {
   return document;
 }
 
+/** Resolves a current or legacy reference and drops unknown set identifiers. */
 function migrateReference(
   reference: unknown,
   legacyIds: Record<string, string>,
@@ -334,6 +394,7 @@ function migrateReference(
   return knownIds.has(setId) ? setId : null;
 }
 
+/** Converts valid legacy local references into a current local document. */
 function createMigratedLocalDocument(
   stored: StorageRecord,
   syncDocument: SyncDocument,
@@ -359,6 +420,7 @@ function createMigratedLocalDocument(
   return document;
 }
 
+/** Replaces local reference maps in place with valid known set references. */
 function cleanLocalReferences(
   document: StoredLocalDocument,
   knownIds: ReadonlySet<string>,
@@ -389,6 +451,7 @@ function cleanLocalReferences(
   document.shortcutAssignments = shortcutAssignments;
 }
 
+/** Removes storage entries when at least one key is present. */
 async function removeKeys(
   storage: BrowserStorageArea,
   keys: string[],
@@ -396,13 +459,24 @@ async function removeKeys(
   if (keys.length > 0) await storage.remove(keys);
 }
 
+/** Migrates synchronized and local browser storage to the current schema. */
 export class BrowserStorageMigration implements StorageMigration {
+  /** Provides access to synchronized browser storage. */
   #syncStorage: BrowserStorageArea;
+
+  /** Provides access to device-local browser storage. */
   #localStorage: BrowserStorageArea;
+
+  /** Generates identifiers for migrated legacy sets. */
   #createId: () => string;
+
+  /** Serializes migration work across extension contexts. */
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
+
+  /** Caches the active or completed migration attempt. */
   #migration: Promise<void> | undefined;
 
+  /** Creates a migration coordinator for the supplied storage areas. */
   constructor(
     syncStorage: BrowserStorageArea,
     localStorage: BrowserStorageArea,
@@ -417,6 +491,7 @@ export class BrowserStorageMigration implements StorageMigration {
     );
   }
 
+  /** Runs migration once, shares concurrent work, and permits retry after failure. */
   ensureMigrated(): Promise<void> {
     const currentMigration = this.#migration;
     if (currentMigration) return currentMigration;
@@ -431,6 +506,7 @@ export class BrowserStorageMigration implements StorageMigration {
     return migration;
   }
 
+  /** Migrates documents, cleans references, and removes legacy storage entries. */
   async #migrate(): Promise<void> {
     const [storedSync, storedLocal] = await Promise.all([
       this.#syncStorage.get(null),
@@ -495,11 +571,18 @@ export class BrowserStorageMigration implements StorageMigration {
   }
 }
 
+/** Persists local set references after ensuring schema migration completes. */
 export class BrowserReferenceStorage {
+  /** Provides access to device-local browser storage. */
   #storage: BrowserStorageArea;
+
+  /** Guards reads and serialized operations behind schema migration. */
   #migration: StorageMigration;
+
+  /** Serializes reference updates across extension contexts. */
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
 
+  /** Creates a local reference store backed by browser storage. */
   constructor(
     localStorage: BrowserStorageArea,
     migration: StorageMigration = NO_STORAGE_MIGRATION,
@@ -512,6 +595,7 @@ export class BrowserReferenceStorage {
     );
   }
 
+  /** Runs an operation exclusively after migration completes. */
   runExclusive<T>(operation: StorageOperation<T>): Promise<T> {
     return this.#runExclusive(async () => {
       await this.#migration.ensureMigrated();
@@ -519,6 +603,7 @@ export class BrowserReferenceStorage {
     });
   }
 
+  /** Reads and clones the local document, rejecting invalid stored data. */
   async read(): Promise<LocalDocument> {
     await this.#migration.ensureMigrated();
     const stored = await this.#storage.get(LOCAL_DOCUMENT_KEY);
@@ -527,6 +612,7 @@ export class BrowserReferenceStorage {
     return structuredClone(document);
   }
 
+  /** Clones and persists the supplied local document. */
   async write(document: LocalDocument): Promise<void> {
     await this.#storage.set({
       [LOCAL_DOCUMENT_KEY]: structuredClone(document),
@@ -534,17 +620,23 @@ export class BrowserReferenceStorage {
   }
 }
 
+/** Stores local set references in memory while preserving clone semantics. */
 export class InMemoryReferenceStorage {
+  /** Holds the private mutable document snapshot. */
   #document: LocalDocument = emptyLocalDocument();
+
+  /** Serializes in-memory reference operations. */
   readonly runExclusive = createSerializedStorageOperation(
     this,
     'save-pinned-tabs:memory-references',
   );
 
+  /** Reads an isolated clone of the current document. */
   async read(): Promise<LocalDocument> {
     return structuredClone(this.#document);
   }
 
+  /** Replaces the current document with an isolated clone. */
   async write(document: LocalDocument): Promise<void> {
     this.#document = structuredClone(document);
   }

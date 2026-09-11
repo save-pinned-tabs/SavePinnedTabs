@@ -1,5 +1,8 @@
+/** Provides type-safe lookup and validation of DOM elements. */
+
 type ElementConstructor<T extends Element> = abstract new () => T;
 
+/** Retrieves an element by ID and throws if it is missing or has an unexpected type. */
 export function requireElement<T extends Element>(
   document: Document,
   id: string,

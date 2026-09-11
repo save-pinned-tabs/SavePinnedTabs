@@ -1,3 +1,5 @@
+/** Initializes the background service worker and connects browser lifecycle, tab state, and command handlers. */
+
 import {
   selectBrowserApi,
   type BrowserApi,
@@ -40,6 +42,7 @@ globalThis.savePinnedTabsCommandListener = registerCommands(
   tabSetController,
 );
 
+/** Restores managed browser state when the browser starts. */
 export function handleStartup() {
   return browserLifecycle.onBrowserStartup();
 }

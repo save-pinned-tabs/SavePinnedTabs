@@ -1,3 +1,5 @@
+/** Provides validated, transactional access to tab-set storage and related assignments. */
+
 import type {
   AutoloadConfiguration,
   AutoloadScope,
@@ -22,43 +24,75 @@ import {
   type TabSetImportDocument,
 } from './tab-set-import.js';
 
+/** Identifies the current exported document schema. */
 const EXPORT_VERSION = 2;
 
 
+/** Defines persistent tab-set operations and exclusive transaction support. */
 interface TabSetStorage {
+  /** Returns every persisted tab set. */
   list(): Promise<TabSet[]>;
+
+  /** Returns the matching set or null when it does not exist. */
   get(setId: TabSetId): Promise<TabSet | null>;
+
+  /** Persists a complete tab set. */
   save(set: TabSet): Promise<void>;
+
+  /** Restores a previous value or removes a newly created set. */
   restore(setId: TabSetId, previousSet: TabSet | null): Promise<void>;
+
+  /** Deletes a persisted set. */
   remove(setId: TabSetId): Promise<void>;
+
+  /** Returns all identifiers currently in use. */
   identities(): Promise<Set<TabSetId>>;
+
+  /** Returns the persisted autoload configuration. */
   getAutoload(): Promise<AutoloadConfiguration>;
+
+  /** Replaces the persisted autoload configuration. */
   setAutoload(configuration: AutoloadConfiguration): Promise<void>;
+
+  /** Atomically imports sets and their resulting autoload configuration. */
   import(
     sets: TabSet[],
     configuration: AutoloadConfiguration,
   ): Promise<void>;
+
+  /** Serializes an operation against other repository mutations. */
   runExclusive<Result>(operation: () => Promise<Result>): Promise<Result>;
 }
 
+/** Associates browser windows with their active tab sets. */
 interface WindowSessions {
+  /** Assigns a tab set to a window. */
   set(windowId: WindowId, setId: TabSetId): Promise<void> | void;
+
+  /** Removes all window associations for a deleted set. */
   clearSetReferences(setId: TabSetId): Promise<void> | void;
 }
 
+/** Maintains shortcut references to tab sets. */
 interface ShortcutAssignments {
+  /** Removes all shortcut associations for a deleted set. */
   clearSetReferences(setId: TabSetId): Promise<void> | void;
 }
 
+/** Configures validation, related state collaborators, and ID generation. */
 interface TabSetRepositoryOptions {
+  /** Validates imported documents before normalization. */
   validateImport?: (
     document: unknown,
   ) => document is TabSetImportDocument;
   windowSessions?: WindowSessions;
   shortcutAssignments?: ShortcutAssignments;
+
+  /** Supplies candidate UUIDs and may be called repeatedly on collisions. */
   createId?: () => string;
 }
 
+/** Creates a contextual repository error while preserving its cause. */
 function tabSetError(
   operation: string,
   setId: string,
@@ -70,6 +104,7 @@ function tabSetError(
   );
 }
 
+/** Compares tab-set identity, metadata, and ordered tab contents. */
 function tabSetsEqual(left: TabSet, right: TabSet): boolean {
   return left.id === right.id
     && left.name === right.name
@@ -77,6 +112,7 @@ function tabSetsEqual(left: TabSet, right: TabSet): boolean {
     && left.tabs.every((url, index) => url === right.tabs[index]);
 }
 
+/** Validates a save payload and rejects malformed names, tabs, or IDs. */
 function validateSetDraft(set: unknown): asserts set is TabSetDraft {
   if (set === null || typeof set !== 'object') {
     throw new TypeError('Tab set must be an object');
@@ -104,6 +140,7 @@ function validateSetDraft(set: unknown): asserts set is TabSetDraft {
 }
 
 
+/** Validates the autoload scope and set identifier collection. */
 function validateAutoload(
   configuration: unknown,
 ): asserts configuration is AutoloadConfiguration {
@@ -122,11 +159,13 @@ function validateAutoload(
   }
 }
 
+/** Reads an import version, defaulting legacy documents to version 1. */
 function importedVersion(document: unknown): unknown {
   if (!isRecord(document)) return null;
   return Object.hasOwn(document, 'version') ? document.version : 1;
 }
 
+/** Produces a stable identifier for save error messages. */
 function draftIdentifier(set: unknown): string {
   if (!isRecord(set) || set.id === undefined || set.id === null) {
     return 'new';
@@ -135,6 +174,7 @@ function draftIdentifier(set: unknown): string {
   return String(set.id);
 }
 
+/** Coordinates validated tab-set persistence and dependent state updates. */
 export class TabSetRepository {
   readonly #storage: TabSetStorage;
   readonly #validateImport:
@@ -144,6 +184,7 @@ export class TabSetRepository {
   readonly #shortcutAssignments: ShortcutAssignments | undefined;
   readonly #createId: () => string;
 
+  /** Creates a repository with optional validation and assignment collaborators. */
   constructor(
     storage: TabSetStorage,
     {
@@ -160,6 +201,7 @@ export class TabSetRepository {
     this.#createId = createId;
   }
 
+  /** Returns all sets and wraps storage failures with repository context. */
   async list(): Promise<TabSet[]> {
     try {
       return await this.#storage.list();
@@ -168,6 +210,7 @@ export class TabSetRepository {
     }
   }
 
+  /** Returns a set when present and wraps storage failures with its ID. */
   async get(setId: TabSetId): Promise<TabSet | null> {
     try {
       return await this.#storage.get(setId);
@@ -176,6 +219,7 @@ export class TabSetRepository {
     }
   }
 
+  /** Validates and persists a draft under exclusive access. */
   save(set: unknown): Promise<TabSet> {
     return this.#storage.runExclusive(async () => {
       try {
@@ -186,6 +230,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Persists a set and assigns it to a window, rolling back on assignment failure. */
   saveForWindow(set: unknown, windowId: number): Promise<TabSet> {
     return this.#storage.runExclusive(async () => {
       let savedSet: TabSet | undefined;
@@ -230,6 +275,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Assigns a set only when its persisted value still matches the expected snapshot. */
   activateWindowSession(
     setId: string,
     expectedSet: TabSet,
@@ -263,6 +309,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Returns the current autoload configuration with contextual error handling. */
   async getAutoload(): Promise<AutoloadConfiguration> {
     try {
       return await this.#storage.getAutoload();
@@ -271,6 +318,7 @@ export class TabSetRepository {
     }
   }
 
+  /** Validates, deduplicates, and persists references to existing sets only. */
   setAutoload(configuration: unknown): Promise<void> {
     return this.#storage.runExclusive(async () => {
       try {
@@ -302,6 +350,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Deletes a set and clears its window and shortcut references. */
   remove(setId: string): Promise<void> {
     return this.#storage.runExclusive(async () => {
       try {
@@ -314,6 +363,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Builds a versioned export from the current sets and autoload configuration. */
   async export(): Promise<ExportDocument> {
     try {
       return {
@@ -326,6 +376,7 @@ export class TabSetRepository {
     }
   }
 
+  /** Validates and imports a supported document while remapping conflicting IDs. */
   import(document: unknown): Promise<TabSet[]> {
     return this.#storage.runExclusive(async () => {
       try {
@@ -383,6 +434,7 @@ export class TabSetRepository {
     });
   }
 
+  /** Validates a draft, creates an ID when needed, and persists the result. */
   async #persist(set: unknown): Promise<TabSet> {
     validateSetDraft(set);
 
@@ -404,6 +456,7 @@ export class TabSetRepository {
     return savedSet;
   }
 
+  /** Generates candidates until it finds a valid UUID not already reserved. */
   #newId(identities: Set<string>): string {
     while (true) {
       const id = this.#createId();

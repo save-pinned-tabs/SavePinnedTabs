@@ -1,3 +1,5 @@
+/** Coordinates tab-set persistence, window state, shortcuts, and UI state retrieval. */
+
 import type {
   AutoloadConfiguration,
   BrowserCommand,
@@ -12,57 +14,95 @@ import type {
 } from '../domain.js';
 import { errorMessage } from '../validation.js';
 
+/** Allows dependency operations to complete synchronously or asynchronously. */
 type MaybePromise<T> = T | PromiseLike<T>;
 
+/** Provides persistent storage and import/export operations for tab sets. */
 interface TabSets {
+  /** Lists all saved tab sets. */
   list(): MaybePromise<TabSet[]>;
+
+  /** Permanently removes a saved tab set. */
   remove(setId: TabSetId): MaybePromise<unknown>;
+
+  /** Retrieves the current autoload configuration. */
   getAutoload(): MaybePromise<AutoloadConfiguration>;
+
+  /** Replaces the current autoload configuration. */
   setAutoload(configuration: AutoloadConfiguration): MaybePromise<unknown>;
+
+  /** Serializes all tab-set data for external storage. */
   export(): MaybePromise<ExportDocument>;
+
+  /** Validates and persists tab sets from an external document. */
   import(document: unknown): MaybePromise<TabSet[]>;
 }
 
+/** Resolves the active tab set associated with a browser window. */
 interface WindowSessions {
+  /** Returns no identifier when the window has no active tab set. */
   get(windowId: WindowId): MaybePromise<TabSetId | null | undefined>;
 }
 
+/** Manages associations between browser commands and saved tab sets. */
 interface ShortcutAssignments {
+  /** Associates a browser command with a tab set. */
   assign(command: string, setId: TabSetId): MaybePromise<unknown>;
+
+  /** Lists the currently configured command assignments. */
   list(): MaybePromise<Partial<Record<string, TabSetId>>>;
 }
 
+/** Applies saved tab sets to browser windows and captures pinned tabs. */
 interface WindowTabState {
+  /** Saves the window's pinned tabs, returning null when none exist. */
   captureAndSave(
     windowId: WindowId,
     details: TabSetDetails,
   ): MaybePromise<TabSet | null>;
+
+  /** Replaces the window's managed tabs with a saved set. */
   replace(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+
+  /** Adds a saved set to the window without replacing existing tabs. */
   append(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
+
+  /** Removes a saved set's tabs from the window. */
   unload(windowId: WindowId, setId: TabSetId): MaybePromise<unknown>;
 }
 
+/** Supplies storage, browser, and window integrations used by the controller. */
 export interface TabSetControllerDependencies {
   tabSets: TabSets;
   windowSessions: WindowSessions;
   shortcutAssignments: ShortcutAssignments;
   windowTabState: WindowTabState;
+
+  /** Resolves the window associated with the current controller request. */
   getCurrentWindowId(): MaybePromise<WindowId>;
+
+  /** Resolves the most recently focused window, if one is available. */
   getLastFocusedWindowId(): MaybePromise<WindowId | null | undefined>;
+
+  /** Lists browser commands available for shortcut assignment. */
   listBrowserCommands(): MaybePromise<BrowserCommand[]>;
 }
 
+/** Wraps an operation failure with context describing the attempted command. */
 function commandError(command: string, cause: unknown): Error {
   return new Error(`Failed to ${command}: ${errorMessage(cause)}`, { cause });
 }
 
+/** Coordinates tab-set commands and converts failures into command results. */
 export class TabSetController {
   readonly #dependencies: TabSetControllerDependencies;
 
+  /** Creates a controller backed by the provided browser and storage services. */
   constructor(dependencies: TabSetControllerDependencies) {
     this.#dependencies = dependencies;
   }
 
+  /** Loads the popup state for the current window. */
   getPopupState() {
     return this.#execute('load popup state', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
@@ -70,6 +110,7 @@ export class TabSetController {
     });
   }
 
+  /** Captures pinned tabs and refreshes popup state, failing when none are found. */
   saveSet(name: string, setId?: TabSetId) {
     return this.#execute('save tab set', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
@@ -82,18 +123,22 @@ export class TabSetController {
     });
   }
 
+  /** Replaces the current window's managed tabs and refreshes popup state. */
   loadSet(setId: TabSetId) {
     return this.#updatePopupState('load tab set', setId, 'replace');
   }
 
+  /** Appends a saved set to the current window and refreshes popup state. */
   appendSet(setId: TabSetId) {
     return this.#updatePopupState('append tab set', setId, 'append');
   }
 
+  /** Removes a saved set from the current window and refreshes popup state. */
   unloadSet(setId: TabSetId) {
     return this.#updatePopupState('unload tab set', setId, 'unload');
   }
 
+  /** Deletes a saved set and refreshes popup state for the current window. */
   deleteSet(setId: TabSetId) {
     return this.#execute('delete tab set', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
@@ -102,6 +147,7 @@ export class TabSetController {
     });
   }
 
+  /** Enables or disables autoload for a set while preserving the configured scope. */
   setAutoload(setId: TabSetId, enabled: boolean) {
     return this.#execute('update autoload selection', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
@@ -117,12 +163,14 @@ export class TabSetController {
     });
   }
 
+  /** Loads tab sets, shortcut assignments, and available browser commands. */
   getOptionsState() {
     return this.#execute('load options state', async () => ({
       state: await this.#optionsState(),
     }));
   }
 
+  /** Assigns a command to a tab set and refreshes options state. */
   assignShortcut(command: string, setId: TabSetId) {
     return this.#execute('assign keyboard shortcut', async () => {
       await this.#dependencies.shortcutAssignments.assign(command, setId);
@@ -130,6 +178,7 @@ export class TabSetController {
     });
   }
 
+  /** Exports all tab-set data as a command result. */
   exportSets() {
     return this.#execute(
       'export tab sets',
@@ -137,6 +186,7 @@ export class TabSetController {
     );
   }
 
+  /** Imports validated tab sets and returns their count with refreshed options state. */
   importSets(document: unknown) {
     return this.#execute('import tab sets', async () => {
       const imported = await this.#dependencies.tabSets.import(document);
@@ -147,6 +197,7 @@ export class TabSetController {
     });
   }
 
+  /** Runs an assigned command in the last focused window when both are available. */
   runShortcut(command: string) {
     return this.#execute(`run tab-set command "${command}"`, async () => {
       const setId = (await this.#dependencies.shortcutAssignments.list())[command];
@@ -161,6 +212,7 @@ export class TabSetController {
     });
   }
 
+  /** Applies a tab-set operation to the current window and refreshes popup state. */
   async #updatePopupState(
     command: string,
     setId: TabSetId,
@@ -173,6 +225,7 @@ export class TabSetController {
     });
   }
 
+  /** Builds popup state for a window from saved sets, session data, and autoload settings. */
   async #popupState(windowId: WindowId): Promise<PopupState> {
     const [sets, activeSetId, autoload] = await Promise.all([
       this.#dependencies.tabSets.list(),
@@ -186,6 +239,7 @@ export class TabSetController {
     };
   }
 
+  /** Builds options state from saved sets, assignments, and browser commands. */
   async #optionsState(): Promise<OptionsState> {
     const [sets, assignments, commands] = await Promise.all([
       this.#dependencies.tabSets.list(),
@@ -195,6 +249,7 @@ export class TabSetController {
     return { sets, assignments, commands };
   }
 
+  /** Executes an operation and converts thrown or rejected failures into an error result. */
   async #execute<T>(
     command: string,
     operation: () => MaybePromise<T>,
