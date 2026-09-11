@@ -31,6 +31,11 @@ All commit messages must follow the [Conventional Commits](https://www.conventio
 - Breaking changes: append `!` after the type/scope and note them in a `BREAKING CHANGE:` footer.
 - Examples: `feat(popup): add search filter for pinned tabs`, `fix: persist pinned set on browser restart!`
 
+## Coding Standards
+
+Add a concise JSDoc comment to every function, method, class, interface, and type alias in `src`.
+Describe the behavior, purpose, invariants, side effects, or error conditions that are not clear from the signature.
+
 ## Tests
 
 The npm scripts are the test interface for local development and CI:
