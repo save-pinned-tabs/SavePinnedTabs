@@ -7,9 +7,12 @@ export interface TabSet {
   tabs: string[];
 }
 
-export interface TabSetDraft {
-  id?: TabSetId;
+export interface TabSetDetails {
+  id?: TabSetId | undefined;
   name: string;
+}
+
+export interface TabSetDraft extends TabSetDetails {
   tabs: string[];
 }
 
@@ -46,7 +49,7 @@ export interface PopupState {
 
 export interface OptionsState {
   sets: TabSet[];
-  assignments: Record<string, TabSetId>;
+  assignments: Partial<Record<string, TabSetId>>;
   commands: BrowserCommand[];
 }
 

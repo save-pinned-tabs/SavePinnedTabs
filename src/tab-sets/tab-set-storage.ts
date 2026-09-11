@@ -1,18 +1,18 @@
-import { SYNC_DOCUMENT_KEY, emptySyncDocument } from '../storage/storage-schema.js';
+import type { BrowserStorageArea } from '../browser-api.js';
+import type { AutoloadConfiguration, TabSet } from '../domain.js';
+import {
+  SYNC_DOCUMENT_KEY,
+  emptySyncDocument,
+  type SyncDocument,
+} from '../storage/storage-schema.js';
 import {
   createSerializedOperation,
   createSerializedStorageOperation,
 } from '../storage/serialized-operation.js';
+import { isRecord, isStringArray } from '../validation.js';
 
 const TAB_SET_LOCK = 'save-pinned-tabs:tab-sets';
 
-type SyncDocument = ReturnType<typeof emptySyncDocument>;
-type TabSet = SyncDocument['sets'][string];
-type AutoloadConfiguration = SyncDocument['autoload'];
-interface SyncStorage {
-  get(key: string): Promise<unknown>;
-  set(values: Record<string, unknown>): Promise<void>;
-}
 
 interface Migration {
   ensureMigrated(): Promise<void>;
@@ -28,10 +28,6 @@ const EMPTY_SYNC_DOCUMENT = emptySyncDocument();
 const NOOP_MIGRATION: Migration = {
   ensureMigrated: () => Promise.resolve(),
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function hasShape(value: unknown, template: unknown): boolean {
   if (Array.isArray(template)) {
@@ -68,10 +64,7 @@ function isAutoloadConfiguration(
   }
 
   const setIds = value.setIds;
-  return (
-    Array.isArray(setIds) &&
-    setIds.every((setId) => typeof setId === 'string')
-  );
+  return isStringArray(setIds);
 }
 
 function isSyncDocument(value: unknown): value is SyncDocument {
@@ -86,45 +79,19 @@ function isSyncDocument(value: unknown): value is SyncDocument {
   return (
     isRecord(sets) &&
     Object.values(sets).every(isTabSet) &&
-    Array.isArray(deletedSetIds) &&
-    deletedSetIds.every((setId) => typeof setId === 'string') &&
+    isStringArray(deletedSetIds) &&
     isAutoloadConfiguration(autoload)
   );
 }
 
-function readImportedTabSets(value: unknown): TabSet[] {
-  if (!Array.isArray(value)) {
-    throw new TypeError('Imported tab sets must be an array');
-  }
-
-  const sets: TabSet[] = [];
-
-  for (const set of value) {
-    if (!isTabSet(set)) {
-      throw new TypeError('Imported tab sets contain an invalid tab set');
-    }
-
-    sets.push(set);
-  }
-
-  return sets;
-}
-
-function readImportedAutoload(value: unknown): AutoloadConfiguration {
-  if (!isAutoloadConfiguration(value)) {
-    throw new TypeError('Imported autoload configuration is invalid');
-  }
-
-  return value;
-}
 
 export class BrowserTabSetStorage {
-  #storage: SyncStorage;
+  #storage: BrowserStorageArea;
   #migration: Migration;
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
 
   constructor(
-    syncStorage: SyncStorage,
+    syncStorage: BrowserStorageArea,
     migration: Migration = NOOP_MIGRATION,
   ) {
     this.#storage = syncStorage;
@@ -214,17 +181,13 @@ export class BrowserTabSetStorage {
   async import(
     sets: readonly TabSet[],
     autoload: AutoloadConfiguration,
-  ): Promise<void>;
-  async import(sets: unknown, autoload: unknown): Promise<void> {
+  ): Promise<void> {
     const document = await this.#read();
-    const importedSets = readImportedTabSets(sets);
-    const importedAutoload = readImportedAutoload(autoload);
-
-    for (const set of importedSets) {
+    for (const set of sets) {
       document.sets[set.id] = structuredClone(set);
     }
 
-    document.autoload = structuredClone(importedAutoload);
+    document.autoload = structuredClone(autoload);
     await this.#write(document);
   }
 
@@ -336,15 +299,11 @@ export class InMemoryTabSetStorage {
   async import(
     sets: readonly TabSet[],
     autoload: AutoloadConfiguration,
-  ): Promise<void>;
-  async import(sets: unknown, autoload: unknown): Promise<void> {
-    const importedSets = readImportedTabSets(sets);
-    const importedAutoload = readImportedAutoload(autoload);
-
-    for (const set of importedSets) {
+  ): Promise<void> {
+    for (const set of sets) {
       this.#document.sets[set.id] = structuredClone(set);
     }
 
-    this.#document.autoload = structuredClone(importedAutoload);
+    this.#document.autoload = structuredClone(autoload);
   }
 }

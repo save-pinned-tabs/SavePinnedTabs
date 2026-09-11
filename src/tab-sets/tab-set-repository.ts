@@ -1,41 +1,65 @@
-import type { TabSet } from '../domain.js';
+import type {
+  AutoloadConfiguration,
+  AutoloadScope,
+  TabSet,
+  TabSetDraft,
+  TabSetId,
+  WindowId,
+} from '../domain.js';
 import {
   AUTOLOAD_SCOPES,
   isUuid,
   newSetId,
 } from '../storage/storage-schema.js';
+import {
+  errorMessage,
+  isRecord,
+  isStringArray,
+} from '../validation.js';
 
 const EXPORT_VERSION = 2;
-
-type AutoloadScope =
-  typeof AUTOLOAD_SCOPES extends ReadonlySet<infer Scope extends string>
-    ? Scope
-    : string;
-
-interface TabSetDraft {
-  id?: string;
-  name: string;
-  tabs: string[];
-}
-
-interface AutoloadConfiguration {
-  scope: AutoloadScope;
-  setIds: string[];
-}
 
 interface LegacyTabSet {
   set_name: string;
   tabs: string[];
-  autoload?: unknown;
+  autoload?: 0 | 1;
+}
+
+interface VersionedTabSetDocument {
+  version: 2;
+  sets: TabSet[];
+  autoload: AutoloadConfiguration;
+}
+
+interface VersionedLegacyDocument {
+  version: 1;
+  sets: Record<string, LegacyTabSet>;
+}
+
+export type TabSetImportDocument =
+  | VersionedTabSetDocument
+  | VersionedLegacyDocument
+  | Record<string, LegacyTabSet>;
+
+function isVersionedTabSetDocument(
+  document: TabSetImportDocument,
+): document is VersionedTabSetDocument {
+  return 'version' in document && document.version === EXPORT_VERSION;
+}
+
+function isVersionedLegacyDocument(
+  document: TabSetImportDocument,
+): document is VersionedLegacyDocument {
+  return 'version' in document && document.version === 1;
 }
 
 interface TabSetStorage {
   list(): Promise<TabSet[]>;
-  get(setId: string): Promise<TabSet | null>;
+  get(setId: TabSetId): Promise<TabSet | null>;
   save(set: TabSet): Promise<void>;
-  restore(setId: string, previousSet: TabSet | null): Promise<void>;
-  remove(setId: string): Promise<void>;
-  identities(): Promise<Set<string>>;
+  restore(setId: TabSetId, previousSet: TabSet | null): Promise<void>;
+  remove(setId: TabSetId): Promise<void>;
+  identities(): Promise<Set<TabSetId>>;
   getAutoload(): Promise<AutoloadConfiguration>;
   setAutoload(configuration: AutoloadConfiguration): Promise<void>;
   import(
@@ -46,42 +70,21 @@ interface TabSetStorage {
 }
 
 interface WindowSessions {
-  set(windowId: number, setId: string): Promise<void> | void;
-  clearSetReferences(setId: string): Promise<void> | void;
+  set(windowId: WindowId, setId: TabSetId): Promise<void> | void;
+  clearSetReferences(setId: TabSetId): Promise<void> | void;
 }
 
 interface ShortcutAssignments {
-  clearSetReferences(setId: string): Promise<void> | void;
+  clearSetReferences(setId: TabSetId): Promise<void> | void;
 }
 
 interface TabSetRepositoryOptions {
-  validateImport?: (document: unknown) => boolean;
+  validateImport?: (
+    document: unknown,
+  ) => document is TabSetImportDocument;
   windowSessions?: WindowSessions;
   shortcutAssignments?: ShortcutAssignments;
   createId?: () => unknown;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null
-    && typeof value === 'object'
-    && !Array.isArray(value);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value)
-    && value.every((item: unknown) => typeof item === 'string');
-}
-
-function isUnknownSet(value: unknown): value is Set<unknown> {
-  return value instanceof Set;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (isRecord(error) && typeof error.message === 'string') {
-    return error.message;
-  }
-  return String(error);
 }
 
 function tabSetError(
@@ -128,24 +131,6 @@ function validateSetDraft(set: unknown): asserts set is TabSetDraft {
   }
 }
 
-function validateStoredSet(set: unknown): asserts set is TabSet {
-  validateSetDraft(set);
-
-  if (set.id === undefined) {
-    throw new TypeError('Stored tab set must have an id');
-  }
-}
-
-function validateStoredSets(sets: unknown): asserts sets is TabSet[] {
-  if (!Array.isArray(sets)) {
-    throw new TypeError('Stored tab sets must be an array');
-  }
-
-  for (const set of sets) {
-    validateStoredSet(set);
-  }
-}
-
 function isAutoloadScope(value: unknown): value is AutoloadScope {
   if (typeof value !== 'string') return false;
 
@@ -174,38 +159,6 @@ function validateAutoload(
   }
 }
 
-function validateIdentities(
-  identities: unknown,
-): asserts identities is Set<string> {
-  if (!isUnknownSet(identities)) {
-    throw new TypeError('Tab set identities must be a Set');
-  }
-
-  for (const identity of identities) {
-    if (typeof identity !== 'string') {
-      throw new TypeError(
-        'Tab set identities must contain only strings',
-      );
-    }
-  }
-}
-
-function validateLegacySet(set: unknown): asserts set is LegacyTabSet {
-  if (!isRecord(set)) {
-    throw new TypeError('Legacy tab set must be an object');
-  }
-
-  if (typeof set.set_name !== 'string') {
-    throw new TypeError('Legacy tab set name must be a string');
-  }
-
-  if (!isStringArray(set.tabs)) {
-    throw new TypeError(
-      'Legacy tab set tabs must be an array of strings',
-    );
-  }
-}
-
 function importedVersion(document: unknown): unknown {
   if (!isRecord(document)) return null;
   return Object.hasOwn(document, 'version') ? document.version : 1;
@@ -222,7 +175,7 @@ function draftIdentifier(set: unknown): string {
 export class TabSetRepository {
   readonly #storage: TabSetStorage;
   readonly #validateImport:
-    | ((document: unknown) => boolean)
+    | ((document: unknown) => document is TabSetImportDocument)
     | undefined;
   readonly #windowSessions: WindowSessions | undefined;
   readonly #shortcutAssignments: ShortcutAssignments | undefined;
@@ -246,7 +199,7 @@ export class TabSetRepository {
 
   async list(): Promise<TabSet[]> {
     try {
-      return await this.#readStoredSets();
+      return await this.#storage.list();
     } catch (error) {
       throw tabSetError('list', 'all', error);
     }
@@ -254,7 +207,7 @@ export class TabSetRepository {
 
   async get(setId: string): Promise<TabSet | null | undefined> {
     try {
-      return await this.#readStoredSet(setId);
+      return await this.#storage.get(setId);
     } catch (error) {
       throw tabSetError('get', setId, error);
     }
@@ -281,7 +234,7 @@ export class TabSetRepository {
           && typeof set.id === 'string'
           && set.id.length > 0
         ) {
-          previousSet = await this.#readStoredSet(set.id) ?? null;
+          previousSet = await this.#storage.get(set.id) ?? null;
         }
 
         savedSet = await this.#persist(set);
@@ -321,7 +274,7 @@ export class TabSetRepository {
   ): Promise<boolean> {
     return this.#storage.runExclusive(async () => {
       try {
-        const currentSet = await this.#readStoredSet(setId);
+        const currentSet = await this.#storage.get(setId);
 
         if (
           !currentSet
@@ -349,7 +302,7 @@ export class TabSetRepository {
 
   async getAutoload(): Promise<AutoloadConfiguration> {
     try {
-      return await this.#readAutoload();
+      return await this.#storage.getAutoload();
     } catch (error) {
       throw tabSetError('get autoload for', 'all', error);
     }
@@ -362,7 +315,7 @@ export class TabSetRepository {
 
         const uniqueSetIds = [...new Set(configuration.setIds)];
         const knownIds = new Set(
-          (await this.#readStoredSets()).map((set) => set.id),
+          (await this.#storage.list()).map((set) => set.id),
         );
         const staleId = uniqueSetIds.find(
           (setId) => !knownIds.has(setId),
@@ -406,8 +359,8 @@ export class TabSetRepository {
     try {
       return {
         version: EXPORT_VERSION,
-        sets: await this.#readStoredSets(),
-        autoload: await this.#readAutoload(),
+        sets: await this.#storage.list(),
+        autoload: await this.#storage.getAutoload(),
       };
     } catch (error) {
       throw tabSetError('export', 'all', error);
@@ -432,31 +385,17 @@ export class TabSetRepository {
           throw new TypeError('Import validation failed');
         }
 
-        if (!isRecord(document)) {
-          throw new TypeError('Import validation failed');
-        }
-
-        const identities = await this.#readIdentities();
+        const identities = await this.#storage.identities();
         const imported: TabSet[] = [];
         const importedAutoloadIds: string[] = [];
         let importedScope: AutoloadScope | undefined;
 
-        if (version === EXPORT_VERSION) {
-          const setsValue = document.sets;
-
-          if (!Array.isArray(setsValue)) {
-            throw new TypeError('Import validation failed');
-          }
-
-          validateAutoload(document.autoload);
+        if (isVersionedTabSetDocument(document)) {
           importedScope = document.autoload.scope;
 
-          const documentSets: unknown[] = setsValue;
           const idMap = new Map<string, string>();
 
-          for (const set of documentSets) {
-            validateStoredSet(set);
-
+          for (const set of document.sets) {
             const id = identities.has(set.id)
               ? this.#newId(identities)
               : set.id;
@@ -474,17 +413,11 @@ export class TabSetRepository {
             }
           }
         } else {
-          const legacySetsValue = document.version === 1
+          const legacySets = isVersionedLegacyDocument(document)
             ? document.sets
             : document;
 
-          if (!isRecord(legacySetsValue)) {
-            throw new TypeError('Import validation failed');
-          }
-
-          for (const set of Object.values(legacySetsValue)) {
-            validateLegacySet(set);
-
+          for (const set of Object.values(legacySets)) {
             const id = this.#newId(identities);
             imported.push({
               id,
@@ -498,7 +431,7 @@ export class TabSetRepository {
           }
         }
 
-        const currentAutoload = await this.#readAutoload();
+        const currentAutoload = await this.#storage.getAutoload();
 
         await this.#storage.import(imported, {
           scope: importedScope ?? currentAutoload.scope,
@@ -522,12 +455,12 @@ export class TabSetRepository {
 
     const savedSet: TabSet = {
       ...set,
-      id: set.id ?? this.#newId(await this.#readIdentities()),
+      id: set.id ?? this.#newId(await this.#storage.identities()),
     };
 
     if (
       set.id !== undefined
-      && !await this.#readStoredSet(set.id)
+      && !await this.#storage.get(set.id)
     ) {
       throw new Error(
         `Tab set id "${set.id}" does not exist and cannot be reused`,
@@ -536,26 +469,6 @@ export class TabSetRepository {
 
     await this.#storage.save(savedSet);
     return savedSet;
-  }
-
-  async #readStoredSets(): Promise<TabSet[]> {
-    return this.#storage.list();
-  }
-
-  async #readStoredSet(
-    setId: string,
-  ): Promise<TabSet | null> {
-    return this.#storage.get(setId);
-  }
-
-  async #readAutoload(): Promise<AutoloadConfiguration> {
-    return this.#storage.getAutoload();
-  }
-
-  async #readIdentities(): Promise<Set<string>> {
-    const identities = await this.#storage.identities();
-    validateIdentities(identities);
-    return identities;
   }
 
   #newId(identities: Set<string>): string {

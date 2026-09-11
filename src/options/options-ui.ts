@@ -1,20 +1,5 @@
-import type { ExportDocument } from '../domain.js';
+import type { ExportDocument, OptionsState } from '../domain.js';
 
-interface ShortcutCommand {
-  readonly name: string;
-  readonly shortcut?: string;
-}
-
-interface SetSummary {
-  readonly id: string;
-  readonly name: string;
-}
-
-interface OptionsState {
-  readonly commands: readonly ShortcutCommand[];
-  readonly sets: readonly SetSummary[];
-  readonly assignments: Readonly<Record<string, string | undefined>>;
-}
 
 interface OptionsActions {
   assignShortcut(command: string, setId: string): void;

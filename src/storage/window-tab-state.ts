@@ -1,3 +1,19 @@
+import type {
+  BrowserApi,
+  BrowserStorageArea,
+} from '../browser-api.js';
+import type {
+  TabSet,
+  TabSetDetails,
+  TabSetDraft,
+  TabSetId,
+  WindowId,
+} from '../domain.js';
+import {
+  errorMessage,
+  isRecord,
+  isStringArray,
+} from '../validation.js';
 import { createBrowserRepositories } from './browser-repositories.js';
 import { createSerializedStorageOperation } from './serialized-operation.js';
 
@@ -6,69 +22,12 @@ const WINDOW_LOCK_PREFIX = 'save-pinned-tabs:window-tabs:';
 const WINDOW_TAB_STATE_ERROR = Symbol('windowTabStateError');
 const WINDOW_TAB_STATE_MESSAGE = 'save-pinned-tabs:window-tab-state';
 
-type RepositoryBrowser = Parameters<typeof createBrowserRepositories>[0];
-type RepositoryCollection = ReturnType<typeof createBrowserRepositories>;
-type RepositoryTabSets = RepositoryCollection['tabSets'];
-type StoredTabSet = NonNullable<
-  Parameters<RepositoryTabSets['activateWindowSession']>[1]
->;
-type SetId = Parameters<RepositoryTabSets['get']>[0];
-type SaveableTabSet = Parameters<RepositoryTabSets['saveForWindow']>[0];
-type CapturableTabSet = SaveableTabSet & object;
-type SavedTabSet = Awaited<ReturnType<RepositoryTabSets['saveForWindow']>>;
-type StorageArea = Parameters<typeof createSerializedStorageOperation>[0];
-
 type WindowTabStateOperation =
   | 'snapshot'
   | 'replace'
   | 'append'
   | 'unload'
   | 'captureAndSave';
-
-interface BrowserTabQuery {
-  pinned: boolean;
-  windowId: number;
-}
-
-interface BrowserTabCreateProperties {
-  windowId: number;
-  url: string;
-  active: boolean;
-}
-
-interface BrowserTabUpdateProperties {
-  pinned: boolean;
-}
-
-interface BrowserTabsApi {
-  query(query: BrowserTabQuery): Promise<unknown>;
-  create(properties: BrowserTabCreateProperties): Promise<unknown>;
-  update(tabId: number, properties: BrowserTabUpdateProperties): Promise<unknown>;
-  remove(tabIds: number[]): Promise<unknown>;
-}
-
-interface WindowTabStateMessage {
-  type: typeof WINDOW_TAB_STATE_MESSAGE;
-  operation: WindowTabStateOperation;
-  args: unknown[];
-}
-
-interface BrowserRuntimeApi {
-  sendMessage(message: WindowTabStateMessage): Promise<unknown>;
-  onMessage: {
-    addListener(
-      listener: (message: unknown) => Promise<unknown> | undefined,
-    ): void;
-  };
-}
-
-type BrowserApi = {
-  tabs: BrowserTabsApi;
-  storage: {
-    local: StorageArea;
-  };
-  runtime: BrowserRuntimeApi;
-} & RepositoryBrowser;
 
 interface PinnedTab {
   id: number;
@@ -77,25 +36,32 @@ interface PinnedTab {
 }
 
 interface PinnedTabs {
-  queryPinned(windowId: number): Promise<PinnedTab[]>;
-  create(windowId: number, url: string): Promise<number>;
-  pin(tabId: number, windowId: number, url: string): Promise<void>;
-  remove(tabIds: number[], windowId: number, purpose: string): Promise<void>;
+  queryPinned(windowId: WindowId): Promise<PinnedTab[]>;
+  create(windowId: WindowId, url: string): Promise<number>;
+  pin(tabId: number, windowId: WindowId, url: string): Promise<void>;
+  remove(
+    tabIds: number[],
+    windowId: WindowId,
+    purpose: string,
+  ): Promise<void>;
 }
 
 interface TabSetStore {
-  get(setId: SetId): Promise<unknown>;
-  saveForWindow(set: SaveableTabSet, windowId: number): Promise<SavedTabSet>;
+  get(setId: TabSetId): Promise<TabSet | null | undefined>;
+  saveForWindow(
+    set: TabSetDraft,
+    windowId: WindowId,
+  ): Promise<TabSet>;
   activateWindowSession(
-    setId: SetId,
-    set: StoredTabSet,
-    windowId: number,
-  ): Promise<unknown>;
+    setId: TabSetId,
+    set: TabSet,
+    windowId: WindowId,
+  ): Promise<boolean>;
 }
 
 interface WindowSessionStore {
-  clear(windowId: number): Promise<unknown>;
-  clearAll(): Promise<unknown>;
+  clear(windowId: WindowId): Promise<void>;
+  clearAll(): Promise<void>;
 }
 
 interface WindowTabStateDependencies {
@@ -103,7 +69,7 @@ interface WindowTabStateDependencies {
   tabSets: TabSetStore;
   windowSessions: WindowSessionStore;
   runTransition: <Result>(
-    windowId: number,
+    windowId: WindowId,
     operation: () => Promise<Result>,
   ) => Promise<Result>;
   runAllExclusive: <Result>(
@@ -116,10 +82,6 @@ interface BrowserWindowTabStateOptions {
   onReplace?: (urls: string[]) => void;
 }
 
-function isRecord(value: unknown): value is Record<PropertyKey, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
 function isUnknownArray(value: unknown): value is unknown[] {
   return Array.isArray(value);
 }
@@ -128,36 +90,35 @@ function isInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value);
 }
 
-function isSetId(value: unknown): value is SetId {
+function isTabSetId(value: unknown): value is TabSetId {
   return typeof value === 'string';
 }
 
-function isCapturableTabSet(value: unknown): value is CapturableTabSet {
-  return isRecord(value);
+function isTabSetDetails(value: unknown): value is TabSetDetails {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && (
+      value.id === undefined
+      || isTabSetId(value.id)
+    );
 }
 
-function isStoredTabSet(value: unknown): value is StoredTabSet {
-  return isRecord(value) && isUnknownArray(value.tabs);
+function isTabSet(value: unknown): value is TabSet {
+  return isRecord(value)
+    && isTabSetId(value.id)
+    && typeof value.name === 'string'
+    && isStringArray(value.tabs);
 }
 
-function isSavedTabSet(value: unknown): value is SavedTabSet {
-  return isRecord(value);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function displaySetId(set: unknown): string {
-  if (!isRecord(set) || set.id === null || set.id === undefined) {
-    return 'new';
-  }
-  return String(set.id);
+function displaySetId(set: TabSetDetails): string {
+  return set.id === null || set.id === undefined
+    ? 'new'
+    : String(set.id);
 }
 
 function operationError(
   operation: string,
-  windowId: number,
+  windowId: WindowId,
   cause: unknown,
   rollbackErrors: unknown[] = [],
 ): Error {
@@ -211,11 +172,8 @@ function normalizeSavedUrls(urls: unknown): string[] {
   return urls.map(normalizeUrl);
 }
 
-function storedTabUrls(set: StoredTabSet): string[] {
-  if (!isRecord(set)) {
-    throw new TypeError('Stored tab set must be an object');
-  }
-  return normalizeSavedUrls(set.tabs);
+function storedTabUrls(set: TabSet): string[] {
+  return set.tabs.map(normalizeUrl);
 }
 
 function urlsMatch(tabs: PinnedTab[], urls: string[]): boolean {
@@ -240,7 +198,10 @@ function missingUrls(tabs: PinnedTab[], savedUrls: string[]): string[] {
   });
 }
 
-function matchingTabIds(tabs: PinnedTab[], savedUrls: string[]): number[] {
+function matchingTabIds(
+  tabs: PinnedTab[],
+  savedUrls: string[],
+): number[] {
   const remainingMultiplicity = new Map<string, number>();
   for (const url of savedUrls) {
     remainingMultiplicity.set(
@@ -260,20 +221,20 @@ function matchingTabIds(tabs: PinnedTab[], savedUrls: string[]): number[] {
 }
 
 function withTabs(
-  set: CapturableTabSet,
+  set: TabSetDetails,
   tabs: string[],
-): CapturableTabSet & { tabs: string[] } {
+): TabSetDraft {
   return Object.assign({}, set, { tabs });
 }
 
 export class BrowserTabsAdapter implements PinnedTabs {
-  #tabs: BrowserTabsApi;
+  #tabs: BrowserApi['tabs'];
 
-  constructor(tabs: BrowserTabsApi) {
+  constructor(tabs: BrowserApi['tabs']) {
     this.#tabs = tabs;
   }
 
-  async queryPinned(windowId: number): Promise<PinnedTab[]> {
+  async queryPinned(windowId: WindowId): Promise<PinnedTab[]> {
     try {
       const result = await this.#tabs.query({ pinned: true, windowId });
       if (!isUnknownArray(result)) {
@@ -283,7 +244,9 @@ export class BrowserTabsAdapter implements PinnedTabs {
       return result
         .map((tab, position) => {
           if (!isRecord(tab) || !isInteger(tab.id)) {
-            throw new Error('browser returned a pinned tab without an id');
+            throw new Error(
+              'browser returned a pinned tab without an id',
+            );
           }
 
           return {
@@ -301,9 +264,13 @@ export class BrowserTabsAdapter implements PinnedTabs {
     }
   }
 
-  async create(windowId: number, url: string): Promise<number> {
+  async create(windowId: WindowId, url: string): Promise<number> {
     try {
-      const tab = await this.#tabs.create({ windowId, url, active: false });
+      const tab = await this.#tabs.create({
+        windowId,
+        url,
+        active: false,
+      });
       if (!isRecord(tab) || !isInteger(tab.id)) {
         throw new Error('browser returned a tab without an id');
       }
@@ -316,7 +283,11 @@ export class BrowserTabsAdapter implements PinnedTabs {
     }
   }
 
-  async pin(tabId: number, windowId: number, url: string): Promise<void> {
+  async pin(
+    tabId: number,
+    windowId: WindowId,
+    url: string,
+  ): Promise<void> {
     try {
       await this.#tabs.update(tabId, { pinned: true });
     } catch (error: unknown) {
@@ -329,7 +300,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
 
   async remove(
     tabIds: number[],
-    windowId: number,
+    windowId: WindowId,
     purpose: string,
   ): Promise<void> {
     if (tabIds.length === 0) return;
@@ -369,14 +340,14 @@ export class WindowTabState {
     this.#onReplace = onReplace;
   }
 
-  snapshot(windowId: number): Promise<string[]> {
+  snapshot(windowId: WindowId): Promise<string[]> {
     return this.#run(windowId, 'snapshot', async () => {
       const tabs = await this.#tabs.queryPinned(windowId);
       return tabs.map((tab) => tab.url);
     });
   }
 
-  replace(windowId: number, setId: SetId): Promise<string[]> {
+  replace(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
       `replace with tab set "${String(setId)}"`,
@@ -404,7 +375,7 @@ export class WindowTabState {
     );
   }
 
-  append(windowId: number, setId: SetId): Promise<string[]> {
+  append(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
       `append tab set "${String(setId)}"`,
@@ -421,7 +392,7 @@ export class WindowTabState {
     );
   }
 
-  unload(windowId: number, setId: SetId): Promise<string[]> {
+  unload(windowId: WindowId, setId: TabSetId): Promise<string[]> {
     return this.#run(
       windowId,
       `unload tab set "${String(setId)}"`,
@@ -443,9 +414,9 @@ export class WindowTabState {
   }
 
   captureAndSave(
-    windowId: number,
-    set: CapturableTabSet,
-  ): Promise<SavedTabSet | null> {
+    windowId: WindowId,
+    set: TabSetDetails,
+  ): Promise<TabSet | null> {
     const setId = displaySetId(set);
 
     return this.#run(
@@ -465,9 +436,13 @@ export class WindowTabState {
 
         await this.#windowSessions.clear(windowId);
         try {
-          return await this.#tabSets.saveForWindow(capturedSet, windowId);
+          return await this.#tabSets.saveForWindow(
+            capturedSet,
+            windowId,
+          );
         } catch (error: unknown) {
-          const rollbackErrors = await this.#clearSessionAfterFailure(windowId);
+          const rollbackErrors =
+            await this.#clearSessionAfterFailure(windowId);
           throw operationError(
             `capture and save tab set "${setId}"`,
             windowId,
@@ -479,7 +454,7 @@ export class WindowTabState {
     );
   }
 
-  deactivate(windowId: number): Promise<void> {
+  deactivate(windowId: WindowId): Promise<void> {
     return this.#run(windowId, 'deactivate tab set', async () => {
       await this.#windowSessions.clear(windowId);
     });
@@ -498,27 +473,18 @@ export class WindowTabState {
     });
   }
 
-  async #requiredSet(setId: SetId): Promise<StoredTabSet> {
+  async #requiredSet(setId: TabSetId): Promise<TabSet> {
     const set = await this.#tabSets.get(setId);
-
     if (set === null || set === undefined) {
       throw new Error(`Tab set "${String(setId)}" does not exist`);
     }
-
-    if (!isStoredTabSet(set)) {
-      if (!isRecord(set)) {
-        throw new TypeError('Stored tab set must be an object');
-      }
-      throw new TypeError('Pinned tab list must be an array');
-    }
-
     return set;
   }
 
   async #activateSession(
-    windowId: number,
-    setId: SetId,
-    set: StoredTabSet,
+    windowId: WindowId,
+    setId: TabSetId,
+    set: TabSet,
   ): Promise<void> {
     await this.#windowSessions.clear(windowId);
 
@@ -534,7 +500,8 @@ export class WindowTabState {
         );
       }
     } catch (error: unknown) {
-      const rollbackErrors = await this.#clearSessionAfterFailure(windowId);
+      const rollbackErrors =
+        await this.#clearSessionAfterFailure(windowId);
       throw operationError(
         `activate tab set "${String(setId)}"`,
         windowId,
@@ -545,16 +512,19 @@ export class WindowTabState {
   }
 
   async #replaceTabs(
-    windowId: number,
-    setId: SetId,
-    set: StoredTabSet,
+    windowId: WindowId,
+    setId: TabSetId,
+    set: TabSet,
     currentTabs: PinnedTab[],
     savedUrls: string[],
   ): Promise<void> {
     let createdTabIds: number[] = [];
 
     try {
-      createdTabIds = await this.#createAndPinTabs(windowId, savedUrls);
+      createdTabIds = await this.#createAndPinTabs(
+        windowId,
+        savedUrls,
+      );
 
       const activated = await this.#tabSets.activateWindowSession(
         setId,
@@ -581,7 +551,8 @@ export class WindowTabState {
         createdTabIds = error.createdTabIds;
       }
 
-      const rollbackErrors = await this.#clearSessionAfterFailure(windowId);
+      const rollbackErrors =
+        await this.#clearSessionAfterFailure(windowId);
       try {
         await this.#tabs.remove(
           createdTabIds,
@@ -602,7 +573,7 @@ export class WindowTabState {
   }
 
   async #createPinnedTabs(
-    windowId: number,
+    windowId: WindowId,
     urls: string[],
     purpose: string,
   ): Promise<void> {
@@ -640,7 +611,7 @@ export class WindowTabState {
   }
 
   async #createAndPinTabs(
-    windowId: number,
+    windowId: WindowId,
     urls: string[],
   ): Promise<number[]> {
     const createdTabIds: number[] = [];
@@ -657,7 +628,9 @@ export class WindowTabState {
     }
   }
 
-  async #clearSessionAfterFailure(windowId: number): Promise<unknown[]> {
+  async #clearSessionAfterFailure(
+    windowId: WindowId,
+  ): Promise<unknown[]> {
     try {
       await this.#windowSessions.clear(windowId);
       return [];
@@ -667,7 +640,7 @@ export class WindowTabState {
   }
 
   #run<Result>(
-    windowId: number,
+    windowId: WindowId,
     operation: string,
     transition: () => Promise<Result>,
   ): Promise<Result> {
@@ -688,7 +661,7 @@ export function createBrowserWindowTabState(
 ): WindowTabState {
   const repositories = createBrowserRepositories(browser);
   const fallbackGlobalOperation = createSerializedStorageOperation(
-    browser.storage.local,
+    browser.storage.local satisfies BrowserStorageArea,
     ALL_WINDOWS_LOCK,
   );
 
@@ -704,11 +677,11 @@ export function createBrowserWindowTabState(
   }
 
   function runWindowExclusive<Result>(
-    windowId: number,
+    windowId: WindowId,
     operation: () => Promise<Result>,
   ): Promise<Result> {
     return createSerializedStorageOperation(
-      browser.storage.local,
+      browser.storage.local satisfies BrowserStorageArea,
       `${WINDOW_LOCK_PREFIX}${windowId}`,
     )(operation);
   }
@@ -747,9 +720,22 @@ function sendWindowTabStateMessage(
   });
 }
 
-export function createWindowTabStateClient(browser: BrowserApi) {
+export interface WindowTabStateClient {
+  snapshot(windowId: WindowId): Promise<string[]>;
+  replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  append(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  unload(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  captureAndSave(
+    windowId: WindowId,
+    set: TabSetDetails,
+  ): Promise<TabSet | null>;
+}
+
+export function createWindowTabStateClient(
+  browser: BrowserApi,
+): WindowTabStateClient {
   return {
-    async snapshot(windowId: number): Promise<string[]> {
+    async snapshot(windowId: WindowId): Promise<string[]> {
       const result = await sendWindowTabStateMessage(
         browser,
         'snapshot',
@@ -757,7 +743,11 @@ export function createWindowTabStateClient(browser: BrowserApi) {
       );
       return normalizeSavedUrls(result);
     },
-    async replace(windowId: number, setId: SetId): Promise<string[]> {
+
+    async replace(
+      windowId: WindowId,
+      setId: TabSetId,
+    ): Promise<string[]> {
       const result = await sendWindowTabStateMessage(
         browser,
         'replace',
@@ -765,7 +755,11 @@ export function createWindowTabStateClient(browser: BrowserApi) {
       );
       return normalizeSavedUrls(result);
     },
-    async append(windowId: number, setId: SetId): Promise<string[]> {
+
+    async append(
+      windowId: WindowId,
+      setId: TabSetId,
+    ): Promise<string[]> {
       const result = await sendWindowTabStateMessage(
         browser,
         'append',
@@ -773,7 +767,11 @@ export function createWindowTabStateClient(browser: BrowserApi) {
       );
       return normalizeSavedUrls(result);
     },
-    async unload(windowId: number, setId: SetId): Promise<string[]> {
+
+    async unload(
+      windowId: WindowId,
+      setId: TabSetId,
+    ): Promise<string[]> {
       const result = await sendWindowTabStateMessage(
         browser,
         'unload',
@@ -781,17 +779,18 @@ export function createWindowTabStateClient(browser: BrowserApi) {
       );
       return normalizeSavedUrls(result);
     },
+
     async captureAndSave(
-      windowId: number,
-      set: CapturableTabSet,
-    ): Promise<SavedTabSet | null> {
+      windowId: WindowId,
+      set: TabSetDetails,
+    ): Promise<TabSet | null> {
       const result = await sendWindowTabStateMessage(
         browser,
         'captureAndSave',
         [windowId, set],
       );
 
-      if (result === null || isSavedTabSet(result)) {
+      if (result === null || isTabSet(result)) {
         return result;
       }
 
@@ -832,7 +831,7 @@ export function registerWindowTabStateMessages(
     if (
       operation === 'replace'
       && isInteger(args[0])
-      && isSetId(args[1])
+      && isTabSetId(args[1])
     ) {
       return windowTabState.replace(args[0], args[1]);
     }
@@ -840,7 +839,7 @@ export function registerWindowTabStateMessages(
     if (
       operation === 'append'
       && isInteger(args[0])
-      && isSetId(args[1])
+      && isTabSetId(args[1])
     ) {
       return windowTabState.append(args[0], args[1]);
     }
@@ -848,7 +847,7 @@ export function registerWindowTabStateMessages(
     if (
       operation === 'unload'
       && isInteger(args[0])
-      && isSetId(args[1])
+      && isTabSetId(args[1])
     ) {
       return windowTabState.unload(args[0], args[1]);
     }
@@ -856,7 +855,7 @@ export function registerWindowTabStateMessages(
     if (
       operation === 'captureAndSave'
       && isInteger(args[0])
-      && isCapturableTabSet(args[1])
+      && isTabSetDetails(args[1])
     ) {
       return windowTabState.captureAndSave(args[0], args[1]);
     }

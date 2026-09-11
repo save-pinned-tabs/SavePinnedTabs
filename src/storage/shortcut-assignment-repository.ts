@@ -1,3 +1,5 @@
+import { errorMessage } from '../validation.js';
+
 type ShortcutAssignments = Record<string, string>;
 
 type HasSet = (setId: string) => boolean | Promise<boolean>;
@@ -20,19 +22,6 @@ interface ReferenceDocumentStorage<Document extends ShortcutAssignmentDocument> 
   runExclusive<T>(operation: () => Promise<T>): Promise<T>;
   read(): Promise<Document>;
   write(document: Document): Promise<void>;
-}
-
-function errorMessage(cause: unknown): string {
-  if (cause instanceof Error) return cause.message;
-
-  if (
-    (typeof cause === 'object' && cause !== null)
-    || typeof cause === 'function'
-  ) {
-    return String(Reflect.get(cause, 'message'));
-  }
-
-  return 'undefined';
 }
 
 function assignmentError(operation: string, cause: unknown): Error {

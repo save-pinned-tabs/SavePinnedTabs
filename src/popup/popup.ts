@@ -1,20 +1,22 @@
-import { selectBrowserApi } from '../browser-api.js';
+import { selectBrowserApi, type BrowserApi } from '../browser-api.js';
 import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.js';
+import type { TabSetController } from '../tab-sets/tab-set-controller.js';
 import { startPopupApp } from './popup-app.js';
 import { createPopupUi } from './popup-ui.js';
 
-type BrowserApi = Parameters<typeof createBrowserTabSetController>[0];
-type PopupController = ReturnType<typeof createBrowserTabSetController>;
 
 declare global {
   interface Window {
     browser?: BrowserApi;
     chrome: BrowserApi;
-    savePinnedTabsController?: PopupController;
+    savePinnedTabsController?: TabSetController;
   }
 }
 
-const browser = selectBrowserApi(window.browser, window.chrome);
+const browser = selectBrowserApi({
+  browser: window.browser,
+  chrome: window.chrome,
+});
 const controller = createBrowserTabSetController(browser);
 
 if (navigator.webdriver) {

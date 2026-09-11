@@ -1,5 +1,8 @@
-import type { ExportDocument } from '../domain.js';
-import { TabSetRepository } from '../tab-sets/tab-set-repository.js';
+import type { BrowserApi } from '../browser-api.js';
+import {
+  TabSetRepository,
+  type TabSetImportDocument,
+} from '../tab-sets/tab-set-repository.js';
 import { BrowserTabSetStorage } from '../tab-sets/tab-set-storage.js';
 import {
   BrowserReferenceStorage,
@@ -14,21 +17,6 @@ import {
   WindowSessionRepository,
 } from './window-session-repository.js';
 
-type SyncStorage =
-  & ConstructorParameters<typeof BrowserStorageMigration>[0]
-  & ConstructorParameters<typeof BrowserTabSetStorage>[0];
-
-type LocalStorage =
-  & ConstructorParameters<typeof BrowserStorageMigration>[1]
-  & ConstructorParameters<typeof BrowserReferenceStorage>[0];
-
-interface BrowserApi {
-  readonly storage: {
-    readonly sync: SyncStorage;
-    readonly local: LocalStorage;
-  };
-}
-
 interface BrowserRepositories {
   readonly tabSets: TabSetRepository;
   readonly windowSessions: WindowSessionRepository;
@@ -37,7 +25,7 @@ interface BrowserRepositories {
 
 type ImportValidator = (
   document: unknown,
-) => document is ExportDocument;
+) => document is TabSetImportDocument;
 
 declare global {
   var validate20: ImportValidator | undefined;
@@ -74,7 +62,7 @@ export function createBrowserRepositories(
   tabSets = new TabSetRepository(
     new BrowserTabSetStorage(browser.storage.sync, migration),
     {
-      validateImport(document: unknown): document is ExportDocument {
+      validateImport(document: unknown): document is TabSetImportDocument {
         return (
           typeof globalThis.validate20 === 'function'
           && globalThis.validate20(document)

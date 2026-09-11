@@ -1,12 +1,4 @@
-interface BrowserCommandsApi {
-  readonly commands: {
-    readonly onCommand: {
-      addListener(
-        listener: (command: string) => void | Promise<unknown>,
-      ): void;
-    };
-  };
-}
+import type { BrowserApi } from '../browser-api.js';
 
 interface ShortcutResult {
   readonly status: string;
@@ -18,7 +10,7 @@ interface ShortcutController<Result extends ShortcutResult> {
 }
 
 export function registerCommands<Result extends ShortcutResult>(
-  browser: BrowserCommandsApi,
+  browser: BrowserApi,
   controller: ShortcutController<Result>,
 ): (command: string) => Promise<Result> {
   const listener = async (command: string): Promise<Result> => {

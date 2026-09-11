@@ -1,3 +1,10 @@
+import type { BrowserStorageArea } from '../browser-api.js';
+import type {
+  AutoloadConfiguration,
+  AutoloadScope,
+  TabSet,
+} from '../domain.js';
+import { isRecord, isStringArray } from '../validation.js';
 import { createSerializedStorageOperation } from './serialized-operation.js';
 
 export const STORAGE_SCHEMA_VERSION = 2;
@@ -6,9 +13,6 @@ export const LOCAL_DOCUMENT_KEY = 'savePinnedTabs:local';
 export const AUTOLOAD_FIRST_WINDOW = 'first-window';
 export const AUTOLOAD_EVERY_WINDOW = 'every-window';
 
-type AutoloadScope =
-  | typeof AUTOLOAD_FIRST_WINDOW
-  | typeof AUTOLOAD_EVERY_WINDOW;
 
 const DEFAULT_AUTOLOAD_SCOPE: AutoloadScope = AUTOLOAD_FIRST_WINDOW;
 
@@ -22,16 +26,7 @@ const LEGACY_SHORTCUTS_KEY = 'shortcutSets';
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-interface StoredSet {
-  id: string;
-  name: string;
-  tabs: string[];
-}
 
-interface AutoloadConfiguration {
-  scope: AutoloadScope;
-  setIds: string[];
-}
 
 interface MigrationMetadata {
   legacyIds: Record<string, string>;
@@ -44,13 +39,13 @@ interface LooseAutoloadConfiguration {
 
 interface StoredSyncDocument {
   version: typeof STORAGE_SCHEMA_VERSION;
-  sets: Record<string, StoredSet>;
+  sets: Record<string, TabSet>;
   autoload?: LooseAutoloadConfiguration | null;
   deletedSetIds?: unknown;
   migration?: MigrationMetadata;
 }
 
-interface SyncDocument extends StoredSyncDocument {
+export interface SyncDocument extends StoredSyncDocument {
   autoload: AutoloadConfiguration;
   deletedSetIds: string[];
 }
@@ -73,26 +68,14 @@ interface LegacySet {
 }
 
 type StorageRecord = Record<string, unknown>;
-type StorageKeys = string | string[] | StorageRecord | null;
 type StorageOperation<T> = () => T | Promise<T>;
 
-interface StorageArea {
-  get(keys: StorageKeys): Promise<StorageRecord>;
-  set(items: StorageRecord): Promise<void>;
-  remove(keys: string | string[]): Promise<void>;
-}
-
-interface ReferenceStorageArea {
-  get(keys: StorageKeys): Promise<StorageRecord>;
-  set(items: StorageRecord): Promise<void>;
-  remove(keys: string | string[]): Promise<void>;
-}
 
 interface MigrationOptions {
   createId?: () => string;
 }
 
-interface StorageMigration {
+export interface StorageMigration {
   ensureMigrated(): Promise<void>;
 }
 
@@ -127,17 +110,8 @@ export function emptyLocalDocument(): LocalDocument {
   };
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value)
-    && value.every((item: unknown) => typeof item === 'string');
-}
-
 function isStringRecord(value: unknown): value is Record<string, string> {
-  return isObject(value)
+  return isRecord(value)
     && Object.values(value).every(
       (item: unknown) => typeof item === 'string',
     );
@@ -148,24 +122,24 @@ function isAutoloadScope(value: unknown): value is AutoloadScope {
     || value === AUTOLOAD_EVERY_WINDOW;
 }
 
-function isStoredSet(value: unknown): value is StoredSet {
-  return isObject(value)
+function isStoredSet(value: unknown): value is TabSet {
+  return isRecord(value)
     && typeof value['id'] === 'string'
     && typeof value['name'] === 'string'
     && isStringArray(value['tabs']);
 }
 
 function isMigrationMetadata(value: unknown): value is MigrationMetadata {
-  return isObject(value) && isStringRecord(value['legacyIds']);
+  return isRecord(value) && isStringRecord(value['legacyIds']);
 }
 
 function isStoredSyncDocument(
   document: unknown,
 ): document is StoredSyncDocument {
   if (
-    !isObject(document)
+    !isRecord(document)
     || document['version'] !== STORAGE_SCHEMA_VERSION
-    || !isObject(document['sets'])
+    || !isRecord(document['sets'])
     || !Object.values(document['sets']).every(isStoredSet)
   ) {
     return false;
@@ -174,7 +148,7 @@ function isStoredSyncDocument(
   if (
     'autoload' in document
     && document['autoload'] !== null
-    && !isObject(document['autoload'])
+    && !isRecord(document['autoload'])
   ) {
     return false;
   }
@@ -187,7 +161,7 @@ function isStoredLocalDocument(
   document: unknown,
 ): document is StoredLocalDocument {
   if (
-    !isObject(document)
+    !isRecord(document)
     || document['version'] !== STORAGE_SCHEMA_VERSION
   ) {
     return false;
@@ -196,7 +170,7 @@ function isStoredLocalDocument(
   if (
     'windowSessions' in document
     && document['windowSessions'] !== null
-    && !isObject(document['windowSessions'])
+    && !isRecord(document['windowSessions'])
   ) {
     return false;
   }
@@ -204,7 +178,7 @@ function isStoredLocalDocument(
   return !(
     'shortcutAssignments' in document
     && document['shortcutAssignments'] !== null
-    && !isObject(document['shortcutAssignments'])
+    && !isRecord(document['shortcutAssignments'])
   );
 }
 
@@ -221,10 +195,10 @@ function assertVersion(
   location: 'synchronized' | 'local',
 ): void {
   if (
-    !isObject(document)
+    !isRecord(document)
     || document['version'] !== STORAGE_SCHEMA_VERSION
   ) {
-    const version = isObject(document)
+    const version = isRecord(document)
       ? document['version']
       : undefined;
     throw new Error(
@@ -274,7 +248,7 @@ function legacySetEntries(stored: StorageRecord): Array<[string, LegacySet]> {
     (entry): entry is [string, LegacySet] => {
       const [key, value] = entry;
       return key !== SYNC_DOCUMENT_KEY
-        && isObject(value)
+        && isRecord(value)
         && typeof value['set_name'] === 'string'
         && matchesLegacyIdentity(key, value['set_name'])
         && isStringArray(value['tabs'])
@@ -364,10 +338,10 @@ function createMigratedLocalDocument(
   const document = emptyLocalDocument();
   const legacyIds = syncDocument.migration?.legacyIds ?? {};
   const knownIds = new Set(Object.keys(syncDocument.sets));
-  const legacySessions = isObject(stored[LEGACY_SESSIONS_KEY])
+  const legacySessions = isRecord(stored[LEGACY_SESSIONS_KEY])
     ? stored[LEGACY_SESSIONS_KEY]
     : {};
-  const legacyShortcuts = isObject(stored[LEGACY_SHORTCUTS_KEY])
+  const legacyShortcuts = isRecord(stored[LEGACY_SHORTCUTS_KEY])
     ? stored[LEGACY_SHORTCUTS_KEY]
     : {};
 
@@ -387,7 +361,7 @@ function cleanLocalReferences(
   knownIds: ReadonlySet<string>,
 ): asserts document is LocalDocument {
   const windowSessions: Record<string, string> = {};
-  if (isObject(document.windowSessions)) {
+  if (isRecord(document.windowSessions)) {
     for (const [windowId, setId] of Object.entries(
       document.windowSessions,
     )) {
@@ -398,7 +372,7 @@ function cleanLocalReferences(
   }
 
   const shortcutAssignments: Record<string, string> = {};
-  if (isObject(document.shortcutAssignments)) {
+  if (isRecord(document.shortcutAssignments)) {
     for (const [command, setId] of Object.entries(
       document.shortcutAssignments,
     )) {
@@ -413,22 +387,22 @@ function cleanLocalReferences(
 }
 
 async function removeKeys(
-  storage: StorageArea,
+  storage: BrowserStorageArea,
   keys: string[],
 ): Promise<void> {
   if (keys.length > 0) await storage.remove(keys);
 }
 
 export class BrowserStorageMigration implements StorageMigration {
-  #syncStorage: StorageArea;
-  #localStorage: StorageArea;
+  #syncStorage: BrowserStorageArea;
+  #localStorage: BrowserStorageArea;
   #createId: () => string;
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
   #migration: Promise<void> | undefined;
 
   constructor(
-    syncStorage: StorageArea,
-    localStorage: StorageArea,
+    syncStorage: BrowserStorageArea,
+    localStorage: BrowserStorageArea,
     { createId = newSetId }: MigrationOptions = {},
   ) {
     this.#syncStorage = syncStorage;
@@ -522,12 +496,12 @@ export class BrowserStorageMigration implements StorageMigration {
 }
 
 export class BrowserReferenceStorage {
-  #storage: ReferenceStorageArea;
+  #storage: BrowserStorageArea;
   #migration: StorageMigration;
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
 
   constructor(
-    localStorage: ReferenceStorageArea,
+    localStorage: BrowserStorageArea,
     migration: StorageMigration = NO_STORAGE_MIGRATION,
   ) {
     this.#storage = localStorage;

@@ -1,4 +1,13 @@
-import { restoreAutoloadSets } from './autoload.js';
+import type {
+  BrowserApi,
+  BrowserStorageArea,
+  BrowserWindow,
+} from '../browser-api.js';
+import type { AutoloadConfiguration, AutoloadScope } from '../domain.js';
+import {
+  restoreAutoloadSets,
+  type AutoloadWindowTabState,
+} from './autoload.js';
 import { createSerializedStorageOperation } from '../storage/serialized-operation.js';
 import { createBrowserWindowTabState } from '../storage/window-tab-state.js';
 import { createBrowserRepositories } from '../storage/browser-repositories.js';
@@ -14,53 +23,7 @@ const LIFECYCLE_KEY = 'savePinnedTabs:lifecycle';
 const LIFECYCLE_LOCK = 'save-pinned-tabs:browser-lifecycle';
 const DEFAULT_STARTUP_WINDOW_ATTEMPTS = 100;
 
-type SerializedStorageApi =
-  Parameters<typeof createSerializedStorageOperation>[0];
-type SerializedOperation =
-  ReturnType<typeof createSerializedStorageOperation>;
-type WindowTabStateBrowserApi =
-  Parameters<typeof createBrowserWindowTabState>[0];
-type RepositoriesBrowserApi =
-  Parameters<typeof createBrowserRepositories>[0];
-type RestoreAutoloadBrowserApi =
-  Parameters<typeof restoreAutoloadSets>[0];
-type AdapterWindowTabState =
-  Parameters<typeof restoreAutoloadSets>[3];
-type AutoloadConfiguration =
-  NonNullable<Parameters<typeof restoreAutoloadSets>[2]>;
-type AutoloadScope = AutoloadConfiguration['scope'];
-
-interface BrowserWindow {
-  readonly id?: unknown;
-  readonly type?: unknown;
-}
-
-interface BrowserWindowsApi {
-  getAll(
-    getInfo: null,
-  ): Promise<readonly (BrowserWindow | null | undefined)[]>;
-}
-
-interface LifecycleSessionStorage {
-  get(key: string): Promise<Record<string, unknown>>;
-  set(values: Record<string, unknown>): Promise<void>;
-}
-
-type BrowserLifecycleSessionStorage =
-  LifecycleSessionStorage & SerializedStorageApi;
-
-interface BrowserApi {
-  readonly storage: {
-    readonly session?: BrowserLifecycleSessionStorage | null;
-  };
-  readonly windows: BrowserWindowsApi;
-}
-
-type BrowserAdapterApi =
-  BrowserApi
-  & WindowTabStateBrowserApi
-  & RepositoriesBrowserApi
-  & RestoreAutoloadBrowserApi;
+type Operation<Result> = () => Result | PromiseLike<Result>;
 
 interface BrowserLifecycleState {
   startupObserved: boolean;
@@ -71,15 +34,14 @@ interface BrowserLifecycleState {
 
 interface LifecycleStateStorage {
   runExclusive<Result>(
-    operation: () => Promise<Result>,
+    operation: Operation<Result>,
   ): Promise<Result>;
   read(): Promise<BrowserLifecycleState>;
   write(state: BrowserLifecycleState): Promise<void>;
 }
 
-interface LifecycleWindowTabState {
-  resetSessions(): PromiseLike<unknown> | unknown;
-  deactivate(windowId: number): PromiseLike<unknown> | unknown;
+interface LifecycleWindowTabState extends AutoloadWindowTabState {
+  resetSessions(): unknown;
 }
 
 interface LifecycleRepositories {
@@ -92,7 +54,7 @@ interface BrowserLifecycleOptions {
   autoloadPolicy?: unknown;
   getAutoload?: (() => PromiseLike<unknown> | unknown) | null;
   stateStorage: LifecycleStateStorage;
-  windows: BrowserWindowsApi;
+  windows: BrowserApi['windows'];
   windowTabState: LifecycleWindowTabState;
   restoreAutoload(
     windowId: number,
@@ -103,7 +65,7 @@ interface BrowserLifecycleOptions {
 }
 
 interface CreateBrowserLifecycleOptions {
-  windowTabState?: AdapterWindowTabState;
+  windowTabState?: LifecycleWindowTabState;
   repositories?: LifecycleRepositories;
 }
 
@@ -194,11 +156,13 @@ function removeWindowId(
 }
 
 export class BrowserLifecycleStateStorage {
-  #sessionStorage: LifecycleSessionStorage;
-  #runExclusive: SerializedOperation;
+  #sessionStorage: BrowserStorageArea;
+  #runExclusive: <Result>(
+    operation: Operation<Result>,
+  ) => Promise<Result>;
 
   constructor(
-    sessionStorage: BrowserLifecycleSessionStorage | null | undefined,
+    sessionStorage: BrowserStorageArea | null | undefined,
   ) {
     if (!sessionStorage) {
       throw new Error(
@@ -214,7 +178,7 @@ export class BrowserLifecycleStateStorage {
   }
 
   runExclusive<Result>(
-    operation: () => Promise<Result>,
+    operation: Operation<Result>,
   ): Promise<Result> {
     return this.#runExclusive(operation);
   }
@@ -234,7 +198,7 @@ export class BrowserLifecycleStateStorage {
 export class BrowserLifecycle {
   #getAutoload: () => PromiseLike<unknown> | unknown;
   #stateStorage: LifecycleStateStorage;
-  #windows: BrowserWindowsApi;
+  #windows: BrowserApi['windows'];
   #windowTabState: LifecycleWindowTabState;
   #restoreAutoload: (
     windowId: number,
@@ -414,7 +378,7 @@ export class BrowserLifecycle {
 }
 
 export function createBrowserLifecycle(
-  browser: BrowserAdapterApi,
+  browser: BrowserApi,
   {
     windowTabState = createBrowserWindowTabState(browser),
     repositories = createBrowserRepositories(browser),

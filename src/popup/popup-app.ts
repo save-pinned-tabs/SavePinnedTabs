@@ -1,81 +1,61 @@
-import type { PopupState } from '../domain.js';
+import type {
+  CommandResult,
+  PopupState,
+  TabSetId,
+} from '../domain.js';
+import { errorMessage } from '../validation.js';
 
-type StatusType = 'loading' | 'error' | 'success';
+type StatusKind = 'loading' | 'error' | 'success';
 
-interface CommandError {
-  message: string;
+interface PopupCommandValue {
+  state: PopupState;
 }
 
-interface CommandValue {
-  state?: PopupState | null;
+interface PopupController {
+  saveSet(
+    name: string,
+    setId?: TabSetId,
+  ): Promise<CommandResult<PopupCommandValue>>;
+  loadSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
+  appendSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
+  unloadSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
+  setAutoload(
+    setId: TabSetId,
+    enabled: boolean,
+  ): Promise<CommandResult<PopupCommandValue>>;
+  deleteSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
+  getPopupState(): Promise<CommandResult<PopupCommandValue>>;
 }
 
-type CommandResult =
-  | {
-      status: 'error';
-      error: CommandError;
-    }
-  | {
-      status: 'success';
-      value?: CommandValue | null;
-    };
-
-interface Controller {
-  saveSet(name: string, setId?: string): Promise<CommandResult>;
-  loadSet(setId: string): Promise<CommandResult>;
-  appendSet(setId: string): Promise<CommandResult>;
-  unloadSet(setId: string): Promise<CommandResult>;
-  setAutoload(setId: string, enabled: boolean): Promise<CommandResult>;
-  deleteSet(setId: string): Promise<CommandResult>;
-  getPopupState(): Promise<CommandResult>;
+interface PopupActions {
+  save(name: string, setId?: TabSetId): Promise<void>;
+  load(setId: TabSetId): Promise<void>;
+  append(setId: TabSetId): Promise<void>;
+  unload(setId: TabSetId): Promise<void>;
+  setAutoload(setId: TabSetId, enabled: boolean): Promise<void>;
+  delete(setId: TabSetId): Promise<void>;
 }
 
-interface Actions {
-  save(name: string, setId?: string): Promise<void>;
-  load(setId: string): Promise<void>;
-  append(setId: string): Promise<void>;
-  unload(setId: string): Promise<void>;
-  setAutoload(setId: string, enabled: boolean): Promise<void>;
-  delete(setId: string): Promise<void>;
-}
-
-interface View {
+interface PopupView {
   render(state: PopupState): void;
-  showStatus(message: string, status: StatusType): void;
+  showStatus(message: string, status: StatusKind): void;
   setPending(pending: boolean): void;
   clearSaveName(): void;
   confirmDelete(): boolean | Promise<boolean>;
-  bind(actions: Actions): void;
+  bind(actions: PopupActions): void;
   focusSaveName(): void;
 }
 
 interface RunCommandOptions {
   loadingMessage: string;
-  command: () => Promise<CommandResult>;
-  successMessage: string;
+  command(): Promise<CommandResult<PopupCommandValue>>;
   onSuccess?: (() => void) | undefined;
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return error.message;
-  }
-
-  return String(error);
+  successMessage: string;
 }
 
 export async function startPopupApp(
-  controller: Controller,
-  view: View,
+  controller: PopupController,
+  view: PopupView,
 ): Promise<void> {
   let isPending = false;
   let currentState: PopupState | undefined;
@@ -104,7 +84,7 @@ export async function startPopupApp(
         return;
       }
 
-      if (result.value?.state) render(result.value.state);
+      render(result.value.state);
       onSuccess?.();
       view.showStatus(successMessage, 'success');
     } finally {
@@ -113,7 +93,7 @@ export async function startPopupApp(
     }
   }
 
-  const actions: Actions = {
+  const actions: PopupActions = {
     save(name, setId) {
       return runCommand({
         loadingMessage: 'Saving tab set…',
@@ -155,20 +135,18 @@ export async function startPopupApp(
       isPending = true;
       view.setPending(true);
       let confirmed = false;
-
       try {
         confirmed = await view.confirmDelete();
         if (!confirmed) view.showStatus('Deletion canceled.', 'success');
       } catch (error: unknown) {
-        view.showStatus(getErrorMessage(error), 'error');
+        view.showStatus(errorMessage(error), 'error');
       } finally {
         isPending = false;
         if (!confirmed) view.setPending(false);
       }
-
       if (!confirmed) return;
 
-      return runCommand({
+      await runCommand({
         loadingMessage: 'Deleting tab set…',
         command: () => controller.deleteSet(setId),
         successMessage: 'Tab set deleted.',

@@ -1,8 +1,13 @@
-import { BrowserReferenceStorage, InMemoryReferenceStorage } from './storage-schema.js';
+import type { BrowserStorageArea } from '../browser-api.js';
+import type { TabSetId, WindowId } from '../domain.js';
+import { errorMessage, isRecord } from '../validation.js';
+import {
+  BrowserReferenceStorage,
+  InMemoryReferenceStorage,
+  type StorageMigration,
+} from './storage-schema.js';
 
-type WindowId = number;
-type SetId = string;
-type WindowSessions = Record<string, SetId>;
+type WindowSessions = Record<string, TabSetId>;
 type WindowSessionOperation = 'get' | 'set' | 'clear' | 'clear all' | 'clean closed';
 
 interface WindowSessionDocument {
@@ -22,25 +27,10 @@ interface WindowSessionStorage {
   runExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
-type BrowserStorageSource = ConstructorParameters<typeof BrowserReferenceStorage>[0];
-type ReferenceMigration = NonNullable<
-  ConstructorParameters<typeof BrowserReferenceStorage>[1]
->;
 
-const DEFAULT_REFERENCE_MIGRATION: ReferenceMigration = {
+const DEFAULT_REFERENCE_MIGRATION: StorageMigration = {
   ensureMigrated: async () => undefined,
 };
-
-function getErrorMessage(error: unknown): string {
-  if (
-    ((typeof error === 'object' && error !== null) || typeof error === 'function')
-    && 'message' in error
-  ) {
-    return String(error.message);
-  }
-
-  return String(error);
-}
 
 function isReferenceStorage(value: unknown): value is ReferenceStorage {
   if (
@@ -60,13 +50,9 @@ function isReferenceStorage(value: unknown): value is ReferenceStorage {
   );
 }
 
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isWindowSessions(value: unknown): value is WindowSessions {
   return (
-    isUnknownRecord(value)
+    isRecord(value)
     && Object.values(value).every((setId) => typeof setId === 'string')
   );
 }
@@ -75,7 +61,7 @@ function isWindowSessionDocument(
   value: unknown,
 ): value is WindowSessionDocument {
   return (
-    isUnknownRecord(value)
+    isRecord(value)
     && isWindowSessions(value['windowSessions'])
   );
 }
@@ -94,7 +80,7 @@ function sessionError(
   cause: unknown,
 ): Error {
   return new Error(
-    `Failed to ${operation} window session for window "${identity}": ${getErrorMessage(cause)}`,
+    `Failed to ${operation} window session for window "${identity}": ${errorMessage(cause)}`,
     { cause },
   );
 }
@@ -106,7 +92,7 @@ export class WindowSessionRepository {
     this.#storage = storage;
   }
 
-  async get(windowId: WindowId): Promise<SetId | null> {
+  async get(windowId: WindowId): Promise<TabSetId | null> {
     try {
       const sessions = await this.#storage.readAll();
       return sessions[windowId] ?? null;
@@ -115,7 +101,7 @@ export class WindowSessionRepository {
     }
   }
 
-  set(windowId: WindowId, setId: SetId): Promise<void> {
+  set(windowId: WindowId, setId: TabSetId): Promise<void> {
     return this.#storage.runExclusive(async () => {
       try {
         const sessions = await this.#storage.readAll();
@@ -147,7 +133,7 @@ export class WindowSessionRepository {
     );
   }
 
-  clearSetReferences(setId: SetId): Promise<void> {
+  clearSetReferences(setId: TabSetId): Promise<void> {
     return this.#storage.runExclusive(async () => {
       try {
         const sessions = await this.#storage.readAll();
@@ -162,7 +148,7 @@ export class WindowSessionRepository {
         if (changed) await this.#storage.writeAll(sessions);
       } catch (error) {
         throw new Error(
-          `Failed to clear window sessions for tab set "${setId}": ${getErrorMessage(error)}`,
+          `Failed to clear window sessions for tab set "${setId}": ${errorMessage(error)}`,
           { cause: error },
         );
       }
@@ -189,8 +175,8 @@ export class BrowserWindowSessionStorage implements WindowSessionStorage {
   #document: WindowSessionDocument | undefined;
 
   constructor(
-    localStorageOrReferences: BrowserStorageSource | ReferenceStorage,
-    migration: ReferenceMigration = DEFAULT_REFERENCE_MIGRATION,
+    localStorageOrReferences: BrowserStorageArea | ReferenceStorage,
+    migration: StorageMigration = DEFAULT_REFERENCE_MIGRATION,
   ) {
     this.#references = isReferenceStorage(localStorageOrReferences)
       ? localStorageOrReferences

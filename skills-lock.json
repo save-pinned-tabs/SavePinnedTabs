@@ -146,6 +146,12 @@
       "skillPath": "skills/engineering/triage/SKILL.md",
       "computedHash": "1bc5349f0b61e19a6df61496b5a03d88cd69595dd303353f87945997a9e4a884"
     },
+    "typescript-best-practices": {
+      "source": "cursor/plugins",
+      "sourceType": "github",
+      "skillPath": "pstack/skills/typescript-best-practices/SKILL.md",
+      "computedHash": "b987c46f03f6c918110c2c198aa49fdd39e126f23ba75ae75fb8efe84625e397"
+    },
     "wait-what": {
       "source": "mattpocock/skills",
       "sourceType": "github",

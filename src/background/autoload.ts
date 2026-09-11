@@ -1,40 +1,24 @@
-import type { TabSet } from '../domain.js';
+import type { BrowserApi } from '../browser-api.js';
+import type {
+  AutoloadConfiguration,
+  TabSetId,
+  WindowId,
+} from '../domain.js';
 import { createBrowserRepositories } from '../storage/browser-repositories.js';
-import {
-  createBrowserWindowTabState,
-  type WindowTabState,
-} from '../storage/window-tab-state.js';
-
-interface PermissionsApi {
-  contains(details: { permissions: string[] }): Promise<boolean>;
-}
-
-interface RuntimeApi {
-  readonly getURL?: (path: string) => string;
-}
-
-interface BrowserApi {
-  readonly permissions?: PermissionsApi;
-  readonly runtime?: RuntimeApi;
-}
+import { createBrowserWindowTabState } from '../storage/window-tab-state.js';
 
 interface FaviconResponse {
   readonly ok: boolean;
   arrayBuffer(): Promise<unknown>;
 }
 
+
 type FaviconFetch = (url: URL) => Promise<FaviconResponse>;
-type BrowserRepositoriesApi = Parameters<typeof createBrowserRepositories>[0];
-type BrowserWindowTabStateApi = Parameters<typeof createBrowserWindowTabState>[0];
-type WindowStateBrowserApi = BrowserApi & BrowserWindowTabStateApi;
-type AutoloadBrowserApi = WindowStateBrowserApi & BrowserRepositoriesApi;
-type TabSetId = TabSet['id'];
-type WindowId = Parameters<WindowTabState['replace']>[0];
-type AutoloadConfiguration = Awaited<
-  ReturnType<
-    ReturnType<typeof createBrowserRepositories>['tabSets']['getAutoload']
-  >
->;
+export interface AutoloadWindowTabState {
+  replace(windowId: WindowId, setId: TabSetId): unknown;
+  append(windowId: WindowId, setId: TabSetId): unknown;
+  deactivate(windowId: WindowId): unknown;
+}
 
 async function hasFaviconPermission(browser: BrowserApi): Promise<boolean> {
   try {
@@ -69,7 +53,7 @@ export async function preloadFavicons(
 }
 
 export async function loadTabSet(
-  browser: WindowStateBrowserApi,
+  browser: BrowserApi,
   setId: TabSetId,
   windowId: WindowId,
 ): Promise<void> {
@@ -82,7 +66,7 @@ export async function loadTabSet(
 }
 
 export async function appendTabSet(
-  browser: WindowStateBrowserApi,
+  browser: BrowserApi,
   setId: TabSetId,
   windowId: WindowId,
 ): Promise<void> {
@@ -91,7 +75,7 @@ export async function appendTabSet(
 }
 
 export async function unloadTabSet(
-  browser: WindowStateBrowserApi,
+  browser: BrowserApi,
   setId: TabSetId,
   windowId: WindowId,
 ): Promise<void> {
@@ -100,10 +84,10 @@ export async function unloadTabSet(
 }
 
 export async function restoreAutoloadSets(
-  browser: AutoloadBrowserApi,
+  browser: BrowserApi,
   windowId: WindowId,
   configuration: AutoloadConfiguration,
-  windowTabState: WindowTabState = createBrowserWindowTabState(browser, {
+  windowTabState: AutoloadWindowTabState = createBrowserWindowTabState(browser, {
     onReplace(urls) {
       void preloadFavicons(browser, urls);
     },
@@ -139,9 +123,9 @@ export async function restoreAutoloadSets(
 }
 
 export async function restoreAutoloadSet(
-  browser: AutoloadBrowserApi,
+  browser: BrowserApi,
   windowId: WindowId,
-  windowTabState?: WindowTabState,
+  windowTabState?: AutoloadWindowTabState,
 ): Promise<void> {
   const configuration =
     await createBrowserRepositories(browser).tabSets.getAutoload();
