@@ -486,19 +486,30 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const lateLegacyKey = Buffer.from("Late Legacy").toString("base64");
   await openStorageFixturePage();
   const schemaExists = await driver.executeAsyncScript((setKey, done) => {
-    Promise.all([
-      browser.storage.sync.set({
-        [setKey]: {
-          autoload: 1,
-          set_name: "Legacy Work",
-          tabs: ["https://example.com/legacy"],
-        },
-      }),
-      browser.storage.local.set({
-        activeTabs: { 1: setKey },
-        shortcutSets: { "load-set-1": setKey },
-      }),
-    ]).then(() => browser.storage.sync.get(null))
+    const waitForSchema = () => browser.storage.sync.get(null).then((sync) =>
+      "savePinnedTabs:sync" in sync
+        ? undefined
+        : new Promise((resolve) => setTimeout(resolve, 10)).then(waitForSchema)
+    );
+    waitForSchema()
+      .then(() => Promise.all([
+        browser.storage.sync.set({
+          [setKey]: {
+            autoload: 1,
+            set_name: "Legacy Work",
+            tabs: ["https://example.com/legacy"],
+          },
+        }),
+        browser.storage.local.set({
+          activeTabs: { 1: setKey },
+          shortcutSets: { "load-set-1": setKey },
+        }),
+      ]))
+      .then(() => Promise.all([
+        browser.storage.sync.remove("savePinnedTabs:sync"),
+        browser.storage.local.remove("savePinnedTabs:local"),
+      ]))
+      .then(() => browser.storage.sync.get(null))
       .then((sync) => done("savePinnedTabs:sync" in sync));
   }, legacyKey);
   assert.equal(schemaExists, false);
