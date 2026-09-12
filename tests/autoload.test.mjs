@@ -58,7 +58,6 @@ function createBrowser({
   const localDocument = {
     version: 2,
     windowSessions: { ...sessions },
-    shortcutAssignments: {},
   };
   let nextTabId = 100;
 

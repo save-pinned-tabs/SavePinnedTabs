@@ -1,4 +1,4 @@
-/** Provides validated, transactional access to tab-set storage and related assignments. */
+/** Provides validated, transactional access to tab-set storage and related state. */
 
 import type {
   AutoloadConfiguration,
@@ -78,11 +78,6 @@ interface WindowSessions {
   clearSetReferences(setId: TabSetId): Promise<void> | void;
 }
 
-/** Maintains shortcut references to tab sets. */
-interface ShortcutAssignments {
-  /** Removes all shortcut associations for a deleted set. */
-  clearSetReferences(setId: TabSetId): Promise<void> | void;
-}
 
 /** Configures validation, related state collaborators, and ID generation. */
 interface TabSetRepositoryOptions {
@@ -91,7 +86,6 @@ interface TabSetRepositoryOptions {
     document: unknown,
   ) => document is TabSetImportDocument;
   windowSessions?: WindowSessions;
-  shortcutAssignments?: ShortcutAssignments;
 
   /** Supplies candidate UUIDs and may be called repeatedly on collisions. */
   createId?: () => string;
@@ -189,7 +183,6 @@ export class TabSetRepository {
     | ((document: unknown) => document is TabSetImportDocument)
     | undefined;
   readonly #windowSessions: WindowSessions | undefined;
-  readonly #shortcutAssignments: ShortcutAssignments | undefined;
   readonly #createId: () => string;
 
   /** Creates a repository with optional validation and assignment collaborators. */
@@ -198,14 +191,12 @@ export class TabSetRepository {
     {
       validateImport,
       windowSessions,
-      shortcutAssignments,
       createId = newSetId,
     }: TabSetRepositoryOptions = {},
   ) {
     this.#storage = storage;
     this.#validateImport = validateImport;
     this.#windowSessions = windowSessions;
-    this.#shortcutAssignments = shortcutAssignments;
     this.#createId = createId;
   }
   /** Returns the popup data and wraps storage failures with repository context. */
@@ -369,13 +360,12 @@ export class TabSetRepository {
     });
   }
 
-  /** Deletes a set and clears its window and shortcut references. */
+  /** Deletes a set and clears its window references. */
   remove(setId: string): Promise<void> {
     return this.#storage.runExclusive(async () => {
       try {
         await this.#storage.remove(setId);
         await this.#windowSessions?.clearSetReferences(setId);
-        await this.#shortcutAssignments?.clearSetReferences(setId);
       } catch (error) {
         throw tabSetError('remove', setId, error);
       }

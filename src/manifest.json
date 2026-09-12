@@ -38,25 +38,6 @@
     "type": "module"
   },
 
-  "commands": {
-    "load-set-1": {
-      "suggested_key": { "default": "Ctrl+Shift+1", "mac": "Command+Shift+1" },
-      "description": "Load assigned tab set 1"
-    },
-    "load-set-2": {
-      "suggested_key": { "default": "Ctrl+Shift+2", "mac": "Command+Shift+2" },
-      "description": "Load assigned tab set 2"
-    },
-    "load-set-3": {
-      "suggested_key": { "default": "Ctrl+Shift+3", "mac": "Command+Shift+3" },
-      "description": "Load assigned tab set 3"
-    },
-    "load-set-4": {
-      "suggested_key": { "default": "Ctrl+Shift+4", "mac": "Command+Shift+4" },
-      "description": "Load assigned tab set 4"
-    }
-  },
-
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": false

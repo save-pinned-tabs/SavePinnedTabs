@@ -1,4 +1,4 @@
-/** Initializes the background service worker and connects browser lifecycle, tab state, and command handlers. */
+/** Initializes the background service worker and connects browser lifecycle and tab state handlers. */
 
 import {
   selectBrowserApi,
@@ -8,7 +8,6 @@ import {
 import { preloadFavicons } from './autoload.js';
 import { createBrowserLifecycle } from './browser-lifecycle.js';
 import { createBrowserTabSetController } from '../tab-sets/browser-tab-set-controller.js';
-import { registerCommands } from './commands.js';
 import {
   createBrowserWindowTabState,
   registerWindowTabStateMessages,
@@ -17,7 +16,6 @@ import {
 declare global {
   var browser: BrowserApi | undefined;
   var chrome: BrowserApi;
-  var savePinnedTabsCommandListener: (command: string) => Promise<unknown>;
 }
 
 const browser = selectBrowserApi({
@@ -37,11 +35,6 @@ const browserLifecycle = createBrowserLifecycle(browser, {
 });
 
 registerWindowTabStateMessages(browser, windowTabState);
-globalThis.savePinnedTabsCommandListener = registerCommands(
-  browser,
-  tabSetController,
-);
-
 /** Restores managed browser state when the browser starts. */
 export function handleStartup() {
   return browserLifecycle.onBrowserStartup();

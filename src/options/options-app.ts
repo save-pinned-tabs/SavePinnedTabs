@@ -4,7 +4,6 @@ import type {
   CommandResult,
   ExportDocument,
   OptionsState,
-  TabSetId,
 } from '../domain.js';
 
 /** Identifies the visual state of an operation status message. */
@@ -12,12 +11,6 @@ type StatusKind = 'loading' | 'error' | 'success';
 
 /** Defines the tab-set operations available to the options application. */
 interface OptionsController {
-  /** Assigns a browser command to a tab set and returns the updated state. */
-  assignShortcut(
-    command: string,
-    setId: TabSetId,
-  ): Promise<CommandResult<{ state: OptionsState }>>;
-
   /** Creates a portable document containing the saved tab sets. */
   exportSets(): Promise<CommandResult<ExportDocument>>;
 
@@ -33,9 +26,6 @@ interface OptionsController {
 
 /** Defines user actions exposed to the options view. */
 interface OptionsActions {
-  /** Saves a command assignment for a tab set. */
-  assignShortcut(command: string, setId: TabSetId): Promise<void>;
-
   /** Exports the current tab sets as a downloadable document. */
   export(): Promise<void>;
 
@@ -141,15 +131,6 @@ export async function startOptionsApp(
   }
 
   const actions: OptionsActions = {
-    /** Saves a shortcut assignment and renders the resulting state. */
-    assignShortcut(command, setId) {
-      return runControllerCommand({
-        loadingMessage: 'Saving shortcut assignment…',
-        command: () => controller.assignShortcut(command, setId),
-        successMessage: 'Shortcut assignment saved.',
-        state: (value) => value.state,
-      });
-    },
 
     /** Exports tab sets and starts their download after creation. */
     export() {

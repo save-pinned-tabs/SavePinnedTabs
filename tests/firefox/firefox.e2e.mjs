@@ -374,68 +374,6 @@ test("a user can delete a pinned tab set without reloading", async () => {
   await driver.wait(until.stalenessOf(row), 10_000);
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
-test("deleting a shortcut-assigned set clears its assignment", async () => {
-  await createShortcutFixture();
-  await openExtensionPage("popup/popup.html");
-  await deleteSet("Shortcut target");
-  await openExtensionPage("options/options.html");
-
-  assert.equal(
-    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
-      .getAttribute("value"),
-    "",
-  );
-});
-
-
-
-async function createShortcutFixture() {
-  await openExtensionPage("popup/popup.html");
-  const assignedUrl = `${extensionOrigin}/options/options.html?shortcut`;
-  await createTabs([assignedUrl]);
-  await saveSet("Shortcut target");
-  await openExtensionPage("options/options.html");
-  const shortcut = await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'));
-  await shortcut.findElement(By.xpath('./option[normalize-space(.)="Shortcut target"]')).click();
-  await waitForStatus("options-status", "Shortcut assignment saved.");
-  return { assignedUrl, shortcut };
-}
-
-test("a shortcut assignment persists", async () => {
-  const { shortcut } = await createShortcutFixture();
-  const assignedValue = await shortcut.getAttribute("value");
-  await driver.navigate().refresh();
-  await driver.wait(async () => (
-    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
-      .getAttribute("value")
-  ) === assignedValue, 10_000, "persisted shortcut assignment");
-});
-
-test("an assigned command dispatches through the registered listener", async () => {
-  const { assignedUrl } = await createShortcutFixture();
-  await createTabs([`${extensionOrigin}/options/options.html?shortcut-unwanted`]);
-  const result = await driver.executeAsyncScript((done) => {
-    browser.runtime.getBackgroundPage()
-      .then((page) => page.savePinnedTabsCommandListener("load-set-1"))
-      .then((value) => done(value), (error) => done({ error: error.message }));
-  });
-  assert.deepEqual(result, { status: "success", value: { executed: true } });
-  assert.deepEqual(await pinnedUrls(), [assignedUrl]);
-});
-
-test("an unassigned command is a no-op", async () => {
-  await openExtensionPage("popup/popup.html");
-  const before = await pinnedUrls();
-  const result = await driver.executeAsyncScript((done) => {
-    browser.runtime.getBackgroundPage()
-      .then((page) => page.savePinnedTabsCommandListener("load-set-4"))
-      .then((value) => done(value), (error) => done({ error: error.message }));
-  });
-  assert.deepEqual(result, { status: "success", value: { executed: false } });
-  assert.deepEqual(await pinnedUrls(), before);
-});
-
-
 test("a pending failure blocks duplicate commands and recovers in place", async () => {
   await openExtensionPage("popup/popup.html");
   const existingUrl = `${extensionOrigin}/options/options.html?existing`;
@@ -502,7 +440,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
         }),
         browser.storage.local.set({
           activeTabs: { 1: setKey },
-          shortcutSets: { "load-set-1": setKey },
         }),
       ]))
       .then(() => Promise.all([
@@ -524,7 +461,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
           legacyRemoved: !(setKey in sync),
           set: sync["savePinnedTabs:sync"].sets[setId],
           autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
-          shortcutSetId: local["savePinnedTabs:local"].shortcutAssignments["load-set-1"],
         });
       });
   }, legacyKey);
@@ -535,7 +471,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
     tabs: ["https://example.com/legacy"],
   });
   assert.deepEqual(migrated.autoloadSetIds, [migrated.set.id]);
-  assert.equal(migrated.shortcutSetId, migrated.set.id);
   await driver.executeAsyncScript((setKey, done) => {
     browser.storage.sync.set({
       [setKey]: { autoload: 0, set_name: "Late Legacy", tabs: ["https://example.com/late"] },

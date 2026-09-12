@@ -49,12 +49,6 @@ export interface ActiveWindowSession {
   activeSetId: TabSetId;
 }
 
-/** Describes a browser command and its optional keyboard binding. */
-export interface BrowserCommand {
-  name: string;
-  shortcut?: string;
-  description?: string;
-}
 
 /** Captures the data required to render the popup. */
 export interface PopupState {
@@ -63,12 +57,9 @@ export interface PopupState {
   autoloadSetIds: TabSetId[];
 }
 
-/** Captures the data required to render and edit extension options. */
+/** Captures the data required to render extension options. */
 export interface OptionsState {
   sets: TabSet[];
-  /** Maps configurable assignment keys to saved tab sets. */
-  assignments: Partial<Record<string, TabSetId>>;
-  commands: BrowserCommand[];
 }
 
 /** Represents either a successful value or a handled error. */

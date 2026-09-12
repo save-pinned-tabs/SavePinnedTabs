@@ -313,61 +313,6 @@ test("a user can delete a pinned tab set without reloading", async ({ extension 
   await deleteSet(popup, "Work");
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 });
-test("deleting a shortcut-assigned set clears its assignment", async ({ extension }) => {
-  const { assignment, options, popup } = await createShortcutFixture(extension);
-  await popup.bringToFront();
-
-  await deleteSet(popup, "Shortcut target");
-  await options.bringToFront();
-  await options.reload();
-
-  await expect(assignment).toHaveValue("");
-});
-
-
-
-async function createShortcutFixture(extension, command = "load-set-1") {
-  const { context, extensionId } = extension;
-  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  const assignedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut`;
-  await createTabs(popup, [assignedUrl]);
-  await saveSet(popup, "Shortcut target");
-  const options = await openExtensionPage(context, extensionId, "options/options.html");
-  const assignment = options.locator(`[data-shortcut-command="${command}"]`);
-  await assignment.selectOption({ label: "Shortcut target" });
-  await expect(options.getByRole("status")).toHaveText("Shortcut assignment saved.");
-  return { assignedUrl, assignment, options, popup };
-}
-
-test("a shortcut assignment persists", async ({ extension }) => {
-  const { assignment, options } = await createShortcutFixture(extension);
-  const assignedSetId = await assignment.inputValue();
-  await options.reload();
-  await expect(assignment).toHaveValue(assignedSetId);
-});
-
-test("an assigned command dispatches through the registered listener", async ({ extension }) => {
-  const { context, extensionId } = extension;
-  const { assignedUrl, popup } = await createShortcutFixture(extension);
-  const unwantedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut-unwanted`;
-  await createTabs(popup, [unwantedUrl]);
-  expect(await context.serviceWorkers()[0]
-    .evaluate(async () => savePinnedTabsCommandListener("load-set-1")))
-    .toMatchObject({ status: "success", value: { executed: true } });
-  await expectOpenTabs(context, [assignedUrl], [unwantedUrl]);
-});
-
-test("an unassigned command is a no-op", async ({ extension }) => {
-  const { context } = extension;
-  const popup = await openExtensionPage(context, extension.extensionId, "popup/popup.html");
-  const before = await pinnedUrls(popup, await currentWindowId(popup));
-  expect(await context.serviceWorkers()[0]
-    .evaluate(async () => savePinnedTabsCommandListener("load-set-4")))
-    .toEqual({ status: "success", value: { executed: false } });
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual(before);
-});
-
-
 test("a pending failure blocks duplicate commands and recovers in place", async ({
   extension,
 }) => {
@@ -435,7 +380,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
         });
         await chrome.storage.local.set({
           activeTabs: { 1: legacyKey },
-          shortcutSets: { "load-set-1": legacyKey },
         });
         await chrome.storage.sync.remove("savePinnedTabs:sync");
         await chrome.storage.local.remove("savePinnedTabs:local");
@@ -461,7 +405,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
         legacyRemoved: !(legacyKey in sync),
         set: sync["savePinnedTabs:sync"].sets[setId],
         autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
-        shortcutSetId: local["savePinnedTabs:local"].shortcutAssignments["load-set-1"],
       };
     }, { legacyKey });
     expect(migrated.legacyRemoved).toBe(true);
@@ -470,7 +413,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
       tabs: ["https://example.com/legacy"],
     });
     expect(migrated.autoloadSetIds).toEqual([migrated.set.id]);
-    expect(migrated.shortcutSetId).toBe(migrated.set.id);
 
     await popup.evaluate(async ({ lateLegacyKey }) => {
       await chrome.storage.sync.set({

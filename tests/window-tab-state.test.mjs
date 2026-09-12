@@ -49,7 +49,6 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
               [LOCAL_DOCUMENT_KEY]: {
                 version: 2,
                 windowSessions: structuredClone(state.sessions),
-                shortcutAssignments: {},
               },
             });
           }
@@ -57,7 +56,6 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
             [LOCAL_DOCUMENT_KEY]: {
               version: 2,
               windowSessions: structuredClone(state.sessions),
-              shortcutAssignments: {},
             },
           }));
         },

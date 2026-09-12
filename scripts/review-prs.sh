@@ -349,12 +349,6 @@ show_review_steps() {
       step "Change the current pinned tabs to A and C, then click Append."
       step "Confirm the result is A, B, and C with no duplicate A."
       ;;
-    67)
-      step "Open Options and assign a saved set to one displayed shortcut."
-      step "Focus a normal browser window and press that exact shortcut."
-      step "Confirm the assigned set loads."
-      step "Delete the set, press the shortcut again, and confirm the stale assignment clears."
-      ;;
     68)
       step "Create two sets with one URL shared between them."
       step "Enable Autoload on both sets."
