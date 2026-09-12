@@ -54,3 +54,4 @@ browser.windows.onCreated.addListener((window: BrowserWindow) =>
 browser.windows.onRemoved.addListener((windowId: number) =>
   browserLifecycle.onWindowRemoved(windowId),
 );
+export const startupInitialization = handleStartup();

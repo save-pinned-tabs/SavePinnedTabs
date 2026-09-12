@@ -423,6 +423,9 @@ test("a legacy profile migrates sets and references exactly once across restarts
     firstLaunch = await launchExtension(userDataDir);
     expect(await firstLaunch.context.serviceWorkers()[0].evaluate(
       async ({ legacyKey }) => {
+        while (!("savePinnedTabs:sync" in await chrome.storage.sync.get(null))) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         await chrome.storage.sync.set({
           [legacyKey]: {
             autoload: 1,
@@ -434,6 +437,8 @@ test("a legacy profile migrates sets and references exactly once across restarts
           activeTabs: { 1: legacyKey },
           shortcutSets: { "load-set-1": legacyKey },
         });
+        await chrome.storage.sync.remove("savePinnedTabs:sync");
+        await chrome.storage.local.remove("savePinnedTabs:local");
         return "savePinnedTabs:sync" in await chrome.storage.sync.get(null);
       },
       { legacyKey },
@@ -903,10 +908,13 @@ test("an autoload selection persists across browser restart", async () => {
     );
     const { port } = server.address();
     const autoloadUrl = `http://127.0.0.1:${port}/autoloaded`;
+    const previousSessionUrl = `http://127.0.0.1:${port}/previous-session`;
 
     await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
     await selectAutoloadSet(popup, "Startup");
+    await removePinnedTabs(popup);
+    await createTabs(popup, [previousSessionUrl]);
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -921,7 +929,11 @@ test("an autoload selection persists across browser restart", async () => {
         .locator(".load-row", { hasText: "Startup" })
         .locator("input[name=autoload]"),
     ).toBeChecked();
-    await expectOpenTabs(secondLaunch.context, [autoloadUrl]);
+    await expectOpenTabs(
+      secondLaunch.context,
+      [autoloadUrl],
+      [previousSessionUrl],
+    );
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();

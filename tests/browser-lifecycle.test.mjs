@@ -279,7 +279,28 @@ test('listener registration occurs during service-worker module evaluation', asy
     },
   });
   const storageArea = {
-    async get() { return {}; },
+    async get(key) {
+      if (key === 'savePinnedTabs:local') {
+        return {
+          [key]: {
+            version: 2,
+            windowSessions: {},
+            shortcutAssignments: {},
+          },
+        };
+      }
+      if (key === 'savePinnedTabs:sync') {
+        return {
+          [key]: {
+            version: 2,
+            sets: {},
+            autoload: { scope: AUTOLOAD_FIRST_WINDOW, setIds: [] },
+            deletedSetIds: [],
+          },
+        };
+      }
+      return {};
+    },
     async set() {},
     async remove() {},
   };
@@ -303,7 +324,10 @@ test('listener registration occurs during service-worker module evaluation', asy
   };
 
   try {
-    await import(`../.extension-build/background/service-worker.js?listener-test=${Date.now()}`);
+    const serviceWorker = await import(
+      `../.extension-build/background/service-worker.js?listener-test=${Date.now()}`
+    );
+    await serviceWorker.startupInitialization;
   } finally {
     delete globalThis.chrome;
   }
