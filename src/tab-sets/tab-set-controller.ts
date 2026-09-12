@@ -1,8 +1,7 @@
-/** Coordinates tab-set persistence, window state, shortcuts, and UI state retrieval. */
+/** Coordinates tab-set persistence, window state, and UI state retrieval. */
 
 import type {
   AutoloadConfiguration,
-  BrowserCommand,
   CommandResult,
   ExportDocument,
   OptionsState,
@@ -48,14 +47,6 @@ interface WindowSessions {
   get(windowId: WindowId): Promise<TabSetId | null | undefined>;
 }
 
-/** Manages associations between browser commands and saved tab sets. */
-interface ShortcutAssignments {
-  /** Associates a browser command with a tab set. */
-  assign(command: string, setId: TabSetId): Promise<void>;
-
-  /** Lists the currently configured command assignments. */
-  list(): Promise<Partial<Record<string, TabSetId>>>;
-}
 
 /** Applies saved tab sets to browser windows and captures pinned tabs. */
 interface WindowTabState {
@@ -74,17 +65,11 @@ interface WindowTabState {
 export interface TabSetControllerDependencies {
   tabSets: TabSets;
   windowSessions: WindowSessions;
-  shortcutAssignments: ShortcutAssignments;
   windowTabState: WindowTabState;
 
   /** Resolves the window associated with the current controller request. */
   getCurrentWindowId(): Promise<WindowId>;
 
-  /** Resolves the most recently focused window, if one is available. */
-  getLastFocusedWindowId(): Promise<WindowId | null | undefined>;
-
-  /** Lists browser commands available for shortcut assignment. */
-  listBrowserCommands(): Promise<BrowserCommand[]>;
 }
 
 /** Wraps an operation failure with context describing the attempted command. */
@@ -156,20 +141,13 @@ export class TabSetController {
     });
   }
 
-  /** Loads tab sets, shortcut assignments, and available browser commands. */
+  /** Loads tab sets for the options page. */
   getOptionsState() {
     return this.#execute('load options state', async () => ({
       state: await this.#optionsState(),
     }));
   }
 
-  /** Assigns a command to a tab set and refreshes options state. */
-  assignShortcut(command: string, setId: TabSetId) {
-    return this.#execute('assign keyboard shortcut', async () => {
-      await this.#dependencies.shortcutAssignments.assign(command, setId);
-      return { state: await this.#optionsState() };
-    });
-  }
 
   /** Exports all tab-set data as a command result. */
   exportSets() {
@@ -190,22 +168,6 @@ export class TabSetController {
     });
   }
 
-  /** Runs an assigned command in the last focused window when both are available. */
-  runShortcut(command: string) {
-    return this.#execute(`run tab-set command "${command}"`, async () => {
-      const setId = (await this.#dependencies.shortcutAssignments.list())[command];
-      if (!setId) return { executed: false };
-
-      const windowId = await this.#dependencies.getLastFocusedWindowId();
-      if (windowId === null || windowId === undefined) {
-        return { executed: false };
-      }
-      await this.#dependencies.windowTabState.replace(windowId, setId);
-      return { executed: true };
-    });
-  }
-
-
   /** Builds popup state for a window from saved sets, session data, and autoload settings. */
   async #popupState(windowId: WindowId): Promise<PopupState> {
     const [popupData, activeSetId] = await Promise.all([
@@ -219,14 +181,9 @@ export class TabSetController {
     };
   }
 
-  /** Builds options state from saved sets, assignments, and browser commands. */
+  /** Builds options state from saved sets. */
   async #optionsState(): Promise<OptionsState> {
-    const [sets, assignments, commands] = await Promise.all([
-      this.#dependencies.tabSets.list(),
-      this.#dependencies.shortcutAssignments.list(),
-      this.#dependencies.listBrowserCommands(),
-    ]);
-    return { sets, assignments, commands };
+    return { sets: await this.#dependencies.tabSets.list() };
   }
 
   /** Executes an operation and converts thrown or rejected failures into an error result. */

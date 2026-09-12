@@ -34,8 +34,8 @@ const DEFAULT_AUTOLOAD_SCOPE: AutoloadScope = AUTOLOAD_FIRST_WINDOW;
 /** Identifies the legacy window-session record. */
 const LEGACY_SESSIONS_KEY = 'activeTabs';
 
-/** Identifies the legacy shortcut-assignment record. */
-const LEGACY_SHORTCUTS_KEY = 'shortcutSets';
+/** Identifies obsolete local reference data removed during migration. */
+const OBSOLETE_LOCAL_REFERENCES_KEY = 'shortcutSets';
 
 /** Serializes schema migrations across extension contexts. */
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
@@ -75,13 +75,11 @@ export interface SyncDocument extends StoredSyncDocument {
 interface StoredLocalDocument {
   version: typeof STORAGE_SCHEMA_VERSION;
   windowSessions?: Record<string, unknown> | null;
-  shortcutAssignments?: Record<string, unknown> | null;
 }
 
 /** Represents a normalized local document containing valid set references. */
 interface LocalDocument extends StoredLocalDocument {
   windowSessions: Record<string, string>;
-  shortcutAssignments: Record<string, string>;
 }
 
 /** Represents a tab set stored by the legacy schema. */
@@ -138,12 +136,11 @@ export function emptySyncDocument(): SyncDocument {
   };
 }
 
-/** Creates a local document with no session or shortcut references. */
+/** Creates a local document with no window-session references. */
 export function emptyLocalDocument(): LocalDocument {
   return {
     version: STORAGE_SCHEMA_VERSION,
     windowSessions: {},
-    shortcutAssignments: {},
   };
 }
 
@@ -210,18 +207,10 @@ function isStoredLocalDocument(
     return false;
   }
 
-  if (
+  return !(
     'windowSessions' in document
     && document['windowSessions'] !== null
     && !isRecord(document['windowSessions'])
-  ) {
-    return false;
-  }
-
-  return !(
-    'shortcutAssignments' in document
-    && document['shortcutAssignments'] !== null
-    && !isRecord(document['shortcutAssignments'])
   );
 }
 
@@ -269,10 +258,7 @@ function assertLocalDocument(
 ): asserts document is LocalDocument {
   assertVersion(document, 'local');
 
-  if (
-    !isStringRecord(document.windowSessions)
-    || !isStringRecord(document.shortcutAssignments)
-  ) {
+  if (!isStringRecord(document.windowSessions)) {
     throw new Error('Invalid local storage document');
   }
 }
@@ -404,17 +390,10 @@ function createMigratedLocalDocument(
   const legacySessions = isRecord(stored[LEGACY_SESSIONS_KEY])
     ? stored[LEGACY_SESSIONS_KEY]
     : {};
-  const legacyShortcuts = isRecord(stored[LEGACY_SHORTCUTS_KEY])
-    ? stored[LEGACY_SHORTCUTS_KEY]
-    : {};
 
   for (const [windowId, reference] of Object.entries(legacySessions)) {
     const setId = migrateReference(reference, legacyIds, knownIds);
     if (setId) document.windowSessions[windowId] = setId;
-  }
-  for (const [command, reference] of Object.entries(legacyShortcuts)) {
-    const setId = migrateReference(reference, legacyIds, knownIds);
-    if (setId) document.shortcutAssignments[command] = setId;
   }
   return document;
 }
@@ -435,19 +414,8 @@ function cleanLocalReferences(
     }
   }
 
-  const shortcutAssignments: Record<string, string> = {};
-  if (isRecord(document.shortcutAssignments)) {
-    for (const [command, setId] of Object.entries(
-      document.shortcutAssignments,
-    )) {
-      if (typeof setId === 'string' && knownIds.has(setId)) {
-        shortcutAssignments[command] = setId;
-      }
-    }
-  }
 
   document.windowSessions = windowSessions;
-  document.shortcutAssignments = shortcutAssignments;
 }
 
 /** Removes storage entries when at least one key is present. */
@@ -535,7 +503,6 @@ export class BrowserStorageMigration implements StorageMigration {
       assertVersion(storedLocalDocument, 'local');
       localDocument = structuredClone(storedLocalDocument);
       localDocument.windowSessions ??= {};
-      localDocument.shortcutAssignments ??= {};
       cleanLocalReferences(
         localDocument,
         new Set(Object.keys(syncDocument.sets)),
@@ -563,7 +530,7 @@ export class BrowserStorageMigration implements StorageMigration {
       removeKeys(this.#syncStorage, legacySetKeys),
       removeKeys(
         this.#localStorage,
-        [LEGACY_SESSIONS_KEY, LEGACY_SHORTCUTS_KEY]
+        [LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]
           .filter((key) => key in storedLocal),
       ),
     ]);

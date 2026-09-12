@@ -35,14 +35,5 @@ export function createBrowserTabSetController(
 
       return id;
     },
-    async getLastFocusedWindowId() {
-      const window = await browser.windows.getLastFocused({
-        windowTypes: ['normal'],
-      });
-      return window?.id;
-    },
-    listBrowserCommands() {
-      return browser.commands.getAll();
-    },
   });
 }

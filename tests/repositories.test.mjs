@@ -15,10 +15,6 @@ import {
   SYNC_DOCUMENT_KEY,
 } from '../.extension-build/storage/storage-schema.js';
 import {
-  ShortcutAssignmentRepository,
-  ShortcutAssignmentStorage,
-} from '../.extension-build/storage/shortcut-assignment-repository.js';
-import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
@@ -84,51 +80,28 @@ function createBrowserHarness({ sync = {}, local = {}, createId = idGenerator() 
   const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId });
   const references = new BrowserReferenceStorage(localStorage, migration);
   const windowSessions = new WindowSessionRepository(new BrowserWindowSessionStorage(references));
-  let tabSets;
-  const shortcutAssignments = new ShortcutAssignmentRepository(
-    new ShortcutAssignmentStorage(references),
-    { hasSet: (setId) => tabSets.get(setId) },
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration),
+    {
+      createId,
+      validateImport: isValidImport,
+      windowSessions,
+    },
   );
-  tabSets = new TabSetRepository(new BrowserTabSetStorage(syncStorage, migration), {
-    createId,
-    validateImport: isValidImport,
-    windowSessions,
-    shortcutAssignments,
-  });
-  return { tabSets, windowSessions, shortcutAssignments, syncStorage, localStorage };
+  return { tabSets, windowSessions, syncStorage, localStorage };
 }
 
 function createMemoryHarness(createId = idGenerator()) {
   const references = new InMemoryReferenceStorage();
   const windowSessions = new WindowSessionRepository(new InMemoryWindowSessionStorage(references));
-  let tabSets;
-  const shortcutAssignments = new ShortcutAssignmentRepository(
-    new ShortcutAssignmentStorage(references),
-    { hasSet: (setId) => tabSets.get(setId) },
-  );
-  tabSets = new TabSetRepository(new InMemoryTabSetStorage(), {
+  const tabSets = new TabSetRepository(new InMemoryTabSetStorage(), {
     createId,
     validateImport: isValidImport,
     windowSessions,
-    shortcutAssignments,
   });
-  return { tabSets, windowSessions, shortcutAssignments };
+  return { tabSets, windowSessions };
 }
 
-test('browser repositories reject shortcut assignments to missing tab sets', async () => {
-  const browser = {
-    storage: {
-      sync: createStorageArea(),
-      local: createStorageArea(),
-    },
-  };
-  const { shortcutAssignments } = createBrowserRepositories(browser);
-
-  await assert.rejects(
-    shortcutAssignments.assign('load-set-1', FIRST_ID),
-    /does not exist/,
-  );
-});
 
 test('browser storage rejects incomplete persisted tab sets', async () => {
   const storage = createStorageArea({
@@ -203,22 +176,19 @@ for (const [name, createHarness] of [
     );
   });
 
-  test(`${name} deletion clears Autoload, sessions, and shortcut references`, async () => {
-    const { tabSets, windowSessions, shortcutAssignments } = createHarness();
+  test(`${name} deletion clears Autoload and session references`, async () => {
+    const { tabSets, windowSessions } = createHarness();
     const first = await tabSets.save({ name: 'First', tabs: [] });
     const second = await tabSets.save({ name: 'Second', tabs: [] });
     await tabSets.setAutoload({ scope: 'every-window', setIds: [first.id] });
     await windowSessions.set(1, first.id);
     await windowSessions.set(2, second.id);
-    await shortcutAssignments.assign('load-set-1', first.id);
-    await shortcutAssignments.assign('load-set-2', second.id);
 
     await tabSets.remove(first.id);
 
     assert.deepEqual(await tabSets.getAutoload(), { scope: 'every-window', setIds: [] });
     assert.equal(await windowSessions.get(1), null);
     assert.equal(await windowSessions.get(2), second.id);
-    assert.deepEqual(await shortcutAssignments.list(), { 'load-set-2': second.id });
   });
 
   test(`${name} versioned import remaps collisions and export round-trips domain records`, async () => {
@@ -282,7 +252,6 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
-  assert.deepEqual(await harness.shortcutAssignments.list(), { 'load-set-1': sets[1].id });
   assert.deepEqual(
     Object.keys(harness.syncStorage.state).sort(),
     [SYNC_DOCUMENT_KEY, 'unrelated', 'unrelatedSetShape'],

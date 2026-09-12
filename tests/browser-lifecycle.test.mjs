@@ -285,7 +285,6 @@ test('listener registration occurs during service-worker module evaluation', asy
           [key]: {
             version: 2,
             windowSessions: {},
-            shortcutAssignments: {},
           },
         };
       }
@@ -305,7 +304,6 @@ test('listener registration occurs during service-worker module evaluation', asy
     async remove() {},
   };
   globalThis.chrome = {
-    commands: { onCommand: event('command') },
     runtime: {
       onMessage: event('message'),
       onStartup: event('startup'),
@@ -334,7 +332,7 @@ test('listener registration occurs during service-worker module evaluation', asy
 
   assert.deepEqual(
     registered.map(([name]) => name),
-    ['message', 'command', 'startup', 'created', 'removed'],
+    ['message', 'startup', 'created', 'removed'],
   );
   assert.ok(registered.every(([, listener]) => typeof listener === 'function'));
 });
