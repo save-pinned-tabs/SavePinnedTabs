@@ -604,15 +604,30 @@ test("identity collisions and repeated imports create independent usable sets", 
   await popup.reload();
   const duplicateRows = popup.locator('.load-row[data-name="Duplicate"]');
   await expect(duplicateRows).toHaveCount(3);
-  await duplicateRows.nth(0).getByRole("button", { name: "Load", exact: true }).click();
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([existingUrl]);
-  await duplicateRows.nth(1).getByRole("button", { name: "Load", exact: true }).click();
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([importedUrl]);
-  await duplicateRows.nth(1).getByRole("button", { name: "Del" }).click();
+
+  async function loadDuplicateUrls(count) {
+    const urls = [];
+    for (let index = 0; index < count; index += 1) {
+      const row = duplicateRows.nth(index);
+      await row.getByRole("button", { name: "Load", exact: true }).click();
+      await expect(row).toHaveClass(/active/);
+      urls.push((await pinnedUrls(popup, await currentWindowId(popup)))[0]);
+    }
+    return urls;
+  }
+
+  const loadedUrls = await loadDuplicateUrls(3);
+  expect(loadedUrls.toSorted()).toEqual(
+    [existingUrl, importedUrl, importedUrl].toSorted(),
+  );
+
+  const importedIndex = loadedUrls.indexOf(importedUrl);
+  await duplicateRows.nth(importedIndex).getByRole("button", { name: "Del" }).click();
   await popup.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(duplicateRows).toHaveCount(2);
-  await duplicateRows.nth(1).getByRole("button", { name: "Load", exact: true }).click();
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([importedUrl]);
+
+  const remainingUrls = await loadDuplicateUrls(2);
+  expect(remainingUrls.toSorted()).toEqual([existingUrl, importedUrl].toSorted());
 });
 
 test("an imported tab-set name is rendered as text", async ({ extension }) => {
