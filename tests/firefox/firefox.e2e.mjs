@@ -93,19 +93,35 @@ async function openStorageFixturePage() {
   await driver.get(`${extensionOrigin}/manifest.json`);
 }
 
-async function createPinnedTabs(urls) {
-  const error = await driver.executeAsyncScript(async (tabUrls, done) => {
+async function createTabs(urls, pinned = true) {
+  const error = await driver.executeAsyncScript(async (tabUrls, isPinned, done) => {
     try {
       for (const url of tabUrls) {
-        await browser.tabs.create({ url, pinned: true, active: false });
+        await browser.tabs.create({ url, pinned: isPinned, active: false });
       }
       done(null);
     } catch (cause) {
       done(cause.message);
     }
-  }, urls);
-  if (error) throw new Error(`Failed to create pinned tabs: ${error}`);
+  }, urls, pinned);
+  if (error) throw new Error(`Failed to create tabs: ${error}`);
 }
+
+async function removeOrUnpinTabs(urls) {
+  const error = await driver.executeAsyncScript(async (tabUrls, done) => {
+    try {
+      const tabs = await browser.tabs.query({ currentWindow: true });
+      const matchingTabs = tabs.filter((tab) => tab.url && tabUrls.includes(tab.url));
+      await browser.tabs.update(matchingTabs[0].id, { pinned: false });
+      await browser.tabs.remove(matchingTabs.slice(1).map((tab) => tab.id));
+      done(null);
+    } catch (cause) {
+      done(cause.message);
+    }
+  }, urls);
+  if (error) throw new Error(`Failed to remove or unpin tabs: ${error}`);
+}
+
 
 async function removePinnedTabs() {
   const error = await driver.executeAsyncScript((done) => {
@@ -127,6 +143,14 @@ async function pinnedUrls(windowId) {
     );
   }, windowId ?? null);
 }
+async function waitForPinnedUrls(expectedUrls) {
+  await driver.wait(
+    async () => JSON.stringify(await pinnedUrls()) === JSON.stringify(expectedUrls),
+    10_000,
+    `pinned URLs ${JSON.stringify(expectedUrls)}`,
+  );
+}
+
 
 
 async function saveSet(name) {
@@ -188,7 +212,7 @@ async function importDocument(document, fileName = "import.json") {
 
 test("a user can save a pinned tab set without reloading", async () => {
   await openExtensionPage("popup/popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?save`]);
+  await createTabs([`${extensionOrigin}/options/options.html?save`]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await saveSet("Work");
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
@@ -196,10 +220,10 @@ test("a user can save a pinned tab set without reloading", async () => {
 
 test("a user can update a pinned tab set without reloading", async () => {
   await openExtensionPage("popup/popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?first`]);
+  await createTabs([`${extensionOrigin}/options/options.html?first`]);
   await saveSet("Work");
   const secondUrl = `${extensionOrigin}/options/options.html?second`;
-  await createPinnedTabs([secondUrl]);
+  await createTabs([secondUrl]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-save')).click();
   await waitForStatus("popup-status", "Tab set saved.");
@@ -207,12 +231,68 @@ test("a user can update a pinned tab set without reloading", async () => {
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
 
+test("updating a set removes tabs that were unpinned or closed", async () => {
+  await openExtensionPage("popup/popup.html");
+  const removedUrls = [
+    `${extensionOrigin}/options/options.html?unpin-on-update`,
+    `${extensionOrigin}/options/options.html?close-on-update`,
+  ];
+  const retainedUrl = `${extensionOrigin}/options/options.html?retain-on-update`;
+  await createTabs([...removedUrls, retainedUrl]);
+  await saveSet("Updated");
+  await removeOrUnpinTabs(removedUrls);
+
+  await driver.findElement(By.css('.load-row[data-name="Updated"] .set-save')).click();
+  await waitForStatus("popup-status", "Tab set saved.");
+  await removePinnedTabs();
+  await driver.findElement(By.css('.load-row[data-name="Updated"] .set-load')).click();
+
+  await waitForStatus("popup-status", "Tab set loaded.");
+  assert.deepEqual(await pinnedUrls(), [retainedUrl]);
+});
+
+test("saving a set ignores unpinned tabs", async () => {
+  await openExtensionPage("popup/popup.html");
+  const pinnedUrl = `${extensionOrigin}/options/options.html?pinned`;
+  const unpinnedUrl = `${extensionOrigin}/options/options.html?unpinned`;
+  await createTabs([pinnedUrl]);
+  await createTabs([unpinnedUrl], false);
+  await saveSet("Pinned only");
+  await removePinnedTabs();
+
+  await driver.findElement(By.css('.load-row[data-name="Pinned only"] .set-load')).click();
+
+  await waitForStatus("popup-status", "Tab set loaded.");
+  assert.deepEqual(await pinnedUrls(), [pinnedUrl]);
+  assert.equal(await driver.executeAsyncScript((url, done) => {
+    browser.tabs.query({ currentWindow: true })
+      .then((tabs) => done(tabs.some((tab) => tab.url === url)));
+  }, unpinnedUrl), true);
+});
+
+test("saving with no pinned tabs does not create an empty set", async () => {
+  await openExtensionPage("popup/popup.html");
+  await createTabs([`${extensionOrigin}/options/options.html?only-unpinned`], false);
+  await driver.findElement(By.id("save-name")).sendKeys("Empty");
+
+  await driver.findElement(By.id("save-button")).click();
+
+  await waitForStatus(
+    "popup-status",
+    "Failed to save tab set: No pinned tabs found.",
+  );
+  assert.equal(
+    (await driver.findElements(By.css('.load-row[data-name="Empty"]'))).length,
+    0,
+  );
+});
+
 test("a user can load a pinned tab set without reloading", async () => {
   await openExtensionPage("popup/popup.html");
   const savedUrl = `${extensionOrigin}/options/options.html?saved`;
-  await createPinnedTabs([savedUrl]);
+  await createTabs([savedUrl]);
   await saveSet("Work");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?unwanted`]);
+  await createTabs([`${extensionOrigin}/options/options.html?unwanted`]);
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-load')).click();
   await waitForStatus("popup-status", "Tab set loaded.");
@@ -226,7 +306,7 @@ test("loading a set changes only the initiating window and preserves pinned orde
     `${extensionOrigin}/options/options.html?ordered-first`,
     `${extensionOrigin}/options/options.html?ordered-second`,
   ];
-  await createPinnedTabs(savedUrls);
+  await createTabs(savedUrls);
   await saveSet("Ordered");
   await removePinnedTabs();
   const otherUrl = `${extensionOrigin}/options/options.html?other-window`;
@@ -260,7 +340,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
   await waitForStatus("options-status", "Successfully imported 1 tab set.");
   await openExtensionPage("popup/popup.html");
   const originalUrl = `${extensionOrigin}/options/options.html?original`;
-  await createPinnedTabs([originalUrl]);
+  await createTabs([originalUrl]);
 
   await driver.findElement(By.css('.load-row[data-name="Failing"] .set-load')).click();
 
@@ -272,7 +352,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
 
 test("a user can cancel deletion with Escape", async () => {
   await openExtensionPage("popup/popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?cancel-delete`]);
+  await createTabs([`${extensionOrigin}/options/options.html?cancel-delete`]);
   await saveSet("Work");
   await driver.findElement(By.css('.load-row[data-name="Work"] .set-delete')).click();
   const dialog = await driver.findElement(By.id("delete-dialog"));
@@ -284,7 +364,7 @@ test("a user can cancel deletion with Escape", async () => {
 
 test("a user can delete a pinned tab set without reloading", async () => {
   await openExtensionPage("popup/popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?delete`]);
+  await createTabs([`${extensionOrigin}/options/options.html?delete`]);
   await saveSet("Work");
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   const row = await driver.findElement(By.css('.load-row[data-name="Work"]'));
@@ -294,12 +374,25 @@ test("a user can delete a pinned tab set without reloading", async () => {
   await driver.wait(until.stalenessOf(row), 10_000);
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
+test("deleting a shortcut-assigned set clears its assignment", async () => {
+  await createShortcutFixture();
+  await openExtensionPage("popup/popup.html");
+  await deleteSet("Shortcut target");
+  await openExtensionPage("options/options.html");
+
+  assert.equal(
+    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
+      .getAttribute("value"),
+    "",
+  );
+});
+
 
 
 async function createShortcutFixture() {
   await openExtensionPage("popup/popup.html");
   const assignedUrl = `${extensionOrigin}/options/options.html?shortcut`;
-  await createPinnedTabs([assignedUrl]);
+  await createTabs([assignedUrl]);
   await saveSet("Shortcut target");
   await openExtensionPage("options/options.html");
   const shortcut = await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'));
@@ -320,7 +413,7 @@ test("a shortcut assignment persists", async () => {
 
 test("an assigned command dispatches through the registered listener", async () => {
   const { assignedUrl } = await createShortcutFixture();
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?shortcut-unwanted`]);
+  await createTabs([`${extensionOrigin}/options/options.html?shortcut-unwanted`]);
   const result = await driver.executeAsyncScript((done) => {
     browser.runtime.getBackgroundPage()
       .then((page) => page.savePinnedTabsCommandListener("load-set-1"))
@@ -346,7 +439,7 @@ test("an unassigned command is a no-op", async () => {
 test("a pending failure blocks duplicate commands and recovers in place", async () => {
   await openExtensionPage("popup/popup.html");
   const existingUrl = `${extensionOrigin}/options/options.html?existing`;
-  await createPinnedTabs([existingUrl]);
+  await createTabs([existingUrl]);
   await saveSet("Existing");
   await driver.executeScript(() => {
     const controller = globalThis.savePinnedTabsController;
@@ -445,7 +538,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
 test("saved-set titles can exceed 30 characters and wrap", async () => {
   await openExtensionPage("popup/popup.html");
   const longName = "A very long saved tab set title that remains readable instead of being truncated";
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?long-title`]);
+  await createTabs([`${extensionOrigin}/options/options.html?long-title`]);
   await saveSet(longName);
   const title = await driver.findElement(By.css(`.load-row[data-name="${longName}"] span`));
   assert.equal(await title.getText(), longName);
@@ -455,10 +548,23 @@ test("saved-set titles can exceed 30 characters and wrap", async () => {
   }, title), true);
 });
 
-test("a user can export and import tab sets", async () => {
+test("export and import preserve multiple sets, tab order, identities, and autoload", async () => {
   await openExtensionPage("popup/popup.html");
-  await createPinnedTabs([`${extensionOrigin}/options/options.html?exported`]);
-  await saveSet("Backup");
+  const firstUrls = [
+    `${extensionOrigin}/options/options.html?export-first-a`,
+    `${extensionOrigin}/options/options.html?export-first-b`,
+  ];
+  const secondUrls = [
+    `${extensionOrigin}/options/options.html?export-second-a`,
+    `${extensionOrigin}/options/options.html?export-second-b`,
+  ];
+  await createTabs(firstUrls);
+  await saveSet("First backup");
+  await removePinnedTabs();
+  await createTabs(secondUrls);
+  await saveSet("Second backup");
+  await selectAutoloadSet("Second backup");
+
   await openExtensionPage("options/options.html");
   await driver.findElement(By.id("export-button")).click();
   await waitForStatus("options-status", "Tab sets exported.");
@@ -468,18 +574,83 @@ test("a user can export and import tab sets", async () => {
       .find((name) => /^SavePinnedTabs_export_.*\.json$/.test(name));
     return Boolean(exportName);
   }, 10_000);
+  const exportPath = path.join(temporaryDirectory, exportName);
+  const exportedDocument = JSON.parse(await readFile(exportPath, "utf8"));
+  assert.equal(exportedDocument.version, 2);
+  assert.equal(exportedDocument.sets.length, 2);
+  const firstExport = exportedDocument.sets.find((set) => set.name === "First backup");
+  const secondExport = exportedDocument.sets.find((set) => set.name === "Second backup");
+  assert.deepEqual(firstExport.tabs, firstUrls);
+  assert.deepEqual(secondExport.tabs, secondUrls);
+  assert.equal(exportedDocument.sets.every((set) => /^[0-9a-f-]{36}$/.test(set.id)), true);
+  assert.equal(new Set(exportedDocument.sets.map((set) => set.id)).size, 2);
+  assert.deepEqual(exportedDocument.autoload, {
+    scope: "first-window",
+    setIds: [secondExport.id],
+  });
+
   await openExtensionPage("popup/popup.html");
-  const row = await driver.findElement(By.css('.load-row[data-name="Backup"]'));
-  await row.findElement(By.css(".set-delete")).click();
+  await deleteSet("First backup");
+  await deleteSet("Second backup");
+  await openExtensionPage("options/options.html");
+  await driver.findElement(By.id("import-input")).sendKeys(exportPath);
+  await driver.findElement(By.id("import-button")).click();
+  await waitForStatus("options-status", "Successfully imported 2 tab sets.");
+
+  await openExtensionPage("popup/popup.html");
+  assert.equal(
+    await driver.findElement(
+      By.css('.load-row[data-name="Second backup"] input[name=autoload]'),
+    ).isSelected(),
+    true,
+  );
+  await driver.findElement(By.css('.load-row[data-name="First backup"] .set-load')).click();
+  await waitForPinnedUrls(firstUrls);
+  await driver.findElement(By.css('.load-row[data-name="Second backup"] .set-load')).click();
+  await waitForPinnedUrls(secondUrls);
+});
+
+test("identity collisions and repeated imports create independent usable sets", async () => {
+  await openExtensionPage("popup/popup.html");
+  const existingUrl = `${extensionOrigin}/options/options.html?collision-existing`;
+  const importedUrl = `${extensionOrigin}/options/options.html?collision-imported`;
+  await createTabs([existingUrl]);
+  await saveSet("Duplicate");
+  const existingId = await driver.executeAsyncScript((done) => {
+    browser.storage.sync.get("savePinnedTabs:sync").then((storage) => {
+      done(Object.keys(storage["savePinnedTabs:sync"].sets)[0]);
+    });
+  });
+  const document = {
+    version: 2,
+    sets: [{ id: existingId, name: "Duplicate", tabs: [importedUrl] }],
+    autoload: { scope: "first-window", setIds: [] },
+  };
+  await openExtensionPage("options/options.html");
+  await importDocument(document, "collision.json");
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  await importDocument(document, "collision-again.json");
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+
+  await openExtensionPage("popup/popup.html");
+  let duplicateRows = await driver.findElements(By.css('.load-row[data-name="Duplicate"]'));
+  assert.equal(duplicateRows.length, 3);
+  await duplicateRows[0].findElement(By.css(".set-load")).click();
+  await waitForStatus("popup-status", "Tab set loaded.");
+  await waitForPinnedUrls([existingUrl]);
+  duplicateRows = await driver.findElements(By.css('.load-row[data-name="Duplicate"]'));
+  await duplicateRows[1].findElement(By.css(".set-load")).click();
+  await waitForStatus("popup-status", "Tab set loaded.");
+  await waitForPinnedUrls([importedUrl]);
+  duplicateRows = await driver.findElements(By.css('.load-row[data-name="Duplicate"]'));
+  await duplicateRows[1].findElement(By.css(".set-delete")).click();
   await driver.findElement(By.css("#delete-dialog button[value=delete]")).click();
   await waitForStatus("popup-status", "Tab set deleted.");
-  await openExtensionPage("options/options.html");
-  await driver.findElement(By.id("import-input"))
-    .sendKeys(path.join(temporaryDirectory, exportName));
-  await driver.findElement(By.id("import-button")).click();
-  await waitForStatus("options-status", "Successfully imported 1 tab set.");
-  await openExtensionPage("popup/popup.html");
-  assert.ok(await driver.findElement(By.css('.load-row[data-name="Backup"]')));
+  duplicateRows = await driver.findElements(By.css('.load-row[data-name="Duplicate"]'));
+  assert.equal(duplicateRows.length, 2);
+  await duplicateRows[1].findElement(By.css(".set-load")).click();
+  await waitForStatus("popup-status", "Tab set loaded.");
+  await waitForPinnedUrls([importedUrl]);
 });
 
 test("an imported tab-set name is rendered as text", async () => {
@@ -550,7 +721,7 @@ test("an imported every-window set autoloads in existing and new windows", async
 test("startup keeps an already restored pinned tab open", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?already-restored`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Already restored");
   await selectAutoloadSet("Already restored");
   await restartFirefox();
@@ -573,7 +744,7 @@ test("startup preserves unrelated local extension state", async () => {
 test("the startup handler restores the configured pinned tabs", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?startup-handler`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Startup handler");
   await selectAutoloadSet("Startup handler");
   await removePinnedTabs();
@@ -585,7 +756,7 @@ test("the startup handler restores the configured pinned tabs", async () => {
 test("an autoload selection persists across browser restart", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?restart`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Startup");
   await selectAutoloadSet("Startup");
   await removePinnedTabs();
@@ -602,7 +773,7 @@ test("an autoload selection persists across browser restart", async () => {
 test("restart does not restore a saved set without an autoload selection", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?no-autoload`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("No autoload");
   await removePinnedTabs();
 
@@ -616,7 +787,7 @@ test("first-window autoload does not restore into a later window", async () => {
   await openExtensionPage("popup/popup.html");
   const autoloadUrl = `${extensionOrigin}/options/options.html?first-window`;
   const secondWindowUrl = `${extensionOrigin}/options/options.html?second-window`;
-  await createPinnedTabs([autoloadUrl]);
+  await createTabs([autoloadUrl]);
   await saveSet("First window");
   await selectAutoloadSet("First window");
   await removePinnedTabs();
@@ -636,7 +807,7 @@ test("first-window autoload does not restore into a later window", async () => {
 test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?repeat`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Repeat");
   await selectAutoloadSet("Repeat");
 
@@ -653,7 +824,7 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
 test("cleared autoload selection is not restored after restart", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?clear`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Clear");
   await selectAutoloadSet("Clear");
   await clearAutoloadSet("Clear");
@@ -668,7 +839,7 @@ test("cleared autoload selection is not restored after restart", async () => {
 test("deleted autoload set is not restored after restart", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?deleted`;
-  await createPinnedTabs([url]);
+  await createTabs([url]);
   await saveSet("Deleted");
   await selectAutoloadSet("Deleted");
   await deleteSet("Deleted");
