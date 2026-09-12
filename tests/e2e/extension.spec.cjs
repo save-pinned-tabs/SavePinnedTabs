@@ -66,6 +66,12 @@ async function pinnedUrls(page, windowId) {
 async function currentWindowId(page) {
   return page.evaluate(async () => (await chrome.windows.getCurrent()).id);
 }
+async function restartExtension(extension, userDataDir) {
+  await extension.context.close();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  return launchExtension(userDataDir);
+}
+
 
 async function saveSet(page, name) {
   await page.getByPlaceholder("Enter a name for set...").fill(name);
@@ -991,9 +997,7 @@ test("first-window autoload does not restore into a later window", async () => {
     await saveSet(popup, "First window");
     await selectAutoloadSet(popup, "First window");
     await removePinnedTabs(popup);
-    await launch.context.close();
-
-    launch = await launchExtension(userDataDir);
+    launch = await restartExtension(launch, userDataDir);
     popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
     await runStartupHandler(popup);
     await expectOpenTabs(launch.context, [autoloadUrl]);
@@ -1030,8 +1034,7 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
     await selectAutoloadSet(popup, "Repeat");
 
     for (let restart = 0; restart < 2; restart += 1) {
-      await launch.context.close();
-      launch = await launchExtension(userDataDir);
+      launch = await restartExtension(launch, userDataDir);
       popup = await openExtensionPage(
         launch.context,
         launch.extensionId,
@@ -1065,9 +1068,7 @@ test("cleared autoload selection is not restored after restart", async () => {
     await selectAutoloadSet(popup, "Clear");
     await clearAutoloadSet(popup, "Clear");
     await removePinnedTabs(popup);
-    await launch.context.close();
-
-    launch = await launchExtension(userDataDir);
+    launch = await restartExtension(launch, userDataDir);
     popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
     await runStartupHandler(popup);
     expect(await pinnedUrls(popup, await currentWindowId(popup))).not.toContain(autoloadUrl);
@@ -1095,9 +1096,7 @@ test("deleted autoload set is not restored after restart", async () => {
     await selectAutoloadSet(popup, "Deleted");
     await deleteSet(popup, "Deleted");
     await removePinnedTabs(popup);
-    await launch.context.close();
-
-    launch = await launchExtension(userDataDir);
+    launch = await restartExtension(launch, userDataDir);
     popup = await openExtensionPage(launch.context, launch.extensionId, "popup/popup.html");
     await runStartupHandler(popup);
     expect(await pinnedUrls(popup, await currentWindowId(popup))).not.toContain(autoloadUrl);
