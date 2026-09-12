@@ -1,6 +1,6 @@
 const http = require("node:http");
 const { execFile } = require("node:child_process");
-const { mkdtemp, rm } = require("node:fs/promises");
+const { mkdtemp, readFile, rm } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { promisify } = require("node:util");
@@ -31,13 +31,23 @@ async function installUnpackedExtension(page) {
   await expect(item).toBeVisible({ timeout: 30_000 });
   return item.getAttribute("id");
 }
-async function createPinnedTabs(page, urls) {
-  await page.evaluate(async (tabUrls) => {
+async function createTabs(page, urls, pinned = true) {
+  await page.evaluate(async ({ tabUrls, isPinned }) => {
     for (const url of tabUrls) {
-      await chrome.tabs.create({ url, pinned: true, active: false });
+      await chrome.tabs.create({ url, pinned: isPinned, active: false });
     }
+  }, { tabUrls: urls, isPinned: pinned });
+}
+
+async function removeOrUnpinTabs(page, urls) {
+  await page.evaluate(async (tabUrls) => {
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    const matchingTabs = tabs.filter((tab) => tab.url && tabUrls.includes(tab.url));
+    await chrome.tabs.update(matchingTabs[0].id, { pinned: false });
+    await chrome.tabs.remove(matchingTabs.slice(1).map((tab) => tab.id));
   }, urls);
 }
+
 
 async function removePinnedTabs(page) {
   await page.evaluate(async () => {
@@ -60,7 +70,7 @@ async function currentWindowId(page) {
 async function saveSet(page, name) {
   await page.getByPlaceholder("Enter a name for set...").fill(name);
   const pageLoadTime = await page.evaluate(() => performance.timeOrigin);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.locator("#save-button").click();
   await expect(page.getByRole("status")).toHaveText("Tab set saved.");
   await expect(page.locator(".load-row", { hasText: name })).toBeVisible();
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
@@ -122,7 +132,7 @@ async function importDocument(page, document, fileName = "import.json") {
 test("a user can save a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  await createPinnedTabs(popup, [`chrome-extension://${extensionId}/options/options.html?save`]);
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?save`]);
   await saveSet(popup, "Work");
   const row = popup.locator(".load-row", { hasText: "Work" });
   await expect(row.getByRole("button", { name: "Append" })).toHaveCount(0);
@@ -134,10 +144,10 @@ test("a user can save a pinned tab set without reloading", async ({ extension })
 test("a user can update a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  await createPinnedTabs(popup, [`chrome-extension://${extensionId}/options/options.html?first`]);
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?first`]);
   await saveSet(popup, "Work");
   const secondUrl = `chrome-extension://${extensionId}/options/options.html?second`;
-  await createPinnedTabs(popup, [secondUrl]);
+  await createTabs(popup, [secondUrl]);
   const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
   await popup.locator(".load-row", { hasText: "Work" })
     .getByRole("button", { name: "Save", exact: true }).click();
@@ -145,15 +155,71 @@ test("a user can update a pinned tab set without reloading", async ({ extension 
   expect(await pinnedUrls(popup, await currentWindowId(popup))).toContain(secondUrl);
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 });
+test("updating a set removes tabs that were unpinned or closed", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const removedUrls = [
+    `chrome-extension://${extensionId}/options/options.html?unpin-on-update`,
+    `chrome-extension://${extensionId}/options/options.html?close-on-update`,
+  ];
+  const retainedUrl = `chrome-extension://${extensionId}/options/options.html?retain-on-update`;
+  await createTabs(popup, [...removedUrls, retainedUrl]);
+  await saveSet(popup, "Updated");
+  await removeOrUnpinTabs(popup, removedUrls);
+
+  await popup.locator(".load-row", { hasText: "Updated" })
+    .getByRole("button", { name: "Save", exact: true }).click();
+  await expect(popup.getByRole("status")).toHaveText("Tab set saved.");
+  await removePinnedTabs(popup);
+  await popup.locator(".load-row", { hasText: "Updated" })
+    .getByRole("button", { name: "Load", exact: true }).click();
+
+  await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([retainedUrl]);
+});
+
+test("saving a set ignores unpinned tabs", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const pinnedUrl = `chrome-extension://${extensionId}/options/options.html?pinned`;
+  const unpinnedUrl = `chrome-extension://${extensionId}/options/options.html?unpinned`;
+  await createTabs(popup, [pinnedUrl]);
+  await createTabs(popup, [unpinnedUrl], false);
+  await saveSet(popup, "Pinned only");
+  await removePinnedTabs(popup);
+
+  await popup.locator(".load-row", { hasText: "Pinned only" })
+    .getByRole("button", { name: "Load", exact: true }).click();
+
+  await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([pinnedUrl]);
+  await expectOpenTabs(context, [unpinnedUrl]);
+});
+
+test("saving with no pinned tabs does not create an empty set", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await createTabs(popup, [
+    `chrome-extension://${extensionId}/options/options.html?only-unpinned`,
+  ], false);
+  await popup.getByPlaceholder("Enter a name for set...").fill("Empty");
+
+  await popup.getByRole("button", { name: "Save", exact: true }).click();
+
+  await expect(popup.getByRole("status"))
+    .toHaveText("Failed to save tab set: No pinned tabs found.");
+  await expect(popup.locator(".load-row", { hasText: "Empty" })).toHaveCount(0);
+});
+
 
 test("a user can load a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const savedUrl = `chrome-extension://${extensionId}/options/options.html?saved`;
   const unwantedUrl = `chrome-extension://${extensionId}/options/options.html?unwanted`;
-  await createPinnedTabs(popup, [savedUrl]);
+  await createTabs(popup, [savedUrl]);
   await saveSet(popup, "Work");
-  await createPinnedTabs(popup, [unwantedUrl]);
+  await createTabs(popup, [unwantedUrl]);
   const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
   await popup.locator(".load-row", { hasText: "Work" })
     .getByRole("button", { name: "Load", exact: true }).click();
@@ -171,7 +237,7 @@ test("loading a set changes only the initiating window and preserves pinned orde
     `chrome-extension://${extensionId}/options/options.html?ordered-first`,
     `chrome-extension://${extensionId}/options/options.html?ordered-second`,
   ];
-  await createPinnedTabs(popup, savedUrls);
+  await createTabs(popup, savedUrls);
   await saveSet(popup, "Ordered");
   await removePinnedTabs(popup);
   const otherUrl = `chrome-extension://${extensionId}/options/options.html?other-window`;
@@ -210,7 +276,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
     options.getByText("Successfully imported 1 tab set.", { exact: true }),
   ).toBeVisible();
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  await createPinnedTabs(popup, [originalUrl]);
+  await createTabs(popup, [originalUrl]);
 
   await popup.locator(".load-row", { hasText: "Failing" })
     .getByRole("button", { name: "Load", exact: true }).click();
@@ -222,7 +288,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
 test("a user can cancel deletion with Escape", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  await createPinnedTabs(popup, [`chrome-extension://${extensionId}/options/options.html?cancel-delete`]);
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?cancel-delete`]);
   await saveSet(popup, "Work");
   const row = popup.locator(".load-row", { hasText: "Work" });
   await row.getByRole("button", { name: "Del" }).click();
@@ -235,19 +301,30 @@ test("a user can cancel deletion with Escape", async ({ extension }) => {
 test("a user can delete a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  await createPinnedTabs(popup, [`chrome-extension://${extensionId}/options/options.html?delete`]);
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?delete`]);
   await saveSet(popup, "Work");
   const pageLoadTime = await popup.evaluate(() => performance.timeOrigin);
   await deleteSet(popup, "Work");
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 });
+test("deleting a shortcut-assigned set clears its assignment", async ({ extension }) => {
+  const { assignment, options, popup } = await createShortcutFixture(extension);
+  await popup.bringToFront();
+
+  await deleteSet(popup, "Shortcut target");
+  await options.bringToFront();
+  await options.reload();
+
+  await expect(assignment).toHaveValue("");
+});
+
 
 
 async function createShortcutFixture(extension, command = "load-set-1") {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const assignedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut`;
-  await createPinnedTabs(popup, [assignedUrl]);
+  await createTabs(popup, [assignedUrl]);
   await saveSet(popup, "Shortcut target");
   const options = await openExtensionPage(context, extensionId, "options/options.html");
   const assignment = options.locator(`[data-shortcut-command="${command}"]`);
@@ -267,7 +344,7 @@ test("an assigned command dispatches through the registered listener", async ({ 
   const { context, extensionId } = extension;
   const { assignedUrl, popup } = await createShortcutFixture(extension);
   const unwantedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut-unwanted`;
-  await createPinnedTabs(popup, [unwantedUrl]);
+  await createTabs(popup, [unwantedUrl]);
   expect(await context.serviceWorkers()[0]
     .evaluate(async () => savePinnedTabsCommandListener("load-set-1")))
     .toMatchObject({ status: "success", value: { executed: true } });
@@ -291,7 +368,7 @@ test("a pending failure blocks duplicate commands and recovers in place", async 
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const existingUrl = `chrome-extension://${extensionId}/options/options.html?existing`;
-  await createPinnedTabs(popup, [existingUrl]);
+  await createTabs(popup, [existingUrl]);
   await saveSet(popup, "Existing");
 
   await popup.evaluate(() => {
@@ -418,7 +495,7 @@ test("saved-set titles can exceed 30 characters and wrap", async ({ extension })
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const longName =
     "A very long saved tab set title that remains readable instead of being truncated";
-  await createPinnedTabs(popup, [
+  await createTabs(popup, [
     `chrome-extension://${extensionId}/options/options.html?long-title`,
   ]);
 
@@ -433,31 +510,109 @@ test("saved-set titles can exceed 30 characters and wrap", async ({ extension })
   expect(wraps).toBe(true);
 });
 
-test("a user can export and import tab sets", async ({ extension }) => {
+test("export and import preserve multiple sets, tab order, identities, and autoload", async ({
+  extension,
+}) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-
-  await createPinnedTabs(popup, [
-    `chrome-extension://${extensionId}/options/options.html?exported`,
-  ]);
-  await saveSet(popup, "Backup");
+  const firstUrls = [
+    `chrome-extension://${extensionId}/options/options.html?export-first-a`,
+    `chrome-extension://${extensionId}/options/options.html?export-first-b`,
+  ];
+  const secondUrls = [
+    `chrome-extension://${extensionId}/options/options.html?export-second-a`,
+    `chrome-extension://${extensionId}/options/options.html?export-second-b`,
+  ];
+  await createTabs(popup, firstUrls);
+  await saveSet(popup, "First backup");
+  await removePinnedTabs(popup);
+  await createTabs(popup, secondUrls);
+  await saveSet(popup, "Second backup");
+  await selectAutoloadSet(popup, "Second backup");
 
   const options = await openExtensionPage(context, extensionId, "options/options.html");
   const downloadPromise = options.waitForEvent("download");
   await options.getByRole("button", { name: "Export" }).click();
   const download = await downloadPromise;
   const exportPath = await download.path();
+  const exportedDocument = JSON.parse(await readFile(exportPath, "utf8"));
   expect(download.suggestedFilename()).toMatch(/^SavePinnedTabs_export_.*\.json$/);
+  expect(exportedDocument.version).toBe(2);
+  expect(exportedDocument.sets).toHaveLength(2);
+  const firstExport = exportedDocument.sets.find((set) => set.name === "First backup");
+  const secondExport = exportedDocument.sets.find((set) => set.name === "Second backup");
+  expect(firstExport.tabs).toEqual(firstUrls);
+  expect(secondExport.tabs).toEqual(secondUrls);
+  expect(exportedDocument.sets.map((set) => set.id)).toEqual([
+    expect.stringMatching(/^[0-9a-f-]{36}$/),
+    expect.stringMatching(/^[0-9a-f-]{36}$/),
+  ]);
+  expect(new Set(exportedDocument.sets.map((set) => set.id)).size).toBe(2);
+  expect(exportedDocument.autoload).toEqual({
+    scope: "first-window",
+    setIds: [secondExport.id],
+  });
 
-  await deleteSet(popup, "Backup");
+  await deleteSet(popup, "First backup");
+  await deleteSet(popup, "Second backup");
   await options.locator("#import-input").setInputFiles(exportPath);
   await options.getByRole("button", { name: "Import" }).click();
   await expect(
-    options.getByText("Successfully imported 1 tab set.", { exact: true }),
+    options.getByText("Successfully imported 2 tab sets.", { exact: true }),
   ).toBeVisible();
 
   await popup.reload();
-  await expect(popup.locator(".load-row", { hasText: "Backup" })).toBeVisible();
+  const firstRow = popup.locator(".load-row", { hasText: "First backup" });
+  const secondRow = popup.locator(".load-row", { hasText: "Second backup" });
+  await expect(secondRow.locator("input[name=autoload]")).toBeChecked();
+  await firstRow.getByRole("button", { name: "Load", exact: true }).click();
+  await expect.poll(
+    async () => pinnedUrls(popup, await currentWindowId(popup)),
+  ).toEqual(firstUrls);
+  await secondRow.getByRole("button", { name: "Load", exact: true }).click();
+  await expect.poll(
+    async () => pinnedUrls(popup, await currentWindowId(popup)),
+  ).toEqual(secondUrls);
+});
+
+test("identity collisions and repeated imports create independent usable sets", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const existingUrl = `chrome-extension://${extensionId}/options/options.html?collision-existing`;
+  const importedUrl = `chrome-extension://${extensionId}/options/options.html?collision-imported`;
+  await createTabs(popup, [existingUrl]);
+  await saveSet(popup, "Duplicate");
+  const existingId = await popup.evaluate(async () => {
+    const storage = await chrome.storage.sync.get("savePinnedTabs:sync");
+    return Object.keys(storage["savePinnedTabs:sync"].sets)[0];
+  });
+  const document = {
+    version: 2,
+    sets: [{ id: existingId, name: "Duplicate", tabs: [importedUrl] }],
+    autoload: { scope: "first-window", setIds: [] },
+  };
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  await importDocument(options, document, "collision.json");
+  await expect(options.getByText("Successfully imported 1 tab set.", { exact: true }))
+    .toBeVisible();
+  await importDocument(options, document, "collision-again.json");
+  await expect(options.getByText("Successfully imported 1 tab set.", { exact: true }))
+    .toBeVisible();
+
+  await popup.reload();
+  const duplicateRows = popup.locator('.load-row[data-name="Duplicate"]');
+  await expect(duplicateRows).toHaveCount(3);
+  await duplicateRows.nth(0).getByRole("button", { name: "Load", exact: true }).click();
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([existingUrl]);
+  await duplicateRows.nth(1).getByRole("button", { name: "Load", exact: true }).click();
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([importedUrl]);
+  await duplicateRows.nth(1).getByRole("button", { name: "Del" }).click();
+  await popup.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(duplicateRows).toHaveCount(2);
+  await duplicateRows.nth(1).getByRole("button", { name: "Load", exact: true }).click();
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([importedUrl]);
 });
 
 test("an imported tab-set name is rendered as text", async ({ extension }) => {
@@ -649,7 +804,7 @@ test("startup keeps an already restored pinned tab open", async ({ extension }) 
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const autoloadUrl = `chrome-extension://${extensionId}/tests/e2e/tab.html?already-restored`;
 
-  await createPinnedTabs(popup, [autoloadUrl]);
+  await createTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Already restored");
   await selectAutoloadSet(popup, "Already restored");
 
@@ -694,7 +849,7 @@ test("the startup handler restores the configured pinned tabs", async ({ extensi
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   const autoloadUrl = `chrome-extension://${extensionId}/options/options.html?startup-handler`;
 
-  await createPinnedTabs(popup, [autoloadUrl]);
+  await createTabs(popup, [autoloadUrl]);
   await saveSet(popup, "Startup handler");
   await selectAutoloadSet(popup, "Startup handler");
   await removePinnedTabs(popup);
@@ -728,7 +883,7 @@ test("an autoload selection persists across browser restart", async () => {
     const { port } = server.address();
     const autoloadUrl = `http://127.0.0.1:${port}/autoloaded`;
 
-    await createPinnedTabs(popup, [autoloadUrl]);
+    await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
     await selectAutoloadSet(popup, "Startup");
     await firstLaunch.context.close();
@@ -775,7 +930,7 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
     );
     const { port } = server.address();
     const pinnedUrl = `http://127.0.0.1:${port}/no-autoload`;
-    await createPinnedTabs(popup, [pinnedUrl]);
+    await createTabs(popup, [pinnedUrl]);
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -817,7 +972,7 @@ test("first-window autoload does not restore into a later window", async () => {
     const { port } = server.address();
     const autoloadUrl = `http://127.0.0.1:${port}/first-window`;
     const secondWindowUrl = `http://127.0.0.1:${port}/second-window`;
-    await createPinnedTabs(popup, [autoloadUrl]);
+    await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "First window");
     await selectAutoloadSet(popup, "First window");
     await removePinnedTabs(popup);
@@ -855,7 +1010,7 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
       "popup/popup.html",
     );
     const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?repeat`;
-    await createPinnedTabs(popup, [autoloadUrl]);
+    await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Repeat");
     await selectAutoloadSet(popup, "Repeat");
 
@@ -890,7 +1045,7 @@ test("cleared autoload selection is not restored after restart", async () => {
       "popup/popup.html",
     );
     const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?clear`;
-    await createPinnedTabs(popup, [autoloadUrl]);
+    await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Clear");
     await selectAutoloadSet(popup, "Clear");
     await clearAutoloadSet(popup, "Clear");
@@ -920,7 +1075,7 @@ test("deleted autoload set is not restored after restart", async () => {
       "popup/popup.html",
     );
     const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?deleted`;
-    await createPinnedTabs(popup, [autoloadUrl]);
+    await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Deleted");
     await selectAutoloadSet(popup, "Deleted");
     await deleteSet(popup, "Deleted");
