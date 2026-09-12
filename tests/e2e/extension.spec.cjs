@@ -1,19 +1,41 @@
 const http = require("node:http");
+const { execFile } = require("node:child_process");
 const { mkdtemp, rm } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { promisify } = require("node:util");
+const { chromium } = require("@playwright/test");
 const {
   expect,
+  extensionPath,
   launchExtension,
   openExtensionPage,
   test,
 } = require("./extension.fixture.cjs");
 
+
+const execFileAsync = promisify(execFile);
+
+async function installUnpackedExtension(page) {
+  await page.goto("chrome://extensions");
+  const toolbar = page.locator("extensions-toolbar");
+  await toolbar.locator("#devMode").click();
+  await toolbar.locator("#loadUnpacked").click();
+  await execFileAsync("xdotool", ["search", "--name", "Extensions - Google Chrome", "windowactivate", "--sync"], {
+    env: process.env,
+  });
+  await execFileAsync("xdotool", ["key", "--clearmodifiers", "ctrl+l"], { env: process.env });
+  await execFileAsync("xdotool", ["type", "--delay", "1", extensionPath], { env: process.env });
+  await execFileAsync("xdotool", ["key", "Return"], { env: process.env });
+  const item = page.locator("extensions-item").filter({ hasText: "Save Pinned Tabs" });
+  await expect(item).toBeVisible({ timeout: 30_000 });
+  return item.getAttribute("id");
+}
 async function createPinnedTabs(page, urls) {
   await page.evaluate(async (tabUrls) => {
-    await Promise.all(
-      tabUrls.map((url) => chrome.tabs.create({ url, pinned: true, active: false })),
-    );
+    for (const url of tabUrls) {
+      await chrome.tabs.create({ url, pinned: true, active: false });
+    }
   }, urls);
 }
 
@@ -88,6 +110,14 @@ async function expectOpenTabs(context, expectedUrls, absentUrls = []) {
     await expect.poll(() => context.pages().some((page) => page.url() === url)).toBe(false);
   }
 }
+async function importDocument(page, document, fileName = "import.json") {
+  await page.locator("#import-input").setInputFiles({
+    name: fileName,
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(document)),
+  });
+  await page.getByRole("button", { name: "Import" }).click();
+}
 
 test("a user can save a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
@@ -130,6 +160,63 @@ test("a user can load a pinned tab set without reloading", async ({ extension })
   await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
   await expectOpenTabs(context, [savedUrl], [unwantedUrl]);
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
+});
+
+test("loading a set changes only the initiating window and preserves pinned order", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const savedUrls = [
+    `chrome-extension://${extensionId}/options/options.html?ordered-first`,
+    `chrome-extension://${extensionId}/options/options.html?ordered-second`,
+  ];
+  await createPinnedTabs(popup, savedUrls);
+  await saveSet(popup, "Ordered");
+  await removePinnedTabs(popup);
+  const otherUrl = `chrome-extension://${extensionId}/options/options.html?other-window`;
+  const otherWindow = await popup.evaluate(async (url) => {
+    const window = await chrome.windows.create({ url });
+    const [tab] = await chrome.tabs.query({ windowId: window.id });
+    await chrome.tabs.update(tab.id, { pinned: true });
+    return window;
+  }, otherUrl);
+  await popup.bringToFront();
+
+  await popup.locator(".load-row", { hasText: "Ordered" })
+    .getByRole("button", { name: "Load", exact: true }).click();
+
+  await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
+  await expect.poll(
+    () => pinnedUrls(popup, otherWindow.id),
+  ).toEqual([otherUrl]);
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual(savedUrls);
+});
+
+test("a tab creation failure preserves original pinned tabs and reports the failed URL", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const originalUrl = `chrome-extension://${extensionId}/options/options.html?original`;
+  const failedUrl = "http://[invalid";
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  const failingSetId = "00000000-0000-4000-8000-000000000001";
+  await importDocument(options, {
+    version: 2,
+    sets: [{ id: failingSetId, name: "Failing", tabs: [failedUrl] }],
+    autoload: { scope: "first-window", setIds: [] },
+  }, "failing.json");
+  await expect(
+    options.getByText("Successfully imported 1 tab set.", { exact: true }),
+  ).toBeVisible();
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await createPinnedTabs(popup, [originalUrl]);
+
+  await popup.locator(".load-row", { hasText: "Failing" })
+    .getByRole("button", { name: "Load", exact: true }).click();
+
+  await expect(popup.getByRole("status")).toContainText(failedUrl);
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([originalUrl]);
 });
 
 test("a user can cancel deletion with Escape", async ({ extension }) => {
@@ -425,6 +512,134 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
 
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   await expect(popup.locator(".load-row", { hasText: "Invalid" })).toHaveCount(0);
+});
+
+test("an imported every-window set autoloads in existing and new windows", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const autoloadUrl = `chrome-extension://${extensionId}/options/options.html?every-window`;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const secondWindow = await popup.evaluate(
+    (url) => chrome.windows.create({ url }),
+    `chrome-extension://${extensionId}/options/options.html?existing-window`,
+  );
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  const everyWindowSetId = "00000000-0000-4000-8000-000000000002";
+  await importDocument(options, {
+    version: 2,
+    sets: [{ id: everyWindowSetId, name: "Every window", tabs: [autoloadUrl] }],
+    autoload: { scope: "every-window", setIds: [everyWindowSetId] },
+  }, "every-window.json");
+  await expect(
+    options.getByText("Successfully imported 1 tab set.", { exact: true }),
+  ).toBeVisible();
+  await runStartupHandler(popup);
+  const firstWindowId = await currentWindowId(popup);
+
+  await expect.poll(() => pinnedUrls(popup, firstWindowId)).toEqual([autoloadUrl]);
+  await expect.poll(() => pinnedUrls(popup, secondWindow.id)).toEqual([autoloadUrl]);
+
+  const thirdWindow = await popup.evaluate(
+    (url) => chrome.windows.create({ url }),
+    `chrome-extension://${extensionId}/options/options.html?new-window`,
+  );
+  await expect.poll(() => pinnedUrls(popup, thirdWindow.id)).toEqual([autoloadUrl]);
+});
+
+test("installed Chrome delivers runtime.onStartup without command-line extension loading", async () => {
+  test.skip(
+    process.env.CHROME_INSTALLED_PROFILE_E2E !== "1",
+    "Chrome cannot load an unpacked extension through its native directory picker in headless mode; run under Xvfb with a window manager and CHROME_INSTALLED_PROFILE_E2E=1.",
+  );
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-installed-"));
+  const executablePath = process.env.GOOGLE_CHROME_BINARY || "google-chrome-stable";
+  let firstContext;
+  let secondContext;
+
+  try {
+    firstContext = await chromium.launchPersistentContext(userDataDir, {
+      executablePath,
+      headless: false,
+      args: ["--no-first-run"],
+    });
+    const manager = firstContext.pages()[0] || await firstContext.newPage();
+    const extensionId = await installUnpackedExtension(manager);
+    const options = await openExtensionPage(
+      firstContext,
+      extensionId,
+      "options/options.html",
+    );
+    const restoredUrls = [
+      `chrome-extension://${extensionId}/options/options.html?startup-first`,
+      `chrome-extension://${extensionId}/options/options.html?startup-second`,
+    ];
+    const everyWindowSetId = "00000000-0000-4000-8000-000000000002";
+    await importDocument(options, {
+      version: 2,
+      sets: [{
+        id: everyWindowSetId,
+        name: "Every window",
+        tabs: restoredUrls,
+      }],
+      autoload: { scope: "every-window", setIds: [everyWindowSetId] },
+    }, "every-window.json");
+    await expect(
+      options.getByText("Successfully imported 1 tab set.", { exact: true }),
+    ).toBeVisible();
+    await options.evaluate(
+      (url) => chrome.windows.create({ url }),
+      `chrome-extension://${extensionId}/options/options.html?existing-window`,
+    );
+    const browserClosed = firstContext.waitForEvent("close");
+    const session = await firstContext.newCDPSession(manager);
+    await session.send("Browser.close");
+    await browserClosed;
+    firstContext = undefined;
+
+    secondContext = await chromium.launchPersistentContext(userDataDir, {
+      executablePath,
+      headless: false,
+      args: ["--no-first-run", "--restore-last-session"],
+    });
+    const reopenedPopup = await openExtensionPage(
+      secondContext,
+      extensionId,
+      "popup/popup.html",
+    );
+    const existingWindowIds = await reopenedPopup.evaluate(async () => (
+      await chrome.windows.getAll({ windowTypes: ["normal"] })
+    ).map((window) => window.id));
+    expect(existingWindowIds.length).toBeGreaterThanOrEqual(2);
+    for (const windowId of existingWindowIds) {
+      await expect.poll(() => pinnedUrls(reopenedPopup, windowId), {
+        timeout: 30_000,
+      }).toEqual(restoredUrls);
+    }
+    const newWindow = await reopenedPopup.evaluate(
+      (url) => chrome.windows.create({ url }),
+      `chrome-extension://${extensionId}/options/options.html?new-window`,
+    );
+    await expect.poll(() => pinnedUrls(reopenedPopup, newWindow.id), {
+      timeout: 30_000,
+    }).toEqual(restoredUrls);
+
+    const lifecycle = await reopenedPopup.evaluate(async () => (
+      await chrome.storage.session.get("savePinnedTabs:lifecycle")
+    )["savePinnedTabs:lifecycle"]);
+    expect(lifecycle.startupObserved).toBe(true);
+    expect(lifecycle.openNormalWindowIds).toEqual(
+      expect.arrayContaining(existingWindowIds),
+    );
+    expect(lifecycle.restoredWindowIds).toEqual(
+      expect.arrayContaining([...existingWindowIds, newWindow.id]),
+    );
+  } finally {
+    await firstContext?.close();
+    await secondContext?.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
 });
 
 
