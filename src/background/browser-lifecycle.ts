@@ -35,7 +35,7 @@ type Operation<Result> = () => Result | PromiseLike<Result>;
 interface BrowserLifecycleState {
   /** Indicates whether browser startup initialization has completed. */
   startupObserved: boolean;
-  /** Identifies the window selected for first-window autoloading. */
+  /** Remembers the first autoload target until all normal windows have closed. */
   firstWindowId: number | null;
   /** Lists known open normal browser windows. */
   openNormalWindowIds: number[];
@@ -264,7 +264,7 @@ export class BrowserLifecycle {
     }
   }
 
-  /** Removes closed-window state and deactivates its tab session. */
+  /** Deactivates a closed window and rearms first-window loading when none remain. */
   async onWindowRemoved(windowId: number): Promise<void> {
     await this.#stateStorage.runExclusive(async () => {
       const state = normalizeState(await this.#stateStorage.read());
@@ -276,6 +276,9 @@ export class BrowserLifecycle {
         state.restoredWindowIds,
         windowId,
       );
+      if (state.openNormalWindowIds.length === 0) {
+        state.firstWindowId = null;
+      }
 
       await this.#stateStorage.write(state);
       await this.#windowTabState.deactivate(windowId);
@@ -288,6 +291,7 @@ export class BrowserLifecycle {
       const state = normalizeState(await this.#stateStorage.read());
       if (state.startupObserved) return;
 
+      state.openNormalWindowIds = await this.#currentNormalWindowIds();
       await this.#windowTabState.resetSessions();
       state.startupObserved = true;
       await this.#stateStorage.write(state);
