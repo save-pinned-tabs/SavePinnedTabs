@@ -973,6 +973,10 @@ test("first-window autoload does not restore into a later window", async () => {
 test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-repeat-"));
+  const server = http.createServer((request, response) => {
+    response.end("<!doctype html><title>Repeated restart</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let launch;
 
   try {
@@ -982,7 +986,8 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
       launch.extensionId,
       "popup/popup.html",
     );
-    const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?repeat`;
+    const { port } = server.address();
+    const autoloadUrl = `http://127.0.0.1:${port}/repeat`;
     await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Repeat");
     await selectAutoloadSet(popup, "Repeat");
@@ -1001,6 +1006,9 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   } finally {
     await launch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
   }
 });
 
