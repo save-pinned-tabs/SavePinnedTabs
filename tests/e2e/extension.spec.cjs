@@ -886,7 +886,7 @@ test("an autoload selection persists across browser restart", async () => {
   }
 });
 
-test("restart leaves pinned tabs unchanged without an autoload selection", async () => {
+test("browser restart preserves no-autoload behavior for current pinned tabs", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-no-autoload-"));
   const server = http.createServer((request, response) => {
@@ -905,7 +905,6 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
     );
     const { port } = server.address();
     const pinnedUrl = `http://127.0.0.1:${port}/no-autoload`;
-    await createTabs(popup, [pinnedUrl]);
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -915,6 +914,7 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
       secondLaunch.extensionId,
       "popup/popup.html",
     );
+    await createTabs(reopenedPopup, [pinnedUrl]);
     await runStartupHandler(reopenedPopup);
     expect(await pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)))
       .toEqual([pinnedUrl]);

@@ -42,6 +42,40 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  edge:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Microsoft Edge
+        run: npx playwright install msedge
+
+      - name: Run full Edge E2E suite
+        run: npm run test:e2e
+        env:
+          CHROMIUM_CHANNEL: msedge
+
+      - name: Upload Edge failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-playwright-traces
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   firefox:
     runs-on: ubuntu-latest
     timeout-minutes: 10
