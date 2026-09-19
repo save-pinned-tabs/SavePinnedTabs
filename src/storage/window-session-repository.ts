@@ -2,14 +2,9 @@
  * Stores associations between browser windows and their active tab sets.
  */
 
-import type { BrowserStorageArea } from '../browser-api.js';
 import type { TabSetId, WindowId } from '../domain.js';
 import { errorMessage, isRecord } from '../validation.js';
-import {
-  BrowserReferenceStorage,
-  InMemoryReferenceStorage,
-  type StorageMigration,
-} from './storage-schema.js';
+import { InMemoryReferenceStorage } from './storage-schema.js';
 
 /** Maps window identifiers to their active tab set identifiers. */
 type WindowSessions = Record<string, TabSetId>;
@@ -37,30 +32,6 @@ interface WindowSessionStorage {
   runExclusive<T>(operation: () => Promise<T>): Promise<T>;
 }
 
-
-/** Skips migration when callers provide no migration strategy. */
-const DEFAULT_REFERENCE_MIGRATION: StorageMigration = {
-  ensureMigrated: async () => undefined,
-};
-
-/** Checks whether a value provides the required reference storage operations. */
-function isReferenceStorage(value: unknown): value is ReferenceStorage {
-  if (
-    (typeof value !== 'object' || value === null)
-    && typeof value !== 'function'
-  ) {
-    return false;
-  }
-
-  return (
-    'read' in value
-    && typeof value.read === 'function'
-    && 'write' in value
-    && typeof value.write === 'function'
-    && 'runExclusive' in value
-    && typeof value.runExclusive === 'function'
-  );
-}
 
 /** Checks whether a value is a mapping of windows to tab set identifiers. */
 function isWindowSessions(value: unknown): value is WindowSessions {
@@ -200,14 +171,9 @@ export class BrowserWindowSessionStorage implements WindowSessionStorage {
   #references: ReferenceStorage;
   #document: WindowSessionDocument | undefined;
 
-  /** Uses existing reference storage or adapts a browser storage area. */
-  constructor(
-    localStorageOrReferences: BrowserStorageArea | ReferenceStorage,
-    migration: StorageMigration = DEFAULT_REFERENCE_MIGRATION,
-  ) {
-    this.#references = isReferenceStorage(localStorageOrReferences)
-      ? localStorageOrReferences
-      : new BrowserReferenceStorage(localStorageOrReferences, migration);
+  /** Uses the shared reference storage supplied by the caller. */
+  constructor(references: ReferenceStorage) {
+    this.#references = references;
   }
 
   /** Runs an operation exclusively against one validated document snapshot. */
