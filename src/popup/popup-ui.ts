@@ -75,6 +75,7 @@ export function createPopupUi(document: Document): View {
   let actions: Actions;
   let isPending = false;
   let clearStatusTimer: number | undefined;
+  let returnFocusTo: HTMLElement | undefined;
 
   /** Creates a button that invokes an action when clicked. */
   function button(
@@ -86,7 +87,10 @@ export function createPopupUi(document: Document): View {
     element.type = 'button';
     element.classList.add(className);
     element.textContent = label;
-    element.addEventListener('click', action);
+    element.addEventListener('click', () => {
+      returnFocusTo = element;
+      action();
+    });
     return element;
   }
 
@@ -132,6 +136,25 @@ export function createPopupUi(document: Document): View {
       }
     }
   }
+
+  /** Wraps Tab navigation at the deletion dialog boundaries. */
+  function containDialogFocus(event: KeyboardEvent): void {
+    if (event.key !== 'Tab') return;
+    const controls = [...deleteDialog.querySelectorAll('button:not(:disabled)')];
+    const first = controls[0];
+    const last = controls.at(-1);
+    if (!(first instanceof HTMLButtonElement)
+      || !(last instanceof HTMLButtonElement)) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  deleteDialog.addEventListener('keydown', containDialogFocus);
 
   const view: View = {
     /** Connects form and row interactions to application actions. */
@@ -194,6 +217,7 @@ export function createPopupUi(document: Document): View {
 
     /** Shows a modal prompt and resolves only after it closes. */
     confirmDelete() {
+      const focusTarget = returnFocusTo;
       deleteDialog.returnValue = '';
       deleteDialog.showModal();
       return new Promise<boolean>((resolve) => {
@@ -201,6 +225,10 @@ export function createPopupUi(document: Document): View {
           'close',
           () => {
             resolve(deleteDialog.returnValue === 'delete');
+            setTimeout(() => {
+              setTimeout(() => focusTarget?.focus());
+            });
+            returnFocusTo = undefined;
           },
           { once: true },
         );

@@ -147,6 +147,52 @@ test("a user can save a pinned tab set without reloading", async ({ extension })
   await expect(popup.getByRole("status")).toBeEmpty({ timeout: 4_000 });
 });
 
+test("set names are trimmed and preserve duplicate, Unicode, RTL, and combining text", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?names`]);
+  const saveName = popup.getByPlaceholder("Enter a name for set...");
+
+  await saveName.fill("   ");
+  await popup.keyboard.press("Enter");
+  await expect(popup.getByRole("status"))
+    .toHaveText("Enter a name for the tab set.");
+
+  for (const name of ["  Trimmed  ", "日本語", "مرحبا", "Cafe\u0301", "日本語"]) {
+    await saveName.fill(name);
+    await popup.keyboard.press("Enter");
+    await expect(popup.getByRole("status")).toHaveText("Tab set saved.");
+  }
+
+  await expect(popup.locator(".load-row", { hasText: "Trimmed" })).toHaveCount(1);
+  await expect(popup.locator(".load-row", { hasText: "日本語" })).toHaveCount(2);
+  await expect(popup.locator(".load-row", { hasText: "مرحبا" })).toHaveCount(1);
+  await expect(popup.locator(".load-row", { hasText: "Cafe\u0301" })).toHaveCount(1);
+});
+
+test("keyboard focus follows the popup control order", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?keyboard`]);
+  await saveSet(popup, "Keyboard");
+  await popup.locator("#save-name").focus();
+
+  const focusOrder = [
+    popup.locator("#save-name"),
+    popup.locator("#save-button"),
+    popup.locator('.load-row[data-name="Keyboard"] input[name="autoload"]'),
+    popup.locator('.load-row[data-name="Keyboard"] .set-save'),
+    popup.locator('.load-row[data-name="Keyboard"] .set-load'),
+    popup.locator('.load-row[data-name="Keyboard"] .set-delete'),
+  ];
+  for (const control of focusOrder) {
+    await expect(control).toBeFocused();
+    await popup.keyboard.press("Tab");
+  }
+});
+
 test("a user can update a pinned tab set without reloading", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
@@ -291,17 +337,41 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
   expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([originalUrl]);
 });
 
-test("a user can cancel deletion with Escape", async ({ extension }) => {
+test("the delete dialog contains focus and returns it after cancellation", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   await createTabs(popup, [`chrome-extension://${extensionId}/options/options.html?cancel-delete`]);
   await saveSet(popup, "Work");
   const row = popup.locator(".load-row", { hasText: "Work" });
-  await row.getByRole("button", { name: "Del" }).click();
+  const opener = row.getByRole("button", { name: "Del" });
+  const cancel = popup.getByRole("button", { name: "Cancel" });
+  const confirm = popup.getByRole("button", { name: "Delete", exact: true });
+
+  await opener.click();
   await expect(popup.locator("#delete-dialog")).toBeVisible();
+  await popup.keyboard.press("Shift+Tab");
+  await expect.poll(() => popup.evaluate(
+    () => document.querySelector("#delete-dialog").contains(document.activeElement),
+  )).toBe(true);
+  await cancel.focus();
+  await expect(cancel).toBeFocused();
+  await popup.keyboard.press("Tab");
+  await expect(confirm).toBeFocused();
+  await popup.keyboard.press("Tab");
+  await expect.poll(() => popup.evaluate(
+    () => document.querySelector("#delete-dialog").contains(document.activeElement),
+  )).toBe(true);
+  await cancel.click();
+
+  await expect(popup.locator("#delete-dialog")).toBeHidden();
+  await expect(opener).toBeFocused();
+  await expect(row).toBeVisible();
+  await expect(popup.getByRole("status")).toHaveText("Deletion canceled.");
+
+  await opener.click();
   await popup.keyboard.press("Escape");
   await expect(popup.locator("#delete-dialog")).toBeHidden();
-  await expect(row).toBeVisible();
+  await expect(opener).toBeFocused();
 });
 
 test("a user can delete a pinned tab set without reloading", async ({ extension }) => {
@@ -722,6 +792,44 @@ test("a schema-invalid import is rejected", async ({ extension }) => {
   await expect(popup.locator(".load-row", { hasText: "Invalid" })).toHaveCount(0);
 });
 
+test("malformed JSON and unsupported import versions announce actionable errors", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  const status = options.getByRole("status");
+
+  await options.locator("#import-input").setInputFiles({
+    name: "malformed.json",
+    mimeType: "application/json",
+    buffer: Buffer.from("{"),
+  });
+  await options.getByRole("button", { name: "Import" }).click();
+  await expect(status).toHaveText(
+    "Malformed JSON file. Choose a valid Save Pinned Tabs export.",
+  );
+  await expect(status).toHaveAttribute("data-kind", "error");
+
+  await importDocument(options, { version: 99, sets: [] }, "future.json");
+  await expect(status).toHaveText(
+    'Failed to import tab sets: Failed to import tab set "import payload": Unsupported tab-set document version "99". Supported versions are 1 and 2',
+  );
+  await expect(status).toHaveAttribute("data-kind", "error");
+});
+
+test("keyboard focus follows the options control order", async ({ extension }) => {
+  const { context, extensionId } = extension;
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  await expect(options.locator("body")).toHaveAttribute("aria-busy", "false");
+
+  await options.keyboard.press("Tab");
+  await expect(options.locator("#export-button")).toBeFocused();
+  await options.keyboard.press("Tab");
+  await expect(options.locator("#import-input")).toBeFocused();
+  await options.keyboard.press("Tab");
+  await expect(options.locator("#import-button")).toBeFocused();
+});
+
 test("an imported every-window set autoloads in existing and new windows", async ({
   extension,
 }) => {
@@ -990,6 +1098,7 @@ test("browser restart preserves no-autoload behavior for current pinned tabs", a
     );
     const { port } = server.address();
     const pinnedUrl = `http://127.0.0.1:${port}/no-autoload`;
+
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -1152,6 +1261,47 @@ test("deleted autoload set is not restored after restart", async () => {
     await launch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
   }
+});
+
+test("popup and window operations recover after the background worker stops", async ({
+  extension,
+}) => {
+  test.slow();
+  const { context, extensionId } = extension;
+  let popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  const savedUrl = `chrome-extension://${extensionId}/options/options.html?worker-recovery`;
+  await createTabs(popup, [savedUrl]);
+  await saveSet(popup, "Worker recovery");
+  await removePinnedTabs(popup);
+  await popup.close();
+
+  const cdp = await context.newCDPSession(context.pages()[0]);
+  const { targetInfos } = await cdp.send("Target.getTargets");
+  const workerTarget = targetInfos.find(
+    (target) => target.type === "service_worker"
+      && target.url.endsWith("/background/service-worker.js"),
+  );
+  expect(workerTarget).toBeDefined();
+  await cdp.send("Target.closeTarget", { targetId: workerTarget.targetId });
+  await expect.poll(async () => {
+    const targets = await cdp.send("Target.getTargets");
+    return targets.targetInfos.some(
+      (target) => target.targetId === workerTarget.targetId,
+    );
+  }).toBe(false);
+
+  popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await expect(popup.locator(".load-row", { hasText: "Worker recovery" })).toBeVisible();
+  await popup.locator(".load-row", { hasText: "Worker recovery" })
+    .getByRole("button", { name: "Load", exact: true }).click();
+  await expect(popup.getByRole("status")).toHaveText("Tab set loaded.");
+  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([savedUrl]);
+
+  const createdWindow = await popup.evaluate(
+    (url) => chrome.windows.create({ url }),
+    `chrome-extension://${extensionId}/options/options.html?worker-window`,
+  );
+  expect(createdWindow.id).toEqual(expect.any(Number));
 });
 
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {

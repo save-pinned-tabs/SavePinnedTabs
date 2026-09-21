@@ -146,9 +146,21 @@ export async function startOptionsApp(
     import(file) {
       return runControllerCommand({
         loadingMessage: 'Importing tab sets…',
-        command: async () => controller.importSets(
-          await view.readImportDocument(file),
-        ),
+        command: async () => {
+          try {
+            return await controller.importSets(
+              await view.readImportDocument(file),
+            );
+          } catch (error: unknown) {
+            if (error instanceof SyntaxError) {
+              throw new Error(
+                'Malformed JSON file. Choose a valid Save Pinned Tabs export.',
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
         successMessage: ({ importedCount }) =>
           `Successfully imported ${importedCount} tab ${
             importedCount === 1 ? 'set' : 'sets'

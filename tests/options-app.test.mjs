@@ -63,7 +63,7 @@ test('options reports malformed files without calling the controller', async () 
   assert.equal(importCalls, 0);
   assert.deepEqual(view.events.slice(-3), [
     ['clear-import'],
-    ['status', 'error', 'Unexpected token'],
+    ['status', 'error', 'Malformed JSON file. Choose a valid Save Pinned Tabs export.'],
     ['pending', false],
   ]);
 });

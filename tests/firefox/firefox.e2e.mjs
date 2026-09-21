@@ -156,7 +156,6 @@ async function waitForPinnedUrls(expectedUrls) {
 async function saveSet(name) {
   await driver.findElement(By.id("save-name")).sendKeys(name);
   await driver.findElement(By.id("save-button")).click();
-  await waitForStatus("popup-status", "Tab set saved.");
   await driver.wait(until.elementLocated(By.css(`.load-row[data-name="${name}"]`)), 10_000);
 }
 
@@ -216,6 +215,48 @@ test("a user can save a pinned tab set without reloading", async () => {
   const pageLoadTime = await driver.executeScript("return performance.timeOrigin");
   await saveSet("Work");
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
+});
+
+test("set names are trimmed and preserve duplicate, Unicode, RTL, and combining text", async () => {
+  await openExtensionPage("popup/popup.html");
+  await createTabs([`${extensionOrigin}/options/options.html?names`]);
+  const saveName = await driver.findElement(By.id("save-name"));
+
+  await saveName.sendKeys("   ", Key.ENTER);
+  await waitForStatus("popup-status", "Enter a name for the tab set.");
+
+  for (const name of ["  Trimmed  ", "日本語", "مرحبا", "Cafe\u0301", "日本語"]) {
+    await saveName.sendKeys(name, Key.ENTER);
+    await waitForStatus("popup-status", "Tab set saved.");
+  }
+
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="Trimmed"]'))).length, 1);
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="日本語"]'))).length, 2);
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="مرحبا"]'))).length, 1);
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="Café"]'))).length, 1);
+});
+
+test("keyboard focus follows the popup control order", async () => {
+  await openExtensionPage("popup/popup.html");
+  await createTabs([`${extensionOrigin}/options/options.html?keyboard`]);
+  await saveSet("Keyboard");
+  await driver.findElement(By.id("save-name")).click();
+
+  const focusOrder = [
+    ["id", "save-name"],
+    ["id", "save-button"],
+    ["name", "autoload"],
+    ["class", "set-save"],
+    ["class", "set-load"],
+    ["class", "set-delete"],
+  ];
+  for (const [attribute, value] of focusOrder) {
+    assert.equal(
+      await driver.switchTo().activeElement().getAttribute(attribute),
+      value,
+    );
+    await driver.actions().sendKeys(Key.TAB).perform();
+  }
 });
 
 test("a user can update a pinned tab set without reloading", async () => {
@@ -350,16 +391,46 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
   assert.deepEqual(await pinnedUrls(), [originalUrl]);
 });
 
-test("a user can cancel deletion with Escape", async () => {
+test("the delete dialog contains focus and returns it after cancellation", async () => {
   await openExtensionPage("popup/popup.html");
   await createTabs([`${extensionOrigin}/options/options.html?cancel-delete`]);
   await saveSet("Work");
-  await driver.findElement(By.css('.load-row[data-name="Work"] .set-delete')).click();
+  const opener = await driver.findElement(By.css('.load-row[data-name="Work"] .set-delete'));
+  await opener.click();
   const dialog = await driver.findElement(By.id("delete-dialog"));
+  const cancel = await driver.findElement(By.css('#delete-dialog button[value="cancel"]'));
   await driver.wait(until.elementIsVisible(dialog), 10_000);
+  assert.equal(
+    await driver.switchTo().activeElement().getAttribute("value"),
+    "cancel",
+  );
+
+  await driver.actions().sendKeys(Key.TAB).perform();
+  assert.equal(
+    await driver.switchTo().activeElement().getAttribute("value"),
+    "delete",
+  );
+  await driver.actions().sendKeys(Key.TAB).perform();
+  assert.equal(
+    await driver.executeScript(
+      'return document.querySelector("#delete-dialog").contains(document.activeElement);',
+    ),
+    true,
+  );
+  await cancel.click();
+
+  await driver.wait(until.elementIsNotVisible(dialog), 10_000);
+  await driver.wait(async () => (
+    await driver.switchTo().activeElement().getAttribute("class")
+  ) === "set-delete", 10_000, "delete opener to regain focus");
+  await waitForStatus("popup-status", "Deletion canceled.");
+
+  await opener.click();
   await driver.actions().sendKeys(Key.ESCAPE).perform();
   await driver.wait(until.elementIsNotVisible(dialog), 10_000);
-  assert.ok(await driver.findElement(By.css('.load-row[data-name="Work"]')));
+  await driver.wait(async () => (
+    await driver.switchTo().activeElement().getAttribute("class")
+  ) === "set-delete", 10_000, "delete opener to regain focus");
 });
 
 test("a user can delete a pinned tab set without reloading", async () => {
@@ -627,6 +698,42 @@ test("a schema-invalid import is rejected", async () => {
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Invalid"]'))).length, 0);
 });
 
+test("malformed JSON and unsupported import versions announce actionable errors", async () => {
+  await openExtensionPage("options/options.html");
+  const malformedPath = path.join(temporaryDirectory, "malformed.json");
+  await writeFile(malformedPath, "{");
+  await driver.findElement(By.id("import-input")).sendKeys(malformedPath);
+  await driver.findElement(By.id("import-button")).click();
+  await waitForStatus(
+    "options-status",
+    "Malformed JSON file. Choose a valid Save Pinned Tabs export.",
+  );
+  assert.equal(
+    await driver.findElement(By.id("options-status")).getAttribute("data-kind"),
+    "error",
+  );
+
+  await importDocument({ version: 99, sets: [] }, "future.json");
+  await waitForStatus(
+    "options-status",
+    'Failed to import tab sets: Failed to import tab set "import payload": Unsupported tab-set document version "99". Supported versions are 1 and 2',
+  );
+  assert.equal(
+    await driver.findElement(By.id("options-status")).getAttribute("data-kind"),
+    "error",
+  );
+});
+
+test("keyboard focus follows the options control order", async () => {
+  await openExtensionPage("options/options.html");
+  await driver.actions().sendKeys(Key.TAB).perform();
+  assert.equal(await driver.switchTo().activeElement().getAttribute("id"), "export-button");
+  await driver.actions().sendKeys(Key.TAB).perform();
+  assert.equal(await driver.switchTo().activeElement().getAttribute("id"), "import-input");
+  await driver.actions().sendKeys(Key.TAB).perform();
+  assert.equal(await driver.switchTo().activeElement().getAttribute("id"), "import-button");
+});
+
 test("an imported every-window set autoloads in existing and new windows", async () => {
   await openExtensionPage("popup/popup.html");
   await driver.executeAsyncScript((url, done) => {
@@ -798,6 +905,27 @@ test("deleted autoload set is not restored after restart", async () => {
   await openExtensionPage("popup/popup.html");
 
   assert.equal((await pinnedUrls()).includes(url), false);
+});
+
+test("popup, set loading, and window creation recover after browser restart", async () => {
+  await openExtensionPage("popup/popup.html");
+  const savedUrl = `${extensionOrigin}/options/options.html?restart-recovery`;
+  await createTabs([savedUrl]);
+  await saveSet("Restart recovery");
+  await removePinnedTabs();
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  await driver.findElement(
+    By.css('.load-row[data-name="Restart recovery"] .set-load'),
+  ).click();
+  await waitForStatus("popup-status", "Tab set loaded.");
+  await waitForPinnedUrls([savedUrl]);
+
+  const windowId = await driver.executeAsyncScript((url, done) => {
+    browser.windows.create({ url }).then((window) => done(window.id));
+  }, `${extensionOrigin}/options/options.html?restart-window`);
+  assert.equal(typeof windowId, "number");
 });
 
 test("environment: Firefox enforces quotas without losing the readable generation", async () => {
