@@ -32,7 +32,7 @@ jobs:
 
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out source
@@ -52,6 +52,9 @@ jobs:
 
       - name: Run extension smoke tests
         run: npm run test:e2e
+
+      - name: Run Chromium environment recovery tests
+        run: npm run test:e2e:environment:chromium
 
       - name: Upload failure traces
         if: failure()
@@ -136,7 +139,7 @@ jobs:
 
   firefox:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
@@ -157,7 +160,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Firefox extension smoke test
+      - name: Run Firefox extension smoke tests
         run: npm run test:e2e:firefox
+        env:
+          FIREFOX_BINARY: ${{ steps.setup-firefox.outputs.firefox-path }}
+
+      - name: Run Firefox environment recovery tests
+        run: npm run test:e2e:environment:firefox
         env:
           FIREFOX_BINARY: ${{ steps.setup-firefox.outputs.firefox-path }}

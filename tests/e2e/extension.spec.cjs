@@ -1076,3 +1076,74 @@ test("deleted autoload set is not restored after restart", async () => {
   }
 });
 
+test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-quota-"));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const legacySets = Array.from({ length: 4 }, (_, index) => {
+      const name = `Legacy ${index} 日本語`;
+      return {
+        key: Buffer.from(name).toString("base64"),
+        name,
+        tabs: Array.from(
+          { length: 30 },
+          (_, tabIndex) => `chrome-extension://${launch.extensionId}/options/options.html?${index}-${tabIndex}-${"路".repeat(12)}`,
+        ),
+      };
+    });
+    const seededBytes = await popup.evaluate(async (sets) => {
+      const sync = await chrome.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      const entries = Object.fromEntries(sets.map((set) => [
+        set.key,
+        { autoload: 0, set_name: set.name, tabs: set.tabs },
+      ]));
+      await chrome.storage.sync.set(entries);
+      await chrome.storage.sync.remove([
+        "savePinnedTabs:index",
+        ...(index?.chunks ?? []),
+      ]);
+      return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+    }, legacySets);
+    expect(seededBytes).toBeGreaterThan(8_192);
+
+    launch = await restartExtension(launch, userDataDir);
+    popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    for (const set of legacySets) {
+      const row = popup.locator(`.load-row[data-name="${set.name}"]`);
+      await expect(row).toBeVisible();
+      await row.getByRole("button", { name: "Load", exact: true }).click();
+      await expect.poll(
+        async () => pinnedUrls(popup, await currentWindowId(popup)),
+      ).toEqual(set.tabs.map((url) => new URL(url).href));
+    }
+
+    const storageShape = await popup.evaluate(async () => {
+      const sync = await chrome.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      return {
+        chunkCount: index.chunks.length,
+        chunkBytes: index.chunks.map((key) => new TextEncoder()
+          .encode(JSON.stringify(sync[key])).byteLength),
+      };
+    });
+    expect(storageShape.chunkCount).toBeGreaterThan(1);
+    expect(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024)).toBe(true);
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
