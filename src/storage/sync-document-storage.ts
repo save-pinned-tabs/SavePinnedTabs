@@ -108,7 +108,7 @@ export class SyncDocumentStorage {
   }
 
   /** Writes and verifies a generation before atomically switching the index. */
-  async write(document: SyncDocument): Promise<void> {
+  async save(document: SyncDocument): Promise<void> {
     const previousRecord = await this.storage.get(SYNC_INDEX_KEY);
     const previous = isSyncIndex(previousRecord[SYNC_INDEX_KEY])
       ? previousRecord[SYNC_INDEX_KEY]

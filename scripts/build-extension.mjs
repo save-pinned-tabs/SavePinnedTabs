@@ -65,7 +65,12 @@ try {
 
   const webExt = path.join(projectRoot, "node_modules/web-ext/bin/web-ext.js");
   if (target === "firefox") {
-    await run(webExt, ["lint", "--source-dir", stagingDirectory]);
+    await run(webExt, [
+      "lint",
+      "--source-dir",
+      stagingDirectory,
+      "--warnings-as-errors",
+    ]);
   }
   await run(webExt, [
     "build",

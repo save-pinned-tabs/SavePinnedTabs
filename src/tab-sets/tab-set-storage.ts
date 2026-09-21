@@ -172,7 +172,7 @@ export class BrowserTabSetStorage {
 
   /** Writes an independent copy of the complete synchronized document. */
   async #write(document: SyncDocument): Promise<void> {
-    await this.#documents.write(document);
+    await this.#documents.save(document);
   }
 }
 
