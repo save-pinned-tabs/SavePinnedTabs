@@ -61,6 +61,8 @@ nix develop -c npm test
 Chromium and Firefox end-to-end suites must cover the same observable behaviors and browser edge cases.
 Use one focused test for each behavior. Keep corresponding scenario names and assertions aligned across both suites.
 
+Chromium exercises Manifest V3 worker suspension directly because Playwright exposes its service-worker target. Firefox's WebDriver surface does not expose a supported way to suspend the extension background worker, so Firefox covers the equivalent browser-restart boundary instead. Headless Playwright and WebDriver send key events to the page renderer rather than the browser chrome, so extension command accelerators do not fire; both suites retain a command-listener boundary test. Verify configured shortcuts manually in a headed, installed-browser profile.
+
 ## Modify Sets Schema
 
 After you modify the sets schema, update `schema/sets.json`. Then regenerate the validation script:
