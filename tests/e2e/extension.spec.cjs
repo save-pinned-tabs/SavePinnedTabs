@@ -916,8 +916,9 @@ test("browser restart preserves no-autoload behavior for current pinned tabs", a
     );
     await createTabs(reopenedPopup, [pinnedUrl]);
     await runStartupHandler(reopenedPopup);
-    expect(await pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)))
-      .toEqual([pinnedUrl]);
+    await expect.poll(
+      async () => pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)),
+    ).toEqual([pinnedUrl]);
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
