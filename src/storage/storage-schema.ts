@@ -10,6 +10,10 @@ import type {
 } from '../domain.js';
 import { isRecord, isStringArray } from '../validation.js';
 import { createSerializedStorageOperation } from './serialized-operation.js';
+import {
+  SYNC_INDEX_KEY,
+  SyncDocumentStorage,
+} from './sync-document-storage.js';
 
 /** Identifies the current persisted document format. */
 export const STORAGE_SCHEMA_VERSION = 2;
@@ -279,12 +283,13 @@ function matchesLegacyIdentity(key: string, name: string): boolean {
   }
 }
 
-/** Extracts well-formed legacy tab sets while excluding the current document. */
+/** Extracts well-formed legacy tab sets while excluding current storage records. */
 function legacySetEntries(stored: StorageRecord): Array<[string, LegacySet]> {
   return Object.entries(stored).filter(
     (entry): entry is [string, LegacySet] => {
       const [key, value] = entry;
       return key !== SYNC_DOCUMENT_KEY
+        && key !== SYNC_INDEX_KEY
         && isRecord(value)
         && typeof value['set_name'] === 'string'
         && matchesLegacyIdentity(key, value['set_name'])
@@ -304,29 +309,78 @@ function uniqueId(usedIds: Set<string>, createId: () => string): string {
   return id;
 }
 
-/** Converts legacy synchronized entries into a current document. */
-function createMigratedSyncDocument(
+/** Chooses a deterministic display name without treating names as identity. */
+function recoveredName(
+  requested: string,
+  sets: Record<string, TabSet>,
+): string {
+  const names = new Set(Object.values(sets).map(({ name }) => name));
+  if (!names.has(requested)) return requested;
+  let suffix = 2;
+  while (names.has(`${requested} (${suffix})`)) suffix += 1;
+  return `${requested} (${suffix})`;
+}
+
+/** Recovers the deterministic union of valid current and legacy sources. */
+function recoverSyncDocument(
+  active: SyncDocument | null,
+  versionTwo: SyncDocument | null,
   stored: StorageRecord,
   createId: () => string,
 ): SyncDocument {
-  const document = emptySyncDocument();
-  const legacyIds: Record<string, string> = {};
-  const usedIds = new Set<string>();
+  const document = active
+    ? structuredClone(active)
+    : versionTwo
+      ? structuredClone(versionTwo)
+      : emptySyncDocument();
+  const usedIds = new Set([
+    ...Object.keys(document.sets),
+    ...document.deletedSetIds,
+  ]);
+  const legacyIds = {
+    ...(versionTwo?.migration?.legacyIds ?? {}),
+    ...(active?.migration?.legacyIds ?? {}),
+  };
+
+  if (active && versionTwo) {
+    for (const [id, set] of Object.entries(versionTwo.sets)) {
+      if (!(id in document.sets) && !usedIds.has(id)) {
+        document.sets[id] = structuredClone(set);
+        usedIds.add(id);
+      }
+    }
+  }
 
   for (const [legacyId, legacySet] of legacySetEntries(stored)) {
-    const id = uniqueId(usedIds, createId);
+    const mappedId = legacyIds[legacyId];
+    const mappedSet = mappedId ? document.sets[mappedId] : undefined;
+    const isExactMigratedCopy = mappedSet
+      && mappedSet.name === legacySet.set_name
+      && JSON.stringify(mappedSet.tabs) === JSON.stringify(legacySet.tabs);
+    if (isExactMigratedCopy) continue;
+
+    const id = mappedId && !usedIds.has(mappedId)
+      ? mappedId
+      : uniqueId(usedIds, createId);
+    usedIds.add(id);
     legacyIds[legacyId] = id;
     document.sets[id] = {
       id,
-      name: legacySet.set_name,
+      name: recoveredName(legacySet.set_name, document.sets),
       tabs: [...legacySet.tabs],
     };
-    if (legacySet.autoload === 1) document.autoload.setIds.push(id);
+    if (
+      legacySet.autoload === 1
+      && document.autoload.setIds.length === 0
+    ) {
+      document.autoload.setIds = [id];
+    }
   }
 
   if (Object.keys(legacyIds).length > 0) {
     document.migration = { legacyIds };
   }
+  normalizeAutoload(document);
   return document;
 }
 
@@ -473,25 +527,44 @@ export class BrowserStorageMigration implements StorageMigration {
     return migration;
   }
 
-  /** Migrates documents, cleans references, and removes legacy storage entries. */
+  /** Recovers every valid source, commits a verified generation, then cleans up. */
   async #migrate(): Promise<void> {
     const [storedSync, storedLocal] = await Promise.all([
       this.#syncStorage.get(null),
       this.#localStorage.get(null),
     ]);
-
-    const storedSyncDocument = storedSync[SYNC_DOCUMENT_KEY];
-    let syncDocument: SyncDocument;
-    let syncChanged = false;
-    if (storedSyncDocument === undefined) {
-      syncDocument = createMigratedSyncDocument(storedSync, this.#createId);
-      await this.#syncStorage.set({ [SYNC_DOCUMENT_KEY]: syncDocument });
-      syncChanged = true;
-    } else {
-      syncDocument = parseSyncDocument(storedSyncDocument);
-      syncChanged =
-        JSON.stringify(syncDocument) !== JSON.stringify(storedSyncDocument);
+    const documents = new SyncDocumentStorage(this.#syncStorage);
+    let active: SyncDocument | null = null;
+    try {
+      active = await documents.read();
+    } catch {
+      // An invalid or incomplete generation is not allowed to hide old sources.
     }
+
+    let versionTwo: SyncDocument | null = null;
+    if (storedSync[SYNC_DOCUMENT_KEY] !== undefined) {
+      try {
+        versionTwo = parseSyncDocument(storedSync[SYNC_DOCUMENT_KEY]);
+      } catch {
+        // Invalid version-two data is independent from other recovery sources.
+      }
+    }
+    const legacyEntries = legacySetEntries(storedSync);
+    const hasRecoverySources = versionTwo !== null || legacyEntries.length > 0;
+
+    if (!active && !hasRecoverySources) {
+      const hasInvalidSource = SYNC_INDEX_KEY in storedSync
+        || SYNC_DOCUMENT_KEY in storedSync;
+      if (hasInvalidSource) {
+        throw new Error('No valid synchronized storage source is available');
+      }
+    }
+    const syncDocument = recoverSyncDocument(
+      active,
+      versionTwo,
+      storedSync,
+      this.#createId,
+    );
 
     const storedLocalDocument = storedLocal[LOCAL_DOCUMENT_KEY];
     let localDocument: StoredLocalDocument;
@@ -511,23 +584,22 @@ export class BrowserStorageMigration implements StorageMigration {
         JSON.stringify(localDocument) !== JSON.stringify(storedLocalDocument);
     }
 
+    if (!active || hasRecoverySources) await documents.write(syncDocument);
+    await documents.read();
+
     if (localChanged) {
       await this.#localStorage.set({
         [LOCAL_DOCUMENT_KEY]: localDocument,
       });
     }
 
-    const legacySetKeys = legacySetEntries(storedSync).map(([key]) => key);
-    if (syncDocument.migration) {
-      delete syncDocument.migration;
-      syncChanged = true;
-    }
-    if (syncChanged) {
-      await this.#syncStorage.set({ [SYNC_DOCUMENT_KEY]: syncDocument });
-    }
-
     await Promise.all([
-      removeKeys(this.#syncStorage, legacySetKeys),
+      removeKeys(
+        this.#syncStorage,
+        legacyEntries.map(([key]) => key).concat(
+          versionTwo ? [SYNC_DOCUMENT_KEY] : [],
+        ),
+      ),
       removeKeys(
         this.#localStorage,
         [LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]

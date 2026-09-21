@@ -424,30 +424,29 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const lateLegacyKey = Buffer.from("Late Legacy").toString("base64");
   await openStorageFixturePage();
   const schemaExists = await driver.executeAsyncScript((setKey, done) => {
-    const waitForSchema = () => browser.storage.sync.get(null).then((sync) =>
-      "savePinnedTabs:sync" in sync
-        ? undefined
-        : new Promise((resolve) => setTimeout(resolve, 10)).then(waitForSchema)
-    );
-    waitForSchema()
-      .then(() => Promise.all([
-        browser.storage.sync.set({
-          [setKey]: {
-            autoload: 1,
-            set_name: "Legacy Work",
-            tabs: ["https://example.com/legacy"],
-          },
-        }),
-        browser.storage.local.set({
-          activeTabs: { 1: setKey },
-        }),
-      ]))
-      .then(() => Promise.all([
-        browser.storage.sync.remove("savePinnedTabs:sync"),
+    (async () => {
+      let sync = await browser.storage.sync.get(null);
+      while (!("savePinnedTabs:index" in sync)) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        sync = await browser.storage.sync.get(null);
+      }
+      const oldChunks = sync["savePinnedTabs:index"].chunks;
+      await browser.storage.sync.set({
+        [setKey]: {
+          autoload: 1,
+          set_name: "Legacy Work",
+          tabs: ["https://example.com/legacy"],
+        },
+      });
+      await browser.storage.local.set({
+        activeTabs: { 1: setKey },
+      });
+      await Promise.all([
+        browser.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]),
         browser.storage.local.remove("savePinnedTabs:local"),
-      ]))
-      .then(() => browser.storage.sync.get(null))
-      .then((sync) => done("savePinnedTabs:sync" in sync));
+      ]);
+      done("savePinnedTabs:index" in await browser.storage.sync.get(null));
+    })().catch((error) => done({ error: String(error) }));
   }, legacyKey);
   assert.equal(schemaExists, false);
   await restartFirefox();
@@ -456,11 +455,13 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const migrated = await driver.executeAsyncScript((setKey, done) => {
     Promise.all([browser.storage.sync.get(null), browser.storage.local.get(null)])
       .then(([sync, local]) => {
-        const setId = Object.keys(sync["savePinnedTabs:sync"].sets)[0];
+        const index = sync["savePinnedTabs:index"];
+        const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+        const setId = Object.keys(document.sets)[0];
         done({
           legacyRemoved: !(setKey in sync),
-          set: sync["savePinnedTabs:sync"].sets[setId],
-          autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
+          set: document.sets[setId],
+          autoloadSetIds: document.autoload.setIds,
         });
       });
   }, legacyKey);
@@ -478,7 +479,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
   }, lateLegacyKey);
   await restartFirefox();
   await openExtensionPage("popup/popup.html");
-  assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 0);
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 1);
 });
 
 test("saved-set titles can exceed 30 characters and wrap", async () => {
@@ -563,8 +564,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs([existingUrl]);
   await saveSet("Duplicate");
   const existingId = await driver.executeAsyncScript((done) => {
-    browser.storage.sync.get("savePinnedTabs:sync").then((storage) => {
-      done(Object.keys(storage["savePinnedTabs:sync"].sets)[0]);
+    browser.storage.sync.get(null).then((storage) => {
+      const index = storage["savePinnedTabs:index"];
+      const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+      done(Object.keys(document.sets)[0]);
     });
   });
   const document = {

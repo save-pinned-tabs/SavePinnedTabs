@@ -368,9 +368,12 @@ test("a legacy profile migrates sets and references exactly once across restarts
     firstLaunch = await launchExtension(userDataDir);
     expect(await firstLaunch.context.serviceWorkers()[0].evaluate(
       async ({ legacyKey }) => {
-        while (!("savePinnedTabs:sync" in await chrome.storage.sync.get(null))) {
+        let sync = await chrome.storage.sync.get(null);
+        while (!("savePinnedTabs:index" in sync)) {
           await new Promise((resolve) => setTimeout(resolve, 10));
+          sync = await chrome.storage.sync.get(null);
         }
+        const oldChunks = sync["savePinnedTabs:index"].chunks;
         await chrome.storage.sync.set({
           [legacyKey]: {
             autoload: 1,
@@ -381,9 +384,9 @@ test("a legacy profile migrates sets and references exactly once across restarts
         await chrome.storage.local.set({
           activeTabs: { 1: legacyKey },
         });
-        await chrome.storage.sync.remove("savePinnedTabs:sync");
+        await chrome.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]);
         await chrome.storage.local.remove("savePinnedTabs:local");
-        return "savePinnedTabs:sync" in await chrome.storage.sync.get(null);
+        return "savePinnedTabs:index" in await chrome.storage.sync.get(null);
       },
       { legacyKey },
     )).toBe(false);
@@ -400,11 +403,13 @@ test("a legacy profile migrates sets and references exactly once across restarts
     const migrated = await popup.evaluate(async ({ legacyKey }) => {
       const sync = await chrome.storage.sync.get(null);
       const local = await chrome.storage.local.get(null);
-      const setId = Object.keys(sync["savePinnedTabs:sync"].sets)[0];
+      const index = sync["savePinnedTabs:index"];
+      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      const setId = Object.keys(document.sets)[0];
       return {
         legacyRemoved: !(legacyKey in sync),
-        set: sync["savePinnedTabs:sync"].sets[setId],
-        autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
+        set: document.sets[setId],
+        autoloadSetIds: document.autoload.setIds,
       };
     }, { legacyKey });
     expect(migrated.legacyRemoved).toBe(true);
@@ -435,7 +440,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
     await expect(restartedPopup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     await expect(
       restartedPopup.locator(".load-row", { hasText: "Late Legacy" }),
-    ).toHaveCount(0);
+    ).toBeVisible();
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
@@ -538,8 +543,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs(popup, [existingUrl]);
   await saveSet(popup, "Duplicate");
   const existingId = await popup.evaluate(async () => {
-    const storage = await chrome.storage.sync.get("savePinnedTabs:sync");
-    return Object.keys(storage["savePinnedTabs:sync"].sets)[0];
+    const storage = await chrome.storage.sync.get(null);
+    const index = storage["savePinnedTabs:index"];
+    const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+    return Object.keys(document.sets)[0];
   });
   const document = {
     version: 2,
