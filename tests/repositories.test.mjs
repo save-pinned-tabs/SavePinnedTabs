@@ -15,6 +15,10 @@ import {
   SYNC_DOCUMENT_KEY,
 } from '../.extension-build/storage/storage-schema.js';
 import {
+  SYNC_CHUNK_PAYLOAD_BYTES,
+  SYNC_INDEX_KEY,
+} from '../.extension-build/storage/sync-document-storage.js';
+import {
   BrowserWindowSessionStorage,
   InMemoryWindowSessionStorage,
   WindowSessionRepository,
@@ -44,16 +48,24 @@ function createStorageArea(initialState = {}, failSetAt = null) {
     },
     async set(values) {
       setCalls += 1;
-      if (setCalls === failingSetCall) throw new Error('injected storage interruption');
+      if (setCalls === failingSetCall) {
+        throw this.failure ?? new Error('injected storage interruption');
+      }
       Object.assign(state, structuredClone(values));
     },
     async remove(keys) {
       for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key];
     },
-    failNextSet() {
+    failNextSet(error = new Error('injected storage interruption')) {
+      this.failure = error;
       failingSetCall = setCalls + 1;
     },
   };
+}
+
+function activeSyncDocument(storage) {
+  const index = storage.state[SYNC_INDEX_KEY];
+  return JSON.parse(index.chunks.map((key) => storage.state[key]).join(''));
 }
 
 function isValidImport(document) {
@@ -140,14 +152,12 @@ test('current schema documents recover missing optional fields', async () => {
   });
 
   assert.deepEqual(await harness.tabSets.list(), [savedSet]);
+  const migrated = activeSyncDocument(harness.syncStorage);
   assert.deepEqual(
-    harness.syncStorage.state[SYNC_DOCUMENT_KEY].autoload,
+    migrated.autoload,
     { scope: 'first-window', setIds: [] },
   );
-  assert.deepEqual(
-    harness.syncStorage.state[SYNC_DOCUMENT_KEY].deletedSetIds,
-    [],
-  );
+  assert.deepEqual(migrated.deletedSetIds, []);
 });
 
 for (const [name, createHarness] of [
@@ -252,12 +262,10 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
-  assert.deepEqual(
-    Object.keys(harness.syncStorage.state).sort(),
-    [SYNC_DOCUMENT_KEY, 'unrelated', 'unrelatedSetShape'],
-  );
+  assert.equal(Object.keys(activeSyncDocument(harness.syncStorage).migration.legacyIds).length, 3);
+  assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
   assert.deepEqual(Object.keys(harness.localStorage.state).sort(), [LOCAL_DOCUMENT_KEY, 'unrelated']);
-  assert.equal(harness.syncStorage.state[SYNC_DOCUMENT_KEY].migration, undefined);
+  assert.equal(SYNC_DOCUMENT_KEY in harness.syncStorage.state, false);
 
   const ids = sets.map((set) => set.id);
   assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), ids);
@@ -334,11 +342,91 @@ test('interrupted migration resumes idempotently from its persisted identity map
   const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId: idGenerator() });
 
   await assert.rejects(migration.ensureMigrated(), /injected storage interruption/);
-  const stagedId = Object.keys(syncStorage.state[SYNC_DOCUMENT_KEY].sets)[0];
+  assert.equal('TGVnYWN5' in syncStorage.state, true);
   await migration.ensureMigrated();
 
+  const migrated = activeSyncDocument(syncStorage);
+  const stagedId = Object.keys(migrated.sets)[0];
   assert.equal(localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7], stagedId);
-  assert.equal(syncStorage.state[SYNC_DOCUMENT_KEY].migration, undefined);
+  assert.equal(migrated.migration.legacyIds.TGVnYWN5, stagedId);
   assert.equal('TGVnYWN5' in syncStorage.state, false);
   assert.equal('activeTabs' in localStorage.state, false);
+});
+
+test('large UTF-8 documents use bounded chunks and remain readable', async () => {
+  const harness = createBrowserHarness();
+  const tabs = Array.from(
+    { length: 120 },
+    (_, index) => `https://例え.example/${index}/🚀/${'路'.repeat(20)}`,
+  );
+
+  const saved = await harness.tabSets.save({
+    name: `日本語 ${'界'.repeat(100)}`,
+    tabs,
+  });
+
+  assert.deepEqual(await harness.tabSets.get(saved.id), saved);
+  const index = harness.syncStorage.state[SYNC_INDEX_KEY];
+  assert.ok(index.chunks.length > 1);
+  for (const key of index.chunks) {
+    assert.ok(
+      new TextEncoder().encode(
+        JSON.stringify(harness.syncStorage.state[key]),
+      ).byteLength <= SYNC_CHUNK_PAYLOAD_BYTES,
+    );
+  }
+});
+
+test('mixed version-two and late legacy records recover their union', async () => {
+  const existing = {
+    id: FIRST_ID,
+    name: 'Existing',
+    tabs: ['https://existing.example/'],
+  };
+  const harness = createBrowserHarness({
+    sync: {
+      [SYNC_DOCUMENT_KEY]: {
+        version: 2,
+        sets: { [FIRST_ID]: existing },
+        autoload: { scope: 'every-window', setIds: [FIRST_ID] },
+        deletedSetIds: [],
+      },
+      'RXhpc3Rpbmc=': {
+        set_name: 'Existing',
+        tabs: ['https://late.example/'],
+        autoload: 0,
+      },
+    },
+  });
+
+  assert.deepEqual(
+    (await harness.tabSets.list()).map(({ name }) => name),
+    ['Existing', 'Existing (2)'],
+  );
+  assert.equal(SYNC_DOCUMENT_KEY in harness.syncStorage.state, false);
+  assert.equal('RXhpc3Rpbmc=' in harness.syncStorage.state, false);
+});
+
+test('failed import preserves the active generation and reports total quota', async () => {
+  const harness = createBrowserHarness();
+  await harness.tabSets.save({ name: 'Before', tabs: ['https://before.example/'] });
+  const previousIndex = structuredClone(harness.syncStorage.state[SYNC_INDEX_KEY]);
+  harness.syncStorage.failNextSet(
+    new Error('QUOTA_BYTES quota exceeded: total synchronized storage'),
+  );
+
+  await assert.rejects(
+    harness.tabSets.import({
+      version: 2,
+      sets: [{ id: SECOND_ID, name: 'After', tabs: ['https://after.example/'] }],
+      autoload: { scope: 'first-window', setIds: [] },
+    }),
+    /Synchronized storage is full/,
+  );
+
+  assert.deepEqual(harness.syncStorage.state[SYNC_INDEX_KEY], previousIndex);
+  assert.deepEqual(
+    (await harness.tabSets.list()).map(({ name }) => name),
+    ['Before'],
+  );
 });

@@ -3,12 +3,11 @@
 import type { BrowserStorageArea } from '../browser-api.js';
 import type { AutoloadConfiguration, TabSet } from '../domain.js';
 import {
-  SYNC_DOCUMENT_KEY,
   emptySyncDocument,
-  parseSyncDocument,
   type StorageMigration,
   type SyncDocument,
 } from '../storage/storage-schema.js';
+import { SyncDocumentStorage } from '../storage/sync-document-storage.js';
 import {
   createSerializedOperation,
   createSerializedStorageOperation,
@@ -32,8 +31,8 @@ const NOOP_MIGRATION: StorageMigration = {
 
 /** Persists tab sets and autoload settings in browser synchronization storage. */
 export class BrowserTabSetStorage {
-  #storage: BrowserStorageArea;
   #migration: StorageMigration;
+  #documents: SyncDocumentStorage;
   #runExclusive: ReturnType<typeof createSerializedStorageOperation>;
 
   /** Creates a store that coordinates access through a shared storage lock. */
@@ -41,8 +40,8 @@ export class BrowserTabSetStorage {
     syncStorage: BrowserStorageArea,
     migration: StorageMigration = NOOP_MIGRATION,
   ) {
-    this.#storage = syncStorage;
     this.#migration = migration;
+    this.#documents = new SyncDocumentStorage(syncStorage);
     this.#runExclusive = createSerializedStorageOperation(
       syncStorage,
       TAB_SET_LOCK,
@@ -163,9 +162,9 @@ export class BrowserTabSetStorage {
   async #read(): Promise<SyncDocument> {
     await this.#migration.ensureMigrated();
 
-    const stored = await this.#storage.get(SYNC_DOCUMENT_KEY);
     try {
-      return parseSyncDocument(stored[SYNC_DOCUMENT_KEY]);
+      const document = await this.#documents.read();
+      return document ?? emptySyncDocument();
     } catch (cause: unknown) {
       throw new TypeError('Stored tab set document is invalid', { cause });
     }
@@ -173,9 +172,7 @@ export class BrowserTabSetStorage {
 
   /** Writes an independent copy of the complete synchronized document. */
   async #write(document: SyncDocument): Promise<void> {
-    await this.#storage.set({
-      [SYNC_DOCUMENT_KEY]: structuredClone(document),
-    });
+    await this.#documents.write(document);
   }
 }
 
