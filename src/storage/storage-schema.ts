@@ -584,7 +584,7 @@ export class BrowserStorageMigration implements StorageMigration {
         JSON.stringify(localDocument) !== JSON.stringify(storedLocalDocument);
     }
 
-    if (!active || hasRecoverySources) await documents.write(syncDocument);
+    if (!active || hasRecoverySources) await documents.save(syncDocument);
     await documents.read();
 
     if (localChanged) {
