@@ -445,68 +445,6 @@ test("a user can delete a pinned tab set without reloading", async () => {
   await driver.wait(until.stalenessOf(row), 10_000);
   assert.equal(await driver.executeScript("return performance.timeOrigin"), pageLoadTime);
 });
-test("deleting a shortcut-assigned set clears its assignment", async () => {
-  await createShortcutFixture();
-  await openExtensionPage("popup/popup.html");
-  await deleteSet("Shortcut target");
-  await openExtensionPage("options/options.html");
-
-  assert.equal(
-    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
-      .getAttribute("value"),
-    "",
-  );
-});
-
-
-
-async function createShortcutFixture() {
-  await openExtensionPage("popup/popup.html");
-  const assignedUrl = `${extensionOrigin}/options/options.html?shortcut`;
-  await createTabs([assignedUrl]);
-  await saveSet("Shortcut target");
-  await openExtensionPage("options/options.html");
-  const shortcut = await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'));
-  await shortcut.findElement(By.xpath('./option[normalize-space(.)="Shortcut target"]')).click();
-  await waitForStatus("options-status", "Shortcut assignment saved.");
-  return { assignedUrl, shortcut };
-}
-
-test("a shortcut assignment persists", async () => {
-  const { shortcut } = await createShortcutFixture();
-  const assignedValue = await shortcut.getAttribute("value");
-  await driver.navigate().refresh();
-  await driver.wait(async () => (
-    await driver.findElement(By.css('[data-shortcut-command="load-set-1"]'))
-      .getAttribute("value")
-  ) === assignedValue, 10_000, "persisted shortcut assignment");
-});
-
-test("an assigned command dispatches through the registered listener", async () => {
-  const { assignedUrl } = await createShortcutFixture();
-  await createTabs([`${extensionOrigin}/options/options.html?shortcut-unwanted`]);
-  const result = await driver.executeAsyncScript((done) => {
-    browser.runtime.getBackgroundPage()
-      .then((page) => page.savePinnedTabsCommandListener("load-set-1"))
-      .then((value) => done(value), (error) => done({ error: error.message }));
-  });
-  assert.deepEqual(result, { status: "success", value: { executed: true } });
-  assert.deepEqual(await pinnedUrls(), [assignedUrl]);
-});
-
-test("an unassigned command is a no-op", async () => {
-  await openExtensionPage("popup/popup.html");
-  const before = await pinnedUrls();
-  const result = await driver.executeAsyncScript((done) => {
-    browser.runtime.getBackgroundPage()
-      .then((page) => page.savePinnedTabsCommandListener("load-set-4"))
-      .then((value) => done(value), (error) => done({ error: error.message }));
-  });
-  assert.deepEqual(result, { status: "success", value: { executed: false } });
-  assert.deepEqual(await pinnedUrls(), before);
-});
-
-
 test("a pending failure blocks duplicate commands and recovers in place", async () => {
   await openExtensionPage("popup/popup.html");
   const existingUrl = `${extensionOrigin}/options/options.html?existing`;
@@ -557,20 +495,29 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const lateLegacyKey = Buffer.from("Late Legacy").toString("base64");
   await openStorageFixturePage();
   const schemaExists = await driver.executeAsyncScript((setKey, done) => {
-    Promise.all([
-      browser.storage.sync.set({
+    (async () => {
+      let sync = await browser.storage.sync.get(null);
+      while (!("savePinnedTabs:index" in sync)) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        sync = await browser.storage.sync.get(null);
+      }
+      const oldChunks = sync["savePinnedTabs:index"].chunks;
+      await browser.storage.sync.set({
         [setKey]: {
           autoload: 1,
           set_name: "Legacy Work",
           tabs: ["https://example.com/legacy"],
         },
-      }),
-      browser.storage.local.set({
+      });
+      await browser.storage.local.set({
         activeTabs: { 1: setKey },
-        shortcutSets: { "load-set-1": setKey },
-      }),
-    ]).then(() => browser.storage.sync.get(null))
-      .then((sync) => done("savePinnedTabs:sync" in sync));
+      });
+      await Promise.all([
+        browser.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]),
+        browser.storage.local.remove("savePinnedTabs:local"),
+      ]);
+      done("savePinnedTabs:index" in await browser.storage.sync.get(null));
+    })().catch((error) => done({ error: String(error) }));
   }, legacyKey);
   assert.equal(schemaExists, false);
   await restartFirefox();
@@ -579,12 +526,13 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const migrated = await driver.executeAsyncScript((setKey, done) => {
     Promise.all([browser.storage.sync.get(null), browser.storage.local.get(null)])
       .then(([sync, local]) => {
-        const setId = Object.keys(sync["savePinnedTabs:sync"].sets)[0];
+        const index = sync["savePinnedTabs:index"];
+        const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+        const setId = Object.keys(document.sets)[0];
         done({
           legacyRemoved: !(setKey in sync),
-          set: sync["savePinnedTabs:sync"].sets[setId],
-          autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
-          shortcutSetId: local["savePinnedTabs:local"].shortcutAssignments["load-set-1"],
+          set: document.sets[setId],
+          autoloadSetIds: document.autoload.setIds,
         });
       });
   }, legacyKey);
@@ -595,7 +543,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
     tabs: ["https://example.com/legacy"],
   });
   assert.deepEqual(migrated.autoloadSetIds, [migrated.set.id]);
-  assert.equal(migrated.shortcutSetId, migrated.set.id);
   await driver.executeAsyncScript((setKey, done) => {
     browser.storage.sync.set({
       [setKey]: { autoload: 0, set_name: "Late Legacy", tabs: ["https://example.com/late"] },
@@ -603,7 +550,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
   }, lateLegacyKey);
   await restartFirefox();
   await openExtensionPage("popup/popup.html");
-  assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 0);
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 1);
 });
 
 test("saved-set titles can exceed 30 characters and wrap", async () => {
@@ -688,8 +635,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs([existingUrl]);
   await saveSet("Duplicate");
   const existingId = await driver.executeAsyncScript((done) => {
-    browser.storage.sync.get("savePinnedTabs:sync").then((storage) => {
-      done(Object.keys(storage["savePinnedTabs:sync"].sets)[0]);
+    browser.storage.sync.get(null).then((storage) => {
+      const index = storage["savePinnedTabs:index"];
+      const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+      done(Object.keys(document.sets)[0]);
     });
   });
   const document = {
@@ -778,13 +727,6 @@ test("malformed JSON and unsupported import versions announce actionable errors"
 test("keyboard focus follows the options control order", async () => {
   await openExtensionPage("options/options.html");
   await driver.actions().sendKeys(Key.TAB).perform();
-  for (const command of ["load-set-1", "load-set-2", "load-set-3", "load-set-4"]) {
-    assert.equal(
-      await driver.switchTo().activeElement().getAttribute("data-shortcut-command"),
-      command,
-    );
-    await driver.actions().sendKeys(Key.TAB).perform();
-  }
   assert.equal(await driver.switchTo().activeElement().getAttribute("id"), "export-button");
   await driver.actions().sendKeys(Key.TAB).perform();
   assert.equal(await driver.switchTo().activeElement().getAttribute("id"), "import-input");
@@ -984,4 +926,145 @@ test("popup, set loading, and window creation recover after browser restart", as
     browser.windows.create({ url }).then((window) => done(window.id));
   }, `${extensionOrigin}/options/options.html?restart-window`);
   assert.equal(typeof windowId, "number");
+});
+
+test("environment: Firefox enforces quotas without losing the readable generation", async () => {
+  await openExtensionPage("popup/popup.html");
+  const retainedUrl = `${extensionOrigin}/options/options.html?retained-after-quota`;
+  await createTabs([retainedUrl]);
+  await saveSet("Before quota");
+  await openStorageFixturePage();
+
+  const result = await driver.executeAsyncScript(async (done) => {
+    const keys = [];
+    const before = await browser.storage.sync.get(null);
+    const previousIndex = before["savePinnedTabs:index"];
+    try {
+      let perItemError = "";
+      try {
+        await browser.storage.sync.set({ "quota:item": "界".repeat(3_000) });
+      } catch (error) {
+        perItemError = String(error);
+      }
+
+      let totalError = "";
+      for (let index = 0; index < 24; index += 1) {
+        const key = `quota:total:${index}`;
+        try {
+          await browser.storage.sync.set({ [key]: "x".repeat(6_000) });
+          keys.push(key);
+        } catch (error) {
+          totalError = String(error);
+          break;
+        }
+      }
+      const retained = await browser.storage.sync.get(null);
+      const activeIndex = retained["savePinnedTabs:index"];
+      const activeDocument = JSON.parse(
+        activeIndex.chunks.map((key) => retained[key]).join(""),
+      );
+      const generationUnchanged = activeIndex.generation === previousIndex.generation;
+      const readableSetNames = Object.values(activeDocument.sets).map((set) => set.name);
+      await browser.storage.sync.remove(["quota:item", ...keys]);
+      done({
+        perItemError,
+        totalError,
+        retainedCount: keys.filter((key) => key in retained).length,
+        writtenCount: keys.length,
+        generationUnchanged,
+        readableSetNames,
+      });
+    } catch (error) {
+      await browser.storage.sync.remove(["quota:item", ...keys]);
+      done({ error: String(error) });
+    }
+  });
+
+  assert.equal(result.error, undefined);
+  assert.match(result.perItemError, /quota|8,?192|too large/i);
+  assert.match(result.totalError, /quota|102,?400|too large/i);
+  assert.equal(result.retainedCount, result.writtenCount);
+  assert.equal(result.generationUnchanged, true);
+  assert.deepEqual(result.readableSetNames, ["Before quota"]);
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  const retainedRow = await driver.wait(
+    until.elementLocated(By.css('.load-row[data-name="Before quota"]')),
+    10_000,
+  );
+  await retainedRow.findElement(By.css(".set-load")).click();
+  await waitForPinnedUrls([retainedUrl]);
+});
+
+test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
+  const legacySets = Array.from({ length: 4 }, (_, index) => {
+    const name = `Legacy ${index} 日本語`;
+    return {
+      key: Buffer.from(name).toString("base64"),
+      name,
+      tabs: Array.from(
+        { length: 30 },
+        (_, tabIndex) => `https://例え.example/${index}/${tabIndex}/${"路".repeat(12)}`,
+      ),
+    };
+  });
+  const versionTwoSet = {
+    id: "00000000-0000-4000-8000-000000000101",
+    name: "Version two",
+    tabs: [`${extensionOrigin}/options/options.html?version-two`],
+  };
+  await openStorageFixturePage();
+  const seededBytes = await driver.executeAsyncScript(async (sets, currentSet, done) => {
+    const sync = await browser.storage.sync.get(null);
+    const index = sync["savePinnedTabs:index"];
+    const entries = Object.fromEntries(sets.map((set) => [
+      set.key,
+      { autoload: 0, set_name: set.name, tabs: set.tabs },
+    ]));
+    entries["savePinnedTabs:sync"] = {
+      version: 2,
+      sets: { [currentSet.id]: currentSet },
+      autoload: { scope: "first-window", setIds: [] },
+      deletedSetIds: [],
+    };
+    await browser.storage.sync.set(entries);
+    await browser.storage.sync.remove(["savePinnedTabs:index", ...(index?.chunks ?? [])]);
+    done(new TextEncoder().encode(JSON.stringify(entries)).byteLength);
+  }, legacySets, versionTwoSet);
+  assert.ok(seededBytes > 8_192);
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  for (const set of legacySets) {
+    const row = await driver.wait(
+      until.elementLocated(By.css(`.load-row[data-name="${set.name}"]`)),
+      10_000,
+    );
+    await row.findElement(By.css(".set-load")).click();
+    await waitForStatus("popup-status", "Tab set loaded.");
+    await waitForPinnedUrls(set.tabs.map((url) => new URL(url).href));
+  }
+  const versionTwoRow = await driver.wait(
+    until.elementLocated(By.css('.load-row[data-name="Version two"]')),
+    10_000,
+  );
+  await versionTwoRow.findElement(By.css(".set-load")).click();
+  await waitForPinnedUrls(versionTwoSet.tabs);
+
+  const storageShape = await driver.executeAsyncScript((sets, done) => {
+    browser.storage.sync.get(null).then((sync) => {
+      const index = sync["savePinnedTabs:index"];
+      done({
+        chunkCount: index.chunks.length,
+        chunkBytes: index.chunks.map((key) => new TextEncoder()
+          .encode(JSON.stringify(sync[key])).byteLength),
+        migrationSourcesRemoved: !("savePinnedTabs:sync" in sync)
+          && sets.every((set) => !(set.key in sync)),
+      });
+    });
+  }, legacySets);
+  assert.ok(storageShape.chunkCount > 1);
+  assert.ok(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024));
+  assert.equal(storageShape.migrationSourcesRemoved, true);
 });

@@ -1,6 +1,4 @@
-/**
- * Builds and manages the options page UI for shortcut assignments, imports, and exports.
- */
+/** Builds and manages the options page UI for imports and exports. */
 
 import type { ExportDocument, OptionsState } from '../domain.js';
 import { requireElement } from '../dom.js';
@@ -8,7 +6,6 @@ import { requireElement } from '../dom.js';
 
 /** Defines operations triggered by user interactions in the options view. */
 interface OptionsActions {
-  assignShortcut(command: string, setId: string): void;
   export(): void;
   import(file: File): void;
 }
@@ -30,23 +27,6 @@ function exportFileName(now: Date): string {
 }
 
 
-/** Finds the first matching element or throws when the selector matches nothing. */
-function requiredSelector(document: Document, selector: string): Element {
-  const element = document.querySelector(selector);
-  if (element === null) {
-    throw new Error(`Required element matching ${selector} was not found.`);
-  }
-  return element;
-}
-
-/** Reads the shortcut command metadata or throws when it is missing. */
-function shortcutCommandFor(select: HTMLSelectElement): string {
-  const command = select.dataset.shortcutCommand;
-  if (command === undefined) {
-    throw new Error('Shortcut select is missing data-shortcut-command.');
-  }
-  return command;
-}
 
 /** Downloads a blob through the global FileSaver API or throws when unavailable. */
 function saveBlob(blob: Blob, filename: string): void {
@@ -92,16 +72,6 @@ export function createOptionsUi(document: Document): OptionsView {
     bind(nextActions): void {
       actions = nextActions;
 
-      for (const element of document.querySelectorAll('[data-shortcut-command]')) {
-        if (!(element instanceof HTMLSelectElement)) {
-          throw new Error('Shortcut command control must be a select element.');
-        }
-
-        element.addEventListener('change', () => {
-          currentActions().assignShortcut(shortcutCommandFor(element), element.value);
-        });
-      }
-
       requireElement(document, 'export-button', HTMLButtonElement).addEventListener('click', () => {
         currentActions().export();
       });
@@ -122,33 +92,8 @@ export function createOptionsUi(document: Document): OptionsView {
       });
     },
 
-    /** Updates shortcut choices, assignment labels, and pending controls from state. */
-    render(state): void {
-      const shortcuts = new Map(
-        state.commands.map((command) => [command.name, command.shortcut]),
-      );
-
-      for (const element of document.querySelectorAll('[data-shortcut-command]')) {
-        if (!(element instanceof HTMLSelectElement)) {
-          throw new Error('Shortcut command control must be a select element.');
-        }
-
-        const command = shortcutCommandFor(element);
-        const options = [new Option('Not assigned', '')];
-
-        for (const set of state.sets) {
-          options.push(new Option(set.name, set.id));
-        }
-
-        element.replaceChildren(...options);
-        element.value = state.assignments[command] ?? '';
-
-        requiredSelector(
-          document,
-          `[data-shortcut-label="${command}"]`,
-        ).textContent = shortcuts.get(command) || 'Not assigned in browser';
-      }
-
+    /** Updates controls from the current options state. */
+    render(): void {
       syncPendingControls();
     },
 

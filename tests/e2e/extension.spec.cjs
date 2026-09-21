@@ -383,61 +383,6 @@ test("a user can delete a pinned tab set without reloading", async ({ extension 
   await deleteSet(popup, "Work");
   expect(await popup.evaluate(() => performance.timeOrigin)).toBe(pageLoadTime);
 });
-test("deleting a shortcut-assigned set clears its assignment", async ({ extension }) => {
-  const { assignment, options, popup } = await createShortcutFixture(extension);
-  await popup.bringToFront();
-
-  await deleteSet(popup, "Shortcut target");
-  await options.bringToFront();
-  await options.reload();
-
-  await expect(assignment).toHaveValue("");
-});
-
-
-
-async function createShortcutFixture(extension, command = "load-set-1") {
-  const { context, extensionId } = extension;
-  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
-  const assignedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut`;
-  await createTabs(popup, [assignedUrl]);
-  await saveSet(popup, "Shortcut target");
-  const options = await openExtensionPage(context, extensionId, "options/options.html");
-  const assignment = options.locator(`[data-shortcut-command="${command}"]`);
-  await assignment.selectOption({ label: "Shortcut target" });
-  await expect(options.getByRole("status")).toHaveText("Shortcut assignment saved.");
-  return { assignedUrl, assignment, options, popup };
-}
-
-test("a shortcut assignment persists", async ({ extension }) => {
-  const { assignment, options } = await createShortcutFixture(extension);
-  const assignedSetId = await assignment.inputValue();
-  await options.reload();
-  await expect(assignment).toHaveValue(assignedSetId);
-});
-
-test("an assigned command dispatches through the registered listener", async ({ extension }) => {
-  const { context, extensionId } = extension;
-  const { assignedUrl, popup } = await createShortcutFixture(extension);
-  const unwantedUrl = `chrome-extension://${extensionId}/options/options.html?shortcut-unwanted`;
-  await createTabs(popup, [unwantedUrl]);
-  expect(await context.serviceWorkers()[0]
-    .evaluate(async () => savePinnedTabsCommandListener("load-set-1")))
-    .toMatchObject({ status: "success", value: { executed: true } });
-  await expectOpenTabs(context, [assignedUrl], [unwantedUrl]);
-});
-
-test("an unassigned command is a no-op", async ({ extension }) => {
-  const { context } = extension;
-  const popup = await openExtensionPage(context, extension.extensionId, "popup/popup.html");
-  const before = await pinnedUrls(popup, await currentWindowId(popup));
-  expect(await context.serviceWorkers()[0]
-    .evaluate(async () => savePinnedTabsCommandListener("load-set-4")))
-    .toEqual({ status: "success", value: { executed: false } });
-  expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual(before);
-});
-
-
 test("a pending failure blocks duplicate commands and recovers in place", async ({
   extension,
 }) => {
@@ -493,6 +438,12 @@ test("a legacy profile migrates sets and references exactly once across restarts
     firstLaunch = await launchExtension(userDataDir);
     expect(await firstLaunch.context.serviceWorkers()[0].evaluate(
       async ({ legacyKey }) => {
+        let sync = await chrome.storage.sync.get(null);
+        while (!("savePinnedTabs:index" in sync)) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          sync = await chrome.storage.sync.get(null);
+        }
+        const oldChunks = sync["savePinnedTabs:index"].chunks;
         await chrome.storage.sync.set({
           [legacyKey]: {
             autoload: 1,
@@ -502,9 +453,10 @@ test("a legacy profile migrates sets and references exactly once across restarts
         });
         await chrome.storage.local.set({
           activeTabs: { 1: legacyKey },
-          shortcutSets: { "load-set-1": legacyKey },
         });
-        return "savePinnedTabs:sync" in await chrome.storage.sync.get(null);
+        await chrome.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]);
+        await chrome.storage.local.remove("savePinnedTabs:local");
+        return "savePinnedTabs:index" in await chrome.storage.sync.get(null);
       },
       { legacyKey },
     )).toBe(false);
@@ -521,12 +473,13 @@ test("a legacy profile migrates sets and references exactly once across restarts
     const migrated = await popup.evaluate(async ({ legacyKey }) => {
       const sync = await chrome.storage.sync.get(null);
       const local = await chrome.storage.local.get(null);
-      const setId = Object.keys(sync["savePinnedTabs:sync"].sets)[0];
+      const index = sync["savePinnedTabs:index"];
+      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      const setId = Object.keys(document.sets)[0];
       return {
         legacyRemoved: !(legacyKey in sync),
-        set: sync["savePinnedTabs:sync"].sets[setId],
-        autoloadSetIds: sync["savePinnedTabs:sync"].autoload.setIds,
-        shortcutSetId: local["savePinnedTabs:local"].shortcutAssignments["load-set-1"],
+        set: document.sets[setId],
+        autoloadSetIds: document.autoload.setIds,
       };
     }, { legacyKey });
     expect(migrated.legacyRemoved).toBe(true);
@@ -535,7 +488,6 @@ test("a legacy profile migrates sets and references exactly once across restarts
       tabs: ["https://example.com/legacy"],
     });
     expect(migrated.autoloadSetIds).toEqual([migrated.set.id]);
-    expect(migrated.shortcutSetId).toBe(migrated.set.id);
 
     await popup.evaluate(async ({ lateLegacyKey }) => {
       await chrome.storage.sync.set({
@@ -558,7 +510,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
     await expect(restartedPopup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     await expect(
       restartedPopup.locator(".load-row", { hasText: "Late Legacy" }),
-    ).toHaveCount(0);
+    ).toBeVisible();
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
@@ -661,8 +613,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs(popup, [existingUrl]);
   await saveSet(popup, "Duplicate");
   const existingId = await popup.evaluate(async () => {
-    const storage = await chrome.storage.sync.get("savePinnedTabs:sync");
-    return Object.keys(storage["savePinnedTabs:sync"].sets)[0];
+    const storage = await chrome.storage.sync.get(null);
+    const index = storage["savePinnedTabs:index"];
+    const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+    return Object.keys(document.sets)[0];
   });
   const document = {
     version: 2,
@@ -791,10 +745,6 @@ test("keyboard focus follows the options control order", async ({ extension }) =
   await expect(options.locator("body")).toHaveAttribute("aria-busy", "false");
 
   await options.keyboard.press("Tab");
-  for (const command of ["load-set-1", "load-set-2", "load-set-3", "load-set-4"]) {
-    await expect(options.locator(`[data-shortcut-command="${command}"]`)).toBeFocused();
-    await options.keyboard.press("Tab");
-  }
   await expect(options.locator("#export-button")).toBeFocused();
   await options.keyboard.press("Tab");
   await expect(options.locator("#import-input")).toBeFocused();
@@ -1015,10 +965,13 @@ test("an autoload selection persists across browser restart", async () => {
     );
     const { port } = server.address();
     const autoloadUrl = `http://127.0.0.1:${port}/autoloaded`;
+    const previousSessionUrl = `http://127.0.0.1:${port}/previous-session`;
 
     await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Startup");
     await selectAutoloadSet(popup, "Startup");
+    await removePinnedTabs(popup);
+    await createTabs(popup, [previousSessionUrl]);
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -1033,7 +986,11 @@ test("an autoload selection persists across browser restart", async () => {
         .locator(".load-row", { hasText: "Startup" })
         .locator("input[name=autoload]"),
     ).toBeChecked();
-    await expectOpenTabs(secondLaunch.context, [autoloadUrl]);
+    await expectOpenTabs(
+      secondLaunch.context,
+      [autoloadUrl],
+      [previousSessionUrl],
+    );
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
@@ -1044,7 +1001,7 @@ test("an autoload selection persists across browser restart", async () => {
   }
 });
 
-test("restart leaves pinned tabs unchanged without an autoload selection", async () => {
+test("browser restart preserves no-autoload behavior for current pinned tabs", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-no-autoload-"));
   const server = http.createServer((request, response) => {
@@ -1063,11 +1020,7 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
     );
     const { port } = server.address();
     const pinnedUrl = `http://127.0.0.1:${port}/no-autoload`;
-    await createTabs(popup, [pinnedUrl]);
-    await expect.poll(() => popup.evaluate(async (url) => {
-      const tab = (await chrome.tabs.query({ url }))[0];
-      return tab?.status;
-    }, pinnedUrl)).toBe("complete");
+
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
@@ -1077,9 +1030,11 @@ test("restart leaves pinned tabs unchanged without an autoload selection", async
       secondLaunch.extensionId,
       "popup/popup.html",
     );
+    await createTabs(reopenedPopup, [pinnedUrl]);
     await runStartupHandler(reopenedPopup);
-    expect(await pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)))
-      .toEqual([pinnedUrl]);
+    await expect.poll(
+      async () => pinnedUrls(reopenedPopup, await currentWindowId(reopenedPopup)),
+    ).toEqual([pinnedUrl]);
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
@@ -1135,6 +1090,10 @@ test("first-window autoload does not restore into a later window", async () => {
 test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-repeat-"));
+  const server = http.createServer((request, response) => {
+    response.end("<!doctype html><title>Repeated restart</title>");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   let launch;
 
   try {
@@ -1144,7 +1103,8 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
       launch.extensionId,
       "popup/popup.html",
     );
-    const autoloadUrl = `chrome-extension://${launch.extensionId}/options/options.html?repeat`;
+    const { port } = server.address();
+    const autoloadUrl = `http://127.0.0.1:${port}/repeat`;
     await createTabs(popup, [autoloadUrl]);
     await saveSet(popup, "Repeat");
     await selectAutoloadSet(popup, "Repeat");
@@ -1163,6 +1123,9 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   } finally {
     await launch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
   }
 });
 
@@ -1261,5 +1224,76 @@ test("popup and window operations recover after the background worker stops", as
     `chrome-extension://${extensionId}/options/options.html?worker-window`,
   );
   expect(createdWindow.id).toEqual(expect.any(Number));
+});
+
+test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-quota-"));
+  let launch;
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    const legacySets = Array.from({ length: 4 }, (_, index) => {
+      const name = `Legacy ${index} 日本語`;
+      return {
+        key: Buffer.from(name).toString("base64"),
+        name,
+        tabs: Array.from(
+          { length: 30 },
+          (_, tabIndex) => `chrome-extension://${launch.extensionId}/options/options.html?${index}-${tabIndex}-${"路".repeat(12)}`,
+        ),
+      };
+    });
+    const seededBytes = await popup.evaluate(async (sets) => {
+      const sync = await chrome.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      const entries = Object.fromEntries(sets.map((set) => [
+        set.key,
+        { autoload: 0, set_name: set.name, tabs: set.tabs },
+      ]));
+      await chrome.storage.sync.set(entries);
+      await chrome.storage.sync.remove([
+        "savePinnedTabs:index",
+        ...(index?.chunks ?? []),
+      ]);
+      return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
+    }, legacySets);
+    expect(seededBytes).toBeGreaterThan(8_192);
+
+    launch = await restartExtension(launch, userDataDir);
+    popup = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "popup/popup.html",
+    );
+    for (const set of legacySets) {
+      const row = popup.locator(`.load-row[data-name="${set.name}"]`);
+      await expect(row).toBeVisible();
+      await row.getByRole("button", { name: "Load", exact: true }).click();
+      await expect.poll(
+        async () => pinnedUrls(popup, await currentWindowId(popup)),
+      ).toEqual(set.tabs.map((url) => new URL(url).href));
+    }
+
+    const storageShape = await popup.evaluate(async () => {
+      const sync = await chrome.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      return {
+        chunkCount: index.chunks.length,
+        chunkBytes: index.chunks.map((key) => new TextEncoder()
+          .encode(JSON.stringify(sync[key])).byteLength),
+      };
+    });
+    expect(storageShape.chunkCount).toBeGreaterThan(1);
+    expect(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024)).toBe(true);
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
 });
 

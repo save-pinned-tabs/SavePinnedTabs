@@ -1,4 +1,4 @@
-/** Constructs and caches browser-backed repositories for tab sets, window sessions, and shortcuts. */
+/** Constructs and caches browser-backed repositories for tab sets and window sessions. */
 
 import type { BrowserApi } from '../browser-api.js';
 import type { TabSetImportDocument } from '../tab-sets/tab-set-import.js';
@@ -9,10 +9,6 @@ import {
   BrowserStorageMigration,
 } from './storage-schema.js';
 import {
-  ShortcutAssignmentRepository,
-  ShortcutAssignmentStorage,
-} from './shortcut-assignment-repository.js';
-import {
   BrowserWindowSessionStorage,
   WindowSessionRepository,
 } from './window-session-repository.js';
@@ -21,7 +17,6 @@ import {
 interface BrowserRepositories {
   readonly tabSets: TabSetRepository;
   readonly windowSessions: WindowSessionRepository;
-  readonly shortcutAssignments: ShortcutAssignmentRepository;
 }
 
 /** Narrows an unknown value to a valid tab-set import document. */
@@ -56,15 +51,7 @@ export function createBrowserRepositories(
     new BrowserWindowSessionStorage(referenceStorage),
   );
 
-  let tabSets: TabSetRepository;
-  const shortcutAssignments = new ShortcutAssignmentRepository(
-    new ShortcutAssignmentStorage(referenceStorage),
-    {
-      hasSet: async (setId) => (await tabSets.get(setId)) !== null,
-    },
-  );
-
-  tabSets = new TabSetRepository(
+  const tabSets = new TabSetRepository(
     new BrowserTabSetStorage(browser.storage.sync, migration),
     {
       validateImport(document: unknown): document is TabSetImportDocument {
@@ -74,11 +61,10 @@ export function createBrowserRepositories(
         );
       },
       windowSessions,
-      shortcutAssignments,
     },
   );
 
-  const repositories = { tabSets, windowSessions, shortcutAssignments };
+  const repositories = { tabSets, windowSessions };
   repositoriesByBrowser.set(browser, repositories);
   return repositories;
 }

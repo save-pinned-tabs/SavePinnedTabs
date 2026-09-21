@@ -127,6 +127,62 @@ test('worker resurrection does not repeat first-window Autoload', async () => {
   assert.deepEqual(harness.operations, [['reset'], ['restore', 1]]);
 });
 
+test('first-window Autoload runs again after all normal windows close without quitting', async () => {
+  const harness = createHarness({
+    windows: [{ id: 1, type: 'normal' }, { id: 9, type: 'popup' }],
+  });
+  const firstWorker = harness.createWorker();
+  await firstWorker.onBrowserStartup();
+
+  harness.browserWindows.splice(0, 1);
+  await firstWorker.onWindowRemoved(1);
+  const nextWorker = harness.createWorker();
+  await nextWorker.onBrowserStartup();
+  harness.browserWindows.push({ id: 2, type: 'normal' });
+  await Promise.all([
+    nextWorker.onWindowCreated({ id: 2, type: 'normal' }),
+    nextWorker.onWindowCreated({ id: 2, type: 'normal' }),
+  ]);
+  await nextWorker.onBrowserStartup();
+  harness.browserWindows.push({ id: 3, type: 'normal' });
+  await nextWorker.onWindowCreated({ id: 3, type: 'normal' });
+
+  assert.deepEqual(harness.operations, [
+    ['reset'],
+    ['restore', 1],
+    ['deactivate', 1],
+    ['restore', 2],
+  ]);
+});
+
+test('closing the autoloaded window does not rearm while another startup window remains', async () => {
+  const harness = createHarness({
+    windows: [{ id: 1, type: 'normal' }, { id: 2, type: 'normal' }],
+  });
+  const worker = harness.createWorker();
+  await worker.onBrowserStartup();
+
+  harness.browserWindows.splice(0, 1);
+  await worker.onWindowRemoved(1);
+  harness.browserWindows.push({ id: 3, type: 'normal' });
+  await worker.onWindowCreated({ id: 3, type: 'normal' });
+  harness.browserWindows.splice(0, 1);
+  await worker.onWindowRemoved(2);
+  harness.browserWindows.splice(0, 1);
+  await worker.onWindowRemoved(3);
+  harness.browserWindows.push({ id: 4, type: 'normal' });
+  await worker.onWindowCreated({ id: 4, type: 'normal' });
+
+  assert.deepEqual(harness.operations, [
+    ['reset'],
+    ['restore', 1],
+    ['deactivate', 1],
+    ['deactivate', 2],
+    ['deactivate', 3],
+    ['restore', 4],
+  ]);
+});
+
 test('every-window policy survives suspension and deduplicates repeated events', async () => {
   const harness = createHarness({ policy: AUTOLOAD_EVERY_WINDOW });
   const firstWorker = harness.createWorker();
@@ -279,12 +335,31 @@ test('listener registration occurs during service-worker module evaluation', asy
     },
   });
   const storageArea = {
-    async get() { return {}; },
+    async get(key) {
+      if (key === 'savePinnedTabs:local') {
+        return {
+          [key]: {
+            version: 2,
+            windowSessions: {},
+          },
+        };
+      }
+      if (key === 'savePinnedTabs:sync') {
+        return {
+          [key]: {
+            version: 2,
+            sets: {},
+            autoload: { scope: AUTOLOAD_FIRST_WINDOW, setIds: [] },
+            deletedSetIds: [],
+          },
+        };
+      }
+      return {};
+    },
     async set() {},
     async remove() {},
   };
   globalThis.chrome = {
-    commands: { onCommand: event('command') },
     runtime: {
       onMessage: event('message'),
       onStartup: event('startup'),
@@ -303,14 +378,17 @@ test('listener registration occurs during service-worker module evaluation', asy
   };
 
   try {
-    await import(`../.extension-build/background/service-worker.js?listener-test=${Date.now()}`);
+    const serviceWorker = await import(
+      `../.extension-build/background/service-worker.js?listener-test=${Date.now()}`
+    );
+    await serviceWorker.startupInitialization;
   } finally {
     delete globalThis.chrome;
   }
 
   assert.deepEqual(
     registered.map(([name]) => name),
-    ['message', 'command', 'startup', 'created', 'removed'],
+    ['message', 'startup', 'created', 'removed'],
   );
   assert.ok(registered.every(([, listener]) => typeof listener === 'function'));
 });

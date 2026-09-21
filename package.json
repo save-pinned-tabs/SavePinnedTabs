@@ -1,6 +1,6 @@
 {
   "name": "savepinned",
-  "version": "3.0.1",
+  "version": "3.1.2",
   "description": "A chrome extension to save and load groups of pinned tabs",
   "type": "module",
   "main": "background.js",
@@ -23,7 +23,10 @@
     "test": "npm run test:unit && npm run test:e2e && npm run test:e2e:firefox",
     "test:unit": "tsc && node --test tests/*.test.mjs",
     "test:e2e": "tsc && node scripts/prepare-extension.mjs && playwright test",
-    "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs"
+    "test:e2e:brave": "CHROMIUM_BINARY=$(command -v ${BRAVE_BINARY:-brave-browser}) npm run test:e2e",
+    "test:e2e:firefox": "npm run build:firefox && node --test --test-skip-pattern='^environment:' tests/firefox/firefox.e2e.mjs",
+    "test:e2e:environment:chromium": "ENVIRONMENT_E2E=1 npm run test:e2e",
+    "test:e2e:environment:firefox": "npm run build:firefox && node --test --test-name-pattern='^environment:' tests/firefox/firefox.e2e.mjs"
   },
   "repository": {
     "type": "git",

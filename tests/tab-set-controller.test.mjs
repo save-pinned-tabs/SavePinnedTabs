@@ -7,7 +7,6 @@ function createHarness({ failAt } = {}) {
   const calls = [];
   const sets = [{ id: 'set-1', name: 'Work', tabs: ['https://example.com/'] }];
   let autoload = { scope: 'first-window', setIds: [] };
-  let assignments = { 'load-set-1': 'set-1' };
 
   async function operation(label, value) {
     calls.push(label);
@@ -31,13 +30,6 @@ function createHarness({ failAt } = {}) {
     windowSessions: {
       get: (windowId) => operation(`windowSessions.get:${windowId}`, 'set-1'),
     },
-    shortcutAssignments: {
-      list: () => operation('shortcutAssignments.list', assignments),
-      assign(command, setId) {
-        assignments = { ...assignments, [command]: setId };
-        return operation(`shortcutAssignments.assign:${command}:${setId}`);
-      },
-    },
     windowTabState: {
       captureAndSave: (windowId, set) => operation(`windowTabState.captureAndSave:${windowId}`, {
         id: set.id ?? 'new-set',
@@ -47,10 +39,6 @@ function createHarness({ failAt } = {}) {
       replace: (windowId, setId) => operation(`windowTabState.replace:${windowId}:${setId}`),
     },
     getCurrentWindowId: () => operation('windows.getCurrent', 7),
-    getLastFocusedWindowId: () => operation('windows.getLastFocused', 9),
-    listBrowserCommands: () => operation('commands.getAll', [
-      { name: 'load-set-1', description: 'Load set 1', shortcut: 'Ctrl+Shift+1' },
-    ]),
   });
 
   return { calls, controller };
@@ -92,41 +80,14 @@ test('controller commands return contextual errors instead of rejecting', async 
   assert.match(result.error.message, /injected failure/);
 });
 
-test('keyboard shortcuts route through the same load command behavior', async () => {
-  const { calls, controller } = createHarness();
-
-  const result = await controller.runShortcut('load-set-1');
-
-  assert.deepEqual(result, { status: 'success', value: { executed: true } });
-  assert.deepEqual(calls, [
-    'shortcutAssignments.list',
-    'windows.getLastFocused',
-    'windowTabState.replace:9:set-1',
-  ]);
-});
-
-test('unassigned keyboard shortcuts are explicit successful no-ops', async () => {
-  const harness = createHarness();
-  await harness.controller.assignShortcut('load-set-1', '');
-  harness.calls.length = 0;
-
-  const result = await harness.controller.runShortcut('load-set-1');
-
-  assert.deepEqual(result, { status: 'success', value: { executed: false } });
-  assert.deepEqual(harness.calls, ['shortcutAssignments.list']);
-});
 
 test('options commands return deterministic state and import counts', async () => {
   const { controller } = createHarness();
 
   const initial = await controller.getOptionsState();
-  const assigned = await controller.assignShortcut('load-set-1', 'set-1');
   const imported = await controller.importSets({ sets: [{ id: 'imported' }] });
 
   assert.equal(initial.status, 'success');
-  assert.equal(initial.value.state.commands[0].shortcut, 'Ctrl+Shift+1');
-  assert.equal(assigned.status, 'success');
-  assert.equal(assigned.value.state.assignments['load-set-1'], 'set-1');
   assert.equal(imported.status, 'success');
   assert.equal(imported.value.importedCount, 1);
 });

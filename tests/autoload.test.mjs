@@ -55,10 +55,10 @@ function createBrowser({
     },
     deletedSetIds: [],
   };
+  const syncState = { [SYNC_DOCUMENT_KEY]: syncDocument };
   const localDocument = {
     version: 2,
     windowSessions: { ...sessions },
-    shortcutAssignments: {},
   };
   let nextTabId = 100;
 
@@ -79,13 +79,18 @@ function createBrowser({
       },
       sync: {
         async get(key) {
-          if (key === null) return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
-          return { [SYNC_DOCUMENT_KEY]: structuredClone(syncDocument) };
+          if (key === null) return structuredClone(syncState);
+          const keys = Array.isArray(key) ? key : [key];
+          return Object.fromEntries(keys
+            .filter((storageKey) => storageKey in syncState)
+            .map((storageKey) => [storageKey, structuredClone(syncState[storageKey])]));
         },
         async set(value) {
-          Object.assign(syncDocument, structuredClone(value[SYNC_DOCUMENT_KEY]));
+          Object.assign(syncState, structuredClone(value));
         },
-        async remove() {},
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete syncState[key];
+        },
       },
     },
     tabs: {

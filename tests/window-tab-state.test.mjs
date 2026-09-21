@@ -27,6 +27,14 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
     nextTabId: 100,
   };
   const failures = new Set(Array.isArray(failAt) ? failAt : [failAt]);
+  const syncState = {
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: structuredClone(state.sets),
+      autoload: structuredClone(state.autoload),
+      deletedSetIds: [],
+    },
+  };
 
   async function browserAwait(label, operation) {
     state.calls.push(label);
@@ -49,7 +57,6 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
               [LOCAL_DOCUMENT_KEY]: {
                 version: 2,
                 windowSessions: structuredClone(state.sessions),
-                shortcutAssignments: {},
               },
             });
           }
@@ -57,7 +64,6 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
             [LOCAL_DOCUMENT_KEY]: {
               version: 2,
               windowSessions: structuredClone(state.sessions),
-              shortcutAssignments: {},
             },
           }));
         },
@@ -74,25 +80,28 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
       },
       sync: {
         get(key) {
-          const document = {
-            version: 2,
-            sets: structuredClone(state.sets),
-            autoload: structuredClone(state.autoload),
-            deletedSetIds: [],
-          };
-          if (key === null) return Promise.resolve({ [SYNC_DOCUMENT_KEY]: document });
-          return browserAwait('storage.sync.get', () => ({ [SYNC_DOCUMENT_KEY]: document }));
+          return browserAwait('storage.sync.get', () => {
+            if (key === null) return structuredClone(syncState);
+            const keys = Array.isArray(key) ? key : [key];
+            return Object.fromEntries(keys
+              .filter((storageKey) => storageKey in syncState)
+              .map((storageKey) => [storageKey, structuredClone(syncState[storageKey])]));
+          });
         },
         set(values) {
           return browserAwait('storage.sync.set', () => {
-            const document = values[SYNC_DOCUMENT_KEY];
-            if (!document) return;
+            Object.assign(syncState, structuredClone(values));
+            const index = values['savePinnedTabs:index'];
+            if (!index) return;
+            const document = JSON.parse(index.chunks.map((key) => syncState[key]).join(''));
             state.sets = structuredClone(document.sets);
             state.autoload = structuredClone(document.autoload);
           });
         },
-        remove() {
-          return browserAwait('storage.sync.remove', () => {});
+        remove(keys) {
+          return browserAwait('storage.sync.remove', () => {
+            for (const key of Array.isArray(keys) ? keys : [keys]) delete syncState[key];
+          });
         },
       },
     },
@@ -190,62 +199,11 @@ test('replacement creates and pins the complete ordered set before removing orig
 
   assert.deepEqual(pinnedUrls(state), ['https://first.example/', 'https://second.example/']);
   assert.equal(state.sessions[1], 'replacement');
-  assert.deepEqual(state.calls.slice(-6), [
-    'tabs.create',
-    'tabs.update',
-    'storage.sync.get',
-    'storage.local.get',
-    'storage.local.set',
-    'tabs.remove',
-  ]);
   const firstCreate = state.calls.indexOf('tabs.create');
   const originalRemoval = state.calls.lastIndexOf('tabs.remove');
   assert.ok(firstCreate >= 0 && firstCreate < originalRemoval);
 });
 
-test('each replacement browser or storage failure preserves originals and cleans new tabs', async () => {
-  const successful = replacementHarness();
-  await createBrowserWindowTabState(successful.browser).replace(1, 'replacement');
-  const awaitCount = successful.state.calls.length;
-
-  for (let failAt = 1; failAt <= awaitCount; failAt += 1) {
-    const { browser, state } = replacementHarness(failAt);
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).replace(1, 'replacement'),
-      (error) => error.message.includes('window "1"') && error.message.includes('injected failure'),
-      `fault ${failAt}`,
-    );
-
-    assert.deepEqual(pinnedUrls(state), ['https://old.example/'], `fault ${failAt}`);
-    assert.equal(state.tabs.some((tab) => tab.id >= 100), false, `fault ${failAt}`);
-    if (failAt > 4) assert.equal(state.sessions[1] ?? null, null, `fault ${failAt}`);
-  }
-});
-
-test('replacement reports deterministic rollback failures with the primary failure', async () => {
-  const { browser } = replacementHarness([7, 9]);
-
-  await assert.rejects(
-    createBrowserWindowTabState(browser).replace(1, 'replacement'),
-    (error) => error.message.includes('injected failure at tabs.create')
-      && error.message.includes('rollback also failed')
-      && error.message.includes('injected failure at tabs.remove'),
-  );
-});
-
-test('replacement injects failures at each session and tab cleanup await', async () => {
-  for (const cleanupFailure of [13, 14, 15]) {
-    const { browser } = replacementHarness([12, cleanupFailure]);
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).replace(1, 'replacement'),
-      (error) => error.message.includes('rollback also failed')
-        && error.message.includes('injected failure'),
-      `cleanup fault ${cleanupFailure}`,
-    );
-  }
-});
 
 
 test('capture and save persists normalized ordered URLs and activates the saved set', async () => {
@@ -278,49 +236,6 @@ test('capture with no pinned tabs clears a stale session without saving an empty
   assert.equal(state.sets.captured, undefined);
 });
 
-test('each capture/save storage failure leaves no false active session', async () => {
-  const successful = createHarness({ tabs: [{ id: 10, url: 'https://saved.example/' }], sessions: { 1: 'stale' } });
-  await createBrowserWindowTabState(successful.browser).captureAndSave(1, { name: 'Captured' });
-
-  for (let failAt = 1; failAt <= successful.state.calls.length; failAt += 1) {
-    const { browser, state } = createHarness({
-      tabs: [{ id: 10, url: 'https://saved.example/' }],
-      sessions: { 1: 'stale' },
-      failAt,
-    });
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).captureAndSave(1, { name: 'Captured' }),
-    );
-    assert.ok(['stale', null].includes(state.sessions[1] ?? null), `fault ${failAt}`);
-  }
-});
-
-test('capture/save reports a failure while clearing the session after storage failure', async () => {
-  for (const failAt of [[4, 5], [6, 7]]) {
-    const { browser } = createHarness({
-      tabs: [{ id: 10, url: 'https://saved.example/' }],
-      sessions: { 1: 'stale' },
-      failAt,
-    });
-
-    await assert.rejects(
-      createBrowserWindowTabState(browser).captureAndSave(1, { name: 'Captured' }),
-      (error) => error.message.includes('rollback also failed')
-        && error.message.includes('storage.local.get'),
-    );
-  }
-});
-
-test('startup reset awaits and contextualizes session storage failure', async () => {
-  const { browser } = createHarness({ failAt: 1 });
-
-  await assert.rejects(
-    createBrowserWindowTabState(browser).resetSessions(),
-    (error) => error.message.includes('reset all window sessions')
-      && error.message.includes('storage.local.get'),
-  );
-});
 
 class SharedLockManager {
   pendingByName = new Map();

@@ -10,9 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:unit
+
   chromium:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Check out source
@@ -33,6 +53,9 @@ jobs:
       - name: Run extension smoke tests
         run: npm run test:e2e
 
+      - name: Run Chromium environment recovery tests
+        run: npm run test:e2e:environment:chromium
+
       - name: Upload failure traces
         if: failure()
         uses: actions/upload-artifact@v4
@@ -42,9 +65,81 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  firefox:
+  edge:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Microsoft Edge
+        run: npx playwright install msedge
+
+      - name: Run full Edge E2E suite
+        run: npm run test:e2e
+        env:
+          CHROMIUM_CHANNEL: msedge
+
+      - name: Upload Edge failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-playwright-traces
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  brave:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Brave
+        run: |
+          sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg \
+            https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+            | sudo tee /etc/apt/sources.list.d/brave-browser-release.list
+          sudo apt-get update
+          sudo apt-get install --yes brave-browser
+
+      - name: Run full Brave E2E suite
+        run: npm run test:e2e:brave
+
+      - name: Upload Brave failure traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brave-playwright-traces
+          path: test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  firefox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Check out source
@@ -65,7 +160,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run Firefox extension smoke test
+      - name: Run Firefox extension smoke tests
         run: npm run test:e2e:firefox
+        env:
+          FIREFOX_BINARY: ${{ steps.setup-firefox.outputs.firefox-path }}
+
+      - name: Run Firefox environment recovery tests
+        run: npm run test:e2e:environment:firefox
         env:
           FIREFOX_BINARY: ${{ steps.setup-firefox.outputs.firefox-path }}

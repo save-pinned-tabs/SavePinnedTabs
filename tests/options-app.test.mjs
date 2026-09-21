@@ -17,25 +17,8 @@ function createView() {
   };
 }
 
-const optionsState = { sets: [], assignments: {}, commands: [] };
+const optionsState = { sets: [] };
 
-test('options shows controller assignment failures and restores rendered state', async () => {
-  const view = createView();
-  const controller = {
-    getOptionsState: async () => ({ status: 'success', value: { state: optionsState } }),
-    assignShortcut: async () => ({ status: 'error', error: new Error('Assignment unavailable') }),
-  };
-  await startOptionsApp(controller, view);
-
-  await view.actions.assignShortcut('load-set-1', 'set-1');
-
-  assert.deepEqual(view.events.slice(-4), [
-    ['pending', true],
-    ['render', optionsState],
-    ['status', 'error', 'Assignment unavailable'],
-    ['pending', false],
-  ]);
-});
 
 test('options import invokes one controller command and reports its result', async () => {
   const view = createView();

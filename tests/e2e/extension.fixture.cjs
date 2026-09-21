@@ -8,7 +8,7 @@ const extensionPath = path.resolve(__dirname, "../../.extension-build");
 async function launchExtension(userDataDir) {
   const browser = process.env.CHROMIUM_BINARY
     ? { executablePath: process.env.CHROMIUM_BINARY }
-    : { channel: "chromium" };
+    : { channel: process.env.CHROMIUM_CHANNEL || "chromium" };
   const context = await chromium.launchPersistentContext(userDataDir, {
     ...browser,
     headless: true,

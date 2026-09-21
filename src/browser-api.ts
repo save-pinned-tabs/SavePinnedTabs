@@ -1,6 +1,5 @@
 /** Defines the browser extension API surface used by the application. */
 
-import type { BrowserCommand } from './domain.js';
 
 /** Identifies storage entries; null selects all entries in an area. */
 export type StorageKeys = string | string[] | Record<string, unknown> | null;
@@ -56,15 +55,8 @@ export interface BrowserApi {
   windows: {
     getAll(getInfo: null): Promise<BrowserWindow[]>;
     getCurrent(): Promise<BrowserWindow>;
-    getLastFocused(options: {
-      windowTypes: ["normal"];
-    }): Promise<BrowserWindow>;
     onCreated: BrowserEvent<[window: BrowserWindow]>;
     onRemoved: BrowserEvent<[windowId: number]>;
-  };
-  commands: {
-    getAll(): Promise<BrowserCommand[]>;
-    onCommand: BrowserEvent<[command: string]>;
   };
   permissions?: {
     contains(details: { permissions: string[] }): Promise<boolean>;

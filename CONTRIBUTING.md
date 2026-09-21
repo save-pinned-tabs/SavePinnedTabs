@@ -43,12 +43,17 @@ The npm scripts are the test interface for local development and CI:
 ```sh
 npm run test:unit
 npm run test:e2e
+npm run test:e2e:brave
 npm run test:e2e:firefox
+npm run test:e2e:environment:chromium
+npm run test:e2e:environment:firefox
 npm test
 ```
 
 The extension runtime source is in `src/**/*.ts`. Test scripts compile it before they run.
 Unit and browser tests load JavaScript from `.extension-build`. This directory is generated and is not tracked.
+
+The environment suite is intentionally excluded from the default test command because it exercises real browser quota limits and persistent-profile recovery. See [`docs/environment-e2e.md`](docs/environment-e2e.md) for its automated coverage and the reproducible manual recipes for authenticated Sync, private browsing, forced termination, startup settings, and upgrades.
 
 You can run a command without entering the development shell:
 
@@ -61,7 +66,7 @@ nix develop -c npm test
 Chromium and Firefox end-to-end suites must cover the same observable behaviors and browser edge cases.
 Use one focused test for each behavior. Keep corresponding scenario names and assertions aligned across both suites.
 
-Chromium exercises Manifest V3 worker suspension directly because Playwright exposes its service-worker target. Firefox's WebDriver surface does not expose a supported way to suspend the extension background worker, so Firefox covers the equivalent browser-restart boundary instead. Headless Playwright and WebDriver send key events to the page renderer rather than the browser chrome, so extension command accelerators do not fire; both suites retain a command-listener boundary test. Verify configured shortcuts manually in a headed, installed-browser profile.
+Chromium exercises Manifest V3 worker suspension directly because Playwright exposes its service-worker target. Firefox's WebDriver surface does not expose a supported way to suspend the extension background worker, so Firefox covers the equivalent browser-restart boundary instead. Assigned shortcut testing is not applicable because browser commands were removed in PR #107 pending further product design.
 
 ## Modify Sets Schema
 

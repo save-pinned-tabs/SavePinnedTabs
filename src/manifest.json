@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Save Pinned Tabs",
   "short_name": "Save Pinned",
-  "version": "3.0.1",
+  "version": "3.1.2",
 
   "description": "Save, restore, autoload, import, and export named groups of pinned tabs.",
   "icons": {
@@ -36,25 +36,6 @@
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
-  },
-
-  "commands": {
-    "load-set-1": {
-      "suggested_key": { "default": "Ctrl+Shift+1", "mac": "Command+Shift+1" },
-      "description": "Load assigned tab set 1"
-    },
-    "load-set-2": {
-      "suggested_key": { "default": "Ctrl+Shift+2", "mac": "Command+Shift+2" },
-      "description": "Load assigned tab set 2"
-    },
-    "load-set-3": {
-      "suggested_key": { "default": "Ctrl+Shift+3", "mac": "Command+Shift+3" },
-      "description": "Load assigned tab set 3"
-    },
-    "load-set-4": {
-      "suggested_key": { "default": "Ctrl+Shift+4", "mac": "Command+Shift+4" },
-      "description": "Load assigned tab set 4"
-    }
   },
 
   "options_ui": {
