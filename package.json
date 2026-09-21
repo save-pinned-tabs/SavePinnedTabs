@@ -23,6 +23,7 @@
     "test": "npm run test:unit && npm run test:e2e && npm run test:e2e:firefox",
     "test:unit": "tsc && node --test tests/*.test.mjs",
     "test:e2e": "tsc && node scripts/prepare-extension.mjs && playwright test",
+    "test:e2e:brave": "CHROMIUM_BINARY=$(command -v ${BRAVE_BINARY:-brave-browser}) npm run test:e2e",
     "test:e2e:firefox": "npm run build:firefox && node --test tests/firefox/firefox.e2e.mjs"
   },
   "repository": {

@@ -43,6 +43,7 @@ The npm scripts are the test interface for local development and CI:
 ```sh
 npm run test:unit
 npm run test:e2e
+npm run test:e2e:brave
 npm run test:e2e:firefox
 npm test
 ```
