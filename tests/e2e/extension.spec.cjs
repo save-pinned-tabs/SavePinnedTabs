@@ -448,6 +448,84 @@ test("a legacy profile migrates sets and references exactly once across restarts
     await rm(userDataDir, { recursive: true, force: true });
   }
 });
+
+test("oversized legacy storage migrates and exports without losing tab sets", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-quota-"));
+  let firstLaunch;
+  let secondLaunch;
+  const expectedSets = Array.from({ length: 12 }, (_, setIndex) => ({
+    name: `Legacy quota set ${setIndex}`,
+    tabs: Array.from(
+      { length: 12 },
+      (_, tabIndex) =>
+        `https://example.com/${setIndex}/${tabIndex}/${"segment".repeat(8)}`,
+    ),
+  }));
+
+  try {
+    firstLaunch = await launchExtension(userDataDir);
+    await firstLaunch.context.serviceWorkers()[0].evaluate(async (sets) => {
+      let sync = await chrome.storage.sync.get(null);
+      while (!("savePinnedTabs:index" in sync)) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        sync = await chrome.storage.sync.get(null);
+      }
+      const oldChunks = sync["savePinnedTabs:index"].chunks;
+      const legacyEntries = Object.fromEntries(sets.map((set) => [
+        btoa(set.name),
+        { autoload: 0, set_name: set.name, tabs: set.tabs },
+      ]));
+      await chrome.storage.sync.set(legacyEntries);
+      await chrome.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]);
+      await chrome.storage.local.remove("savePinnedTabs:local");
+    }, expectedSets);
+    await firstLaunch.context.close();
+    firstLaunch = undefined;
+
+    secondLaunch = await launchExtension(userDataDir);
+    const options = await openExtensionPage(
+      secondLaunch.context,
+      secondLaunch.extensionId,
+      "options/options.html",
+    );
+    const downloadPromise = options.waitForEvent("download");
+    await options.getByRole("button", { name: "Export" }).click();
+    await expect(options.getByRole("status")).toHaveText("Tab sets exported.");
+    const download = await downloadPromise;
+    const exportedDocument = JSON.parse(await readFile(await download.path(), "utf8"));
+
+    expect(
+      exportedDocument.sets
+        .map(({ name, tabs }) => ({ name, tabs }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
+    ).toEqual(
+      expectedSets.toSorted((left, right) => left.name.localeCompare(right.name)),
+    );
+    const storageState = await options.evaluate(async (legacyNames) => {
+      const sync = await chrome.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      return {
+        chunkCount: index.chunks.length,
+        legacyRecordsRemain: legacyNames.some((name) => btoa(name) in sync),
+      };
+    }, expectedSets.map(({ name }) => name));
+    expect(storageState.chunkCount).toBeGreaterThan(1);
+    expect(storageState.legacyRecordsRemain).toBe(false);
+
+    const popup = await openExtensionPage(
+      secondLaunch.context,
+      secondLaunch.extensionId,
+      "popup/popup.html",
+    );
+    await expect(popup.locator(".load-row")).toHaveCount(expectedSets.length);
+  } finally {
+    await firstLaunch?.context.close();
+    await secondLaunch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("saved-set titles can exceed 30 characters and wrap", async ({ extension }) => {
   const { context, extensionId } = extension;
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
