@@ -45,11 +45,15 @@ npm run test:unit
 npm run test:e2e
 npm run test:e2e:brave
 npm run test:e2e:firefox
+npm run test:e2e:environment:chromium
+npm run test:e2e:environment:firefox
 npm test
 ```
 
 The extension runtime source is in `src/**/*.ts`. Test scripts compile it before they run.
 Unit and browser tests load JavaScript from `.extension-build`. This directory is generated and is not tracked.
+
+The environment suite is intentionally excluded from the default test command because it exercises real browser quota limits and persistent-profile recovery. See [`docs/environment-e2e.md`](docs/environment-e2e.md) for its automated coverage and the reproducible manual recipes for authenticated Sync, private browsing, forced termination, startup settings, and upgrades.
 
 You can run a command without entering the development shell:
 
