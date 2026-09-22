@@ -6,8 +6,8 @@ import { TabSetRepository } from '../tab-sets/tab-set-repository.js';
 import { BrowserTabSetStorage } from '../tab-sets/tab-set-storage.js';
 import {
   BrowserReferenceStorage,
-  BrowserStorageMigration,
 } from './storage-schema.js';
+import { BrowserStorageMigration } from './browser-storage-migration.js';
 import {
   BrowserWindowSessionStorage,
   WindowSessionRepository,

@@ -7,9 +7,9 @@ import {
   BrowserTabSetStorage,
   InMemoryTabSetStorage,
 } from '../.extension-build/tab-sets/tab-set-storage.js';
+import { BrowserStorageMigration } from '../.extension-build/storage/browser-storage-migration.js';
 import {
   BrowserReferenceStorage,
-  BrowserStorageMigration,
   InMemoryReferenceStorage,
   LOCAL_DOCUMENT_KEY,
   SYNC_DOCUMENT_KEY,
