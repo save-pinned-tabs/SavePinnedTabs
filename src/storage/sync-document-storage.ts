@@ -104,7 +104,20 @@ export class SyncDocumentStorage {
       return document === undefined ? null : parseSyncDocument(document);
     }
     if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
-    return this.readIndex(index);
+    return this.parseIndex(index, await this.storage.get(index.chunks));
+  }
+
+  /** Reads an active generation from a previously fetched complete storage snapshot. */
+  readSnapshot(stored: Record<string, unknown>): SyncDocument | null {
+    const index = stored[SYNC_INDEX_KEY];
+    if (index === undefined) {
+      const document = stored['savePinnedTabs:sync'];
+      return document === undefined ? null : parseSyncDocument(document);
+    }
+    if (!isSyncIndex(index)) {
+      throw new TypeError('Stored synchronized index is invalid');
+    }
+    return this.parseIndex(index, stored);
   }
 
   /** Removes every indexed or orphaned chunk generation after recovery is staged. */
@@ -131,15 +144,18 @@ export class SyncDocumentStorage {
 
     let switched = false;
     try {
-      for (const [index, key] of keys.entries()) {
-        await this.storage.set({ [key]: chunks[index] });
-      }
+      await this.storage.set(
+        Object.fromEntries(keys.map((key, index) => [key, chunks[index]])),
+      );
       const nextIndex: SyncIndex = {
         version: CHUNK_SCHEMA_VERSION,
         generation,
         chunks: keys,
       };
-      const verified = await this.readIndex(nextIndex);
+      const verified = this.parseIndex(
+        nextIndex,
+        await this.storage.get(nextIndex.chunks),
+      );
       if (JSON.stringify(verified) !== JSON.stringify(normalizedDocument)) {
         throw new Error('Verified synchronized generation differs from the requested document');
       }
@@ -161,9 +177,12 @@ export class SyncDocumentStorage {
     if (previous) await removeQuietly(this.storage, previous.chunks);
   }
 
-  /** Reconstructs and validates exactly the generation named by an index. */
-  private async readIndex(index: SyncIndex): Promise<SyncDocument> {
-    const stored = await this.storage.get(index.chunks);
+
+  /** Reconstructs and validates an indexed generation from retrieved chunks. */
+  private parseIndex(
+    index: SyncIndex,
+    stored: Record<string, unknown>,
+  ): SyncDocument {
     let serialized = '';
     for (const key of index.chunks) {
       const chunk = stored[key];

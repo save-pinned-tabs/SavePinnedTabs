@@ -334,30 +334,36 @@ test('listener registration occurs during service-worker module evaluation', asy
       registered.push([name, listener]);
     },
   });
-  const storageArea = {
-    async get(key) {
-      if (key === 'savePinnedTabs:local') {
-        return {
-          [key]: {
-            version: 2,
-            windowSessions: {},
-          },
-        };
-      }
-      if (key === 'savePinnedTabs:sync') {
-        return {
-          [key]: {
-            version: 2,
-            sets: {},
-            autoload: { scope: AUTOLOAD_FIRST_WINDOW, setIds: [] },
-            deletedSetIds: [],
-          },
-        };
-      }
-      return {};
+  const storageState = {
+    'savePinnedTabs:local': {
+      version: 2,
+      windowSessions: {},
     },
-    async set() {},
-    async remove() {},
+    'savePinnedTabs:sync': {
+      version: 2,
+      sets: {},
+      autoload: { scope: AUTOLOAD_FIRST_WINDOW, setIds: [] },
+      deletedSetIds: [],
+    },
+  };
+  const storageArea = {
+    async get(keys) {
+      if (keys === null) return structuredClone(storageState);
+      const requested = Array.isArray(keys) ? keys : [keys];
+      return Object.fromEntries(
+        requested
+          .filter((key) => key in storageState)
+          .map((key) => [key, structuredClone(storageState[key])]),
+      );
+    },
+    async set(values) {
+      Object.assign(storageState, structuredClone(values));
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        delete storageState[key];
+      }
+    },
   };
   globalThis.chrome = {
     runtime: {

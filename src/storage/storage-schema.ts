@@ -300,6 +300,7 @@ export function parseLocalDocument(
 }
 
 
+
 /** Persists local set references after ensuring schema migration completes. */
 export class BrowserReferenceStorage {
   /** Provides access to device-local browser storage. */
