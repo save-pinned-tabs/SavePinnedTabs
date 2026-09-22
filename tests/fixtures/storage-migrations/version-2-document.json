@@ -1,0 +1,40 @@
+{
+  "name": "version 2 monolithic document",
+  "sync": {
+    "savePinnedTabs:sync": {
+      "version": 2,
+      "sets": {
+        "00000000-0000-4000-8000-000000000010": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "name": "Versioned",
+          "tabs": ["https://versioned.example/"]
+        }
+      },
+      "autoload": {
+        "scope": "every-window",
+        "setIds": ["00000000-0000-4000-8000-000000000010"]
+      },
+      "deletedSetIds": ["00000000-0000-4000-8000-000000000011"]
+    }
+  },
+  "local": {
+    "savePinnedTabs:local": {
+      "version": 2,
+      "windowSessions": {
+        "9": "00000000-0000-4000-8000-000000000010"
+      }
+    }
+  },
+  "expected": {
+    "sets": [
+      {
+        "name": "Versioned",
+        "tabs": ["https://versioned.example/"],
+        "autoload": true,
+        "windowIds": ["9"]
+      }
+    ],
+    "deletedSetIds": ["00000000-0000-4000-8000-000000000011"],
+    "autoloadScope": "every-window"
+  }
+}

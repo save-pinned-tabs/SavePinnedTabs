@@ -11,7 +11,7 @@ type Operation<Result> = (
 ) => Result | PromiseLike<Result>;
 
 /** Queues operations sequentially and preserves each operation's result or error. */
-interface SerializedOperation {
+export interface SerializedOperation {
   <Result>(operation: Operation<Result>): Promise<Awaited<Result>>;
 }
 

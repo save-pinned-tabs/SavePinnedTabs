@@ -1,0 +1,37 @@
+{
+  "name": "legacy records",
+  "sync": {
+    "Rmlyc3Q=": {
+      "set_name": "First",
+      "autoload": 1,
+      "tabs": ["https://first.example/"]
+    },
+    "5pel5pys6Kqe": {
+      "set_name": "日本語",
+      "autoload": 0,
+      "tabs": ["https://unicode.example/"]
+    }
+  },
+  "local": {
+    "activeTabs": {
+      "7": "Rmlyc3Q=",
+      "8": "missing"
+    }
+  },
+  "expected": {
+    "sets": [
+      {
+        "name": "First",
+        "tabs": ["https://first.example/"],
+        "autoload": true,
+        "windowIds": ["7"]
+      },
+      {
+        "name": "日本語",
+        "tabs": ["https://unicode.example/"],
+        "autoload": false,
+        "windowIds": []
+      }
+    ]
+  }
+}
