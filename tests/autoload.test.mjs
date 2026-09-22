@@ -296,7 +296,6 @@ test('does not delay restoration while favicon loading is pending', async () => 
 test('resolves only after every tab and active-set state are restored', async () => {
   const creation = deferred();
   let hasResolved = false;
-  let activeStateWasWritten = false;
   const browser = createBrowser({
     sets: {
       saved: {
@@ -308,20 +307,17 @@ test('resolves only after every tab and active-set state are restored', async ()
       await creation.promise;
     },
   });
-  browser.storage.local.set = async () => {
-    activeStateWasWritten = true;
-  };
 
   const restoration = restoreAutoloadSet(browser, 1).then(() => {
     hasResolved = true;
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(hasResolved, false);
-  assert.equal(activeStateWasWritten, false);
+  assert.equal(browser.sessionState[1], undefined);
 
   creation.resolve();
   await restoration;
-  assert.equal(activeStateWasWritten, true);
+  assert.equal(browser.sessionState[1], 'saved');
 });
 
 test('rejects with the URL when a tab cannot be restored', async () => {

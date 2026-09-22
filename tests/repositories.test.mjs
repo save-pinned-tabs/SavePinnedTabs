@@ -16,6 +16,7 @@ import {
 } from '../.extension-build/storage/storage-schema.js';
 import {
   SYNC_CHUNK_PAYLOAD_BYTES,
+  SYNC_CHUNK_PREFIX,
   SYNC_INDEX_KEY,
 } from '../.extension-build/storage/sync-document-storage.js';
 import {
@@ -33,10 +34,17 @@ function idGenerator(start = 1) {
   return () => `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`;
 }
 
-function createStorageArea(initialState = {}, failSetAt = null) {
+function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infinity) {
   const state = structuredClone(initialState);
   let setCalls = 0;
   let failingSetCall = failSetAt;
+  function storageBytes(values) {
+    return Object.entries(values).reduce(
+      (total, [key, value]) =>
+        total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
+      0,
+    );
+  }
   return {
     state,
     async get(keys) {
@@ -50,6 +58,10 @@ function createStorageArea(initialState = {}, failSetAt = null) {
       setCalls += 1;
       if (setCalls === failingSetCall) {
         throw this.failure ?? new Error('injected storage interruption');
+      }
+      const nextState = { ...state, ...structuredClone(values) };
+      if (storageBytes(nextState) > maxBytes) {
+        throw new Error('Resource::kQuotaBytes quota exceeded');
       }
       Object.assign(state, structuredClone(values));
     },
@@ -353,6 +365,58 @@ test('interrupted migration resumes idempotently from its persisted identity map
   assert.equal('activeTabs' in localStorage.state, false);
 });
 
+test('interrupted quota migration resumes from local staging after reclaiming sync space', async () => {
+  const legacyKey = 'TGVnYWN5';
+  const syncStorage = createStorageArea({
+    [legacyKey]: { set_name: 'Legacy', autoload: 0, tabs: ['https://example.com/'] },
+  });
+  const localStorage = createStorageArea();
+  const migration = new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+    { createId: idGenerator() },
+  );
+  syncStorage.failNextSet();
+
+  await assert.rejects(migration.ensureMigrated(), /injected storage interruption/);
+  assert.equal(legacyKey in syncStorage.state, false);
+
+  await migration.ensureMigrated();
+
+  assert.deepEqual(
+    Object.values(activeSyncDocument(syncStorage).sets).map(({ name }) => name),
+    ['Legacy'],
+  );
+});
+
+test('staged migration removes chunks left before an interrupted index commit', async () => {
+  const stagedDocument = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Recovered',
+        tabs: ['https://example.com/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const orphanedChunkKey = `${SYNC_CHUNK_PREFIX}interrupted:chunk:0`;
+  const syncStorage = createStorageArea({
+    [orphanedChunkKey]: JSON.stringify(stagedDocument),
+  });
+  const localStorage = createStorageArea({
+    'savePinnedTabs:migration-staging': stagedDocument,
+  });
+  const migration = new BrowserStorageMigration(syncStorage, localStorage);
+
+  await migration.ensureMigrated();
+
+  assert.equal(orphanedChunkKey in syncStorage.state, false);
+  assert.equal(activeSyncDocument(syncStorage).sets[FIRST_ID].name, 'Recovered');
+});
+
 test('large UTF-8 documents use bounded chunks and remain readable', async () => {
   const harness = createBrowserHarness();
   const tabs = Array.from(
@@ -429,4 +493,156 @@ test('failed import preserves the active generation and reports total quota', as
     (await harness.tabSets.list()).map(({ name }) => name),
     ['Before'],
   );
+});
+
+test('popup data migration succeeds when legacy records nearly fill sync quota', async () => {
+  const name = 'Quota';
+  const legacyKey = btoa(name);
+  const legacySet = {
+    set_name: name,
+    tabs: [`https://example.com/${'x'.repeat(2_000)}`],
+    autoload: 0,
+  };
+  const syncStorage = createStorageArea(
+    { [legacyKey]: legacySet },
+    null,
+    3_000,
+  );
+  const localStorage = createStorageArea();
+  const migration = new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+    { createId: idGenerator() },
+  );
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration),
+  );
+
+  const popupData = await tabSets.getPopupData();
+
+  assert.deepEqual(
+    popupData.sets.map(({ name: setName, tabs }) => ({ name: setName, tabs })),
+    [{ name, tabs: legacySet.tabs }],
+  );
+});
+
+test('version-two document migrates when it nearly fills the sync quota', async () => {
+  const savedSet = {
+    id: FIRST_ID,
+    name: 'Version two quota',
+    tabs: [`https://example.com/${'x'.repeat(2_000)}`],
+  };
+  const syncStorage = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: { [FIRST_ID]: savedSet },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+    },
+  }, null, 3_000);
+  const localStorage = createStorageArea();
+  const migration = new BrowserStorageMigration(syncStorage, localStorage);
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration),
+  );
+
+  const popupData = await tabSets.getPopupData();
+
+  assert.deepEqual(popupData.sets, [savedSet]);
+  assert.equal(SYNC_DOCUMENT_KEY in syncStorage.state, false);
+});
+
+test('active generation and late legacy record migrate near the sync quota', async () => {
+  const activeSet = {
+    id: FIRST_ID,
+    name: 'Current',
+    tabs: ['https://current.example/'],
+  };
+  const activeDocument = {
+    version: 2,
+    sets: { [FIRST_ID]: activeSet },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const activeChunkKey = `${SYNC_CHUNK_PREFIX}active:chunk:0`;
+  const legacyName = 'Late legacy';
+  const legacyKey = btoa(legacyName);
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'active',
+      chunks: [activeChunkKey],
+    },
+    [activeChunkKey]: JSON.stringify(activeDocument),
+    [legacyKey]: {
+      set_name: legacyName,
+      tabs: [`https://legacy.example/${'x'.repeat(2_000)}`],
+      autoload: 0,
+    },
+  }, null, 3_000);
+  const localStorage = createStorageArea({
+    [LOCAL_DOCUMENT_KEY]: { version: 2, windowSessions: {} },
+  });
+  const migration = new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+    { createId: idGenerator(2) },
+  );
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration),
+  );
+
+  const popupData = await tabSets.getPopupData();
+
+  assert.deepEqual(
+    popupData.sets.map(({ name }) => name),
+    ['Current', 'Late legacy'],
+  );
+  assert.equal(legacyKey in syncStorage.state, false);
+});
+
+test('failed local staging preserves every synchronized migration source', async () => {
+  const activeDocument = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Current',
+        tabs: ['https://current.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const activeChunkKey = `${SYNC_CHUNK_PREFIX}active:chunk:0`;
+  const legacyKey = 'TGVnYWN5';
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'active',
+      chunks: [activeChunkKey],
+    },
+    [activeChunkKey]: JSON.stringify(activeDocument),
+    [legacyKey]: {
+      set_name: 'Legacy',
+      tabs: ['https://legacy.example/'],
+      autoload: 0,
+    },
+  });
+  const initialSyncState = structuredClone(syncStorage.state);
+  const localStorage = createStorageArea({
+    [LOCAL_DOCUMENT_KEY]: { version: 2, windowSessions: {} },
+  }, 1);
+  const migration = new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+    { createId: idGenerator(2) },
+  );
+
+  await assert.rejects(
+    migration.ensureMigrated(),
+    /injected storage interruption/,
+  );
+
+  assert.deepEqual(syncStorage.state, initialSyncState);
 });

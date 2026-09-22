@@ -107,6 +107,15 @@ export class SyncDocumentStorage {
     return this.readIndex(index);
   }
 
+  /** Removes every indexed or orphaned chunk generation after recovery is staged. */
+  async removeGenerations(): Promise<void> {
+    const stored = await this.storage.get(null);
+    const keys = Object.keys(stored).filter(
+      (key) => key === SYNC_INDEX_KEY || key.startsWith(SYNC_CHUNK_PREFIX),
+    );
+    if (keys.length > 0) await this.storage.remove(keys);
+  }
+
   /** Writes and verifies a generation before atomically switching the index. */
   async save(document: SyncDocument): Promise<void> {
     const previousRecord = await this.storage.get(SYNC_INDEX_KEY);

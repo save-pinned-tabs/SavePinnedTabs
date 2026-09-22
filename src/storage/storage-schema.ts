@@ -43,6 +43,8 @@ const OBSOLETE_LOCAL_REFERENCES_KEY = 'shortcutSets';
 
 /** Serializes schema migrations across extension contexts. */
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
+/** Keeps recovered sync data durable while quota-bound legacy records are replaced. */
+const MIGRATION_STAGING_KEY = 'savePinnedTabs:migration-staging';
 
 /** Matches supported canonical UUID strings. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -541,6 +543,14 @@ export class BrowserStorageMigration implements StorageMigration {
       // An invalid or incomplete generation is not allowed to hide old sources.
     }
 
+    let staged: SyncDocument | null = null;
+    if (storedLocal[MIGRATION_STAGING_KEY] !== undefined) {
+      try {
+        staged = parseSyncDocument(storedLocal[MIGRATION_STAGING_KEY]);
+      } catch {
+        // Invalid staging data cannot supersede recoverable synchronized data.
+      }
+    }
     let versionTwo: SyncDocument | null = null;
     if (storedSync[SYNC_DOCUMENT_KEY] !== undefined) {
       try {
@@ -550,7 +560,9 @@ export class BrowserStorageMigration implements StorageMigration {
       }
     }
     const legacyEntries = legacySetEntries(storedSync);
-    const hasRecoverySources = versionTwo !== null || legacyEntries.length > 0;
+    const hasRecoverySources = staged !== null
+      || versionTwo !== null
+      || legacyEntries.length > 0;
 
     if (!active && !hasRecoverySources) {
       const hasInvalidSource = SYNC_INDEX_KEY in storedSync
@@ -561,7 +573,7 @@ export class BrowserStorageMigration implements StorageMigration {
     }
     const syncDocument = recoverSyncDocument(
       active,
-      versionTwo,
+      staged ?? versionTwo,
       storedSync,
       this.#createId,
     );
@@ -584,7 +596,19 @@ export class BrowserStorageMigration implements StorageMigration {
         JSON.stringify(localDocument) !== JSON.stringify(storedLocalDocument);
     }
 
-    if (!active || hasRecoverySources) await documents.save(syncDocument);
+    const obsoleteSyncKeys = legacyEntries.map(([key]) => key).concat(
+      versionTwo ? [SYNC_DOCUMENT_KEY] : [],
+    );
+    if (hasRecoverySources) {
+      await this.#localStorage.set({
+        [MIGRATION_STAGING_KEY]: syncDocument,
+      });
+      await documents.removeGenerations();
+      await removeKeys(this.#syncStorage, obsoleteSyncKeys);
+      await documents.save(syncDocument);
+    } else if (!active) {
+      await documents.save(syncDocument);
+    }
     await documents.read();
 
     if (localChanged) {
@@ -593,18 +617,10 @@ export class BrowserStorageMigration implements StorageMigration {
       });
     }
 
-    await Promise.all([
-      removeKeys(
-        this.#syncStorage,
-        legacyEntries.map(([key]) => key).concat(
-          versionTwo ? [SYNC_DOCUMENT_KEY] : [],
-        ),
-      ),
-      removeKeys(
-        this.#localStorage,
-        [LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]
-          .filter((key) => key in storedLocal),
-      ),
+    await removeKeys(this.#localStorage, [
+      MIGRATION_STAGING_KEY,
+      ...[LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]
+        .filter((key) => key in storedLocal),
     ]);
   }
 }
