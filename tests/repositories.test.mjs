@@ -15,6 +15,7 @@ import {
   SYNC_DOCUMENT_KEY,
 } from '../.extension-build/storage/storage-schema.js';
 import {
+  SyncDocumentStorage,
   SYNC_CHUNK_PAYLOAD_BYTES,
   SYNC_CHUNK_PREFIX,
   SYNC_INDEX_KEY,
@@ -36,7 +37,7 @@ function idGenerator(start = 1) {
 
 function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infinity) {
   const state = structuredClone(initialState);
-  let setCalls = 0;
+  const calls = { get: 0, set: 0 };
   let failingSetCall = failSetAt;
   function storageBytes(values) {
     return Object.entries(values).reduce(
@@ -46,8 +47,10 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
     );
   }
   return {
+    calls,
     state,
     async get(keys) {
+      calls.get += 1;
       if (keys === null) return structuredClone(state);
       if (Array.isArray(keys)) {
         return Object.fromEntries(keys.filter((key) => key in state).map((key) => [key, structuredClone(state[key])]));
@@ -55,8 +58,8 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
       return keys in state ? { [keys]: structuredClone(state[keys]) } : {};
     },
     async set(values) {
-      setCalls += 1;
-      if (setCalls === failingSetCall) {
+      calls.set += 1;
+      if (calls.set === failingSetCall) {
         throw this.failure ?? new Error('injected storage interruption');
       }
       const nextState = { ...state, ...structuredClone(values) };
@@ -70,7 +73,7 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
     },
     failNextSet(error = new Error('injected storage interruption')) {
       this.failure = error;
-      failingSetCall = setCalls + 1;
+      failingSetCall = calls.set + 1;
     },
   };
 }
@@ -645,4 +648,55 @@ test('failed local staging preserves every synchronized migration source', async
   );
 
   assert.deepEqual(syncStorage.state, initialSyncState);
+});
+
+test('current popup data loads without redundant synchronized storage reads', async () => {
+  const document = {
+    version: 2,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'current',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(document),
+  });
+  const localStorage = createStorageArea({
+    [LOCAL_DOCUMENT_KEY]: { version: 2, windowSessions: {} },
+  });
+  const migration = new BrowserStorageMigration(syncStorage, localStorage);
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration),
+  );
+
+  await tabSets.getPopupData();
+
+  assert.equal(syncStorage.calls.get, 3);
+});
+
+test('large synchronized documents batch quota-safe chunks into one write', async () => {
+  const storage = createStorageArea();
+  const documents = new SyncDocumentStorage(storage);
+  const document = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Large',
+        tabs: [`https://example.com/${'x'.repeat(SYNC_CHUNK_PAYLOAD_BYTES * 2)}`],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+
+  await documents.save(document);
+
+  assert.equal(storage.calls.set, 2);
+  assert.deepEqual(await documents.read(), document);
 });

@@ -538,7 +538,7 @@ export class BrowserStorageMigration implements StorageMigration {
     const documents = new SyncDocumentStorage(this.#syncStorage);
     let active: SyncDocument | null = null;
     try {
-      active = await documents.read();
+      active = documents.readSnapshot(storedSync);
     } catch {
       // An invalid or incomplete generation is not allowed to hide old sources.
     }
@@ -609,7 +609,6 @@ export class BrowserStorageMigration implements StorageMigration {
     } else if (!active) {
       await documents.save(syncDocument);
     }
-    await documents.read();
 
     if (localChanged) {
       await this.#localStorage.set({
