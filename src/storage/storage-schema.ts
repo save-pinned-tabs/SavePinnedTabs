@@ -12,8 +12,8 @@ import {
   type SerializedOperation,
 } from './serialized-operation.js';
 
-/** Identifies the current persisted document format. */
-export const STORAGE_SCHEMA_VERSION = 2;
+/** Identifies documents written by deterministic-identity releases. */
+export const STORAGE_SCHEMA_VERSION = 3;
 
 /** Stores the synchronized document under a stable browser storage key. */
 export const SYNC_DOCUMENT_KEY = 'savePinnedTabs:sync';
@@ -38,7 +38,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 
 
-/** Maps historical storage identifiers to generated set identifiers. */
+/** Preserves random identity assignments made by version-two migrations. */
 export interface MigrationMetadata {
   legacyIds: Record<string, string>;
 }

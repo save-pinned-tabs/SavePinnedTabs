@@ -4,8 +4,15 @@ Legacy tab-set keys are stable identities: each key is the Base64 representation
 
 A migration is restart-safe because the derived ID is stable across attempts and the recovered document remains staged in local storage until a complete synchronized generation is verified. A legacy record arriving after migration resolves to the same ID. Exact name-and-tab matches are also recognized, covering records already migrated by older releases.
 
-`migration.legacyIds` remains readable for version-two documents created before deterministic IDs. A retained entry is necessary when an older release assigned a random UUID: it preserves identity if that legacy record arrives on another device. New deterministic migrations do not add these entries. Deterministic entries are discarded during recovery, and the entire `migration` object is omitted when no compatibility entries remain. Non-deterministic compatibility entries cannot be retired automatically because browser sync exposes no proof that every independently syncing device has deleted its legacy source.
+Document versions define identity semantics explicitly:
 
-Version-four generations use the compact `s:i` index key and `s:<generation>:<chunk>` chunk keys. The index still lists every owned chunk, preserving generation ownership and the atomic switch: chunks are written and verified first, then one index write makes the generation active. Readers continue to accept the version-three `savePinnedTabs:index` format and version-two `savePinnedTabs:sync` documents.
+- Version 2 assigned random UUIDs during legacy migration and persisted the assignment in `migration.legacyIds`.
+- Version 3 derives UUIDs deterministically and does not create migration metadata.
 
-Quota accounting is the UTF-8 byte length of each storage key plus `JSON.stringify(value)`, matching browser synchronized-storage accounting for the encoded key and JSON value. The 142-set benchmark compares the persisted version-four state against the equivalent version-three document with its legacy identity map and requires at least a 10% aggregate reduction.
+`src/storage/version-two-storage.ts` is the isolated compatibility adapter for version-two documents. It upgrades their explicit `version: 2` representation to the current model while preserving `migration.legacyIds`. No code infers a document version or identity strategy from the shape or value of an ID.
+
+A retained version-two mapping remains necessary because an offline device can upload its legacy record after another device migrated it. Browser sync exposes no proof that every device has retired its legacy source, so those compatibility mappings cannot be removed automatically. Version-three migrations never create them, and the `migration` object is omitted when no compatibility entries exist.
+
+The generation envelope remains version 3 and uses `savePinnedTabs:index` plus generation-owned chunk keys. Chunks are written and verified before one index write atomically makes the generation active. This envelope version is independent of the document version: it may contain a readable version-two compatibility document or a current version-three document.
+
+Quota accounting is the UTF-8 byte length of each storage key plus `JSON.stringify(value)`, matching browser synchronized-storage accounting for the encoded key and JSON value. The 142-set benchmark compares equivalent version-three documents in the same generation envelope, with and without the historical identity map, and requires a meaningful aggregate reduction.

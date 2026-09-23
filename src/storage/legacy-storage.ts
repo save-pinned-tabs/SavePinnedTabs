@@ -29,6 +29,12 @@ export type HistoricalStorageRecord = Record<string, unknown>;
 /** Represents one validated historical tab-set entry. */
 export type LegacySetEntry = [key: string, set: LegacySetRecord];
 
+/** Contains a recovered document and transient legacy-reference resolutions. */
+export interface RecoveredSyncState {
+  document: SyncDocument;
+  legacyReferences: Record<string, string>;
+}
+
 /** Checks whether a historical key encodes the associated set name. */
 function matchesLegacyIdentity(key: string, name: string): boolean {
   try {
@@ -110,7 +116,7 @@ export async function recoverSyncDocument(
   monolithic: SyncDocument | null,
   legacyEntries: readonly LegacySetEntry[],
   createId?: () => string,
-): Promise<SyncDocument> {
+): Promise<RecoveredSyncState> {
   const document = active
     ? structuredClone(active)
     : monolithic
@@ -124,6 +130,9 @@ export async function recoverSyncDocument(
     ...(monolithic?.migration?.legacyIds ?? {}),
     ...(active?.migration?.legacyIds ?? {}),
   };
+  const requiresVersionTwoCompatibility = active?.migration !== undefined
+    || monolithic?.migration !== undefined;
+  const legacyReferences: Record<string, string> = {};
 
   if (active && monolithic) {
     for (const [id, set] of Object.entries(monolithic.sets)) {
@@ -137,32 +146,46 @@ export async function recoverSyncDocument(
   for (const [legacyId, legacySet] of legacyEntries) {
     const deterministicId = await legacySetId(legacyId);
     const mappedId = legacyIds[legacyId];
-    if (mappedId === deterministicId) delete legacyIds[legacyId];
     const mappedSet = mappedId ? document.sets[mappedId] : undefined;
     const mappedSetIsExact = mappedSet
       && mappedSet.name === legacySet.set_name
       && JSON.stringify(mappedSet.tabs) === JSON.stringify(legacySet.tabs);
-    if (mappedSetIsExact) continue;
+    if (mappedSetIsExact) {
+      legacyReferences[legacyId] = mappedSet.id;
+      continue;
+    }
     const exactSet = Object.values(document.sets).find(
       (set) => set.name === legacySet.set_name
         && JSON.stringify(set.tabs) === JSON.stringify(legacySet.tabs),
     );
     if (!mappedId && exactSet) {
-      if (exactSet.id !== deterministicId) legacyIds[legacyId] = exactSet.id;
+      legacyReferences[legacyId] = exactSet.id;
+      if (requiresVersionTwoCompatibility) {
+        legacyIds[legacyId] = exactSet.id;
+      }
       continue;
     }
 
-    const preferredId = mappedId ?? (createId ? undefined : deterministicId);
-    const id = preferredId && !usedIds.has(preferredId)
-      ? preferredId
-      : uniqueId(usedIds, createId ?? (() => crypto.randomUUID()));
+    let id: string;
+    let requiresCompatibilityMapping = false;
+    if (mappedId && !usedIds.has(mappedId)) {
+      id = mappedId;
+      requiresCompatibilityMapping = true;
+    } else if (!createId && !usedIds.has(deterministicId)) {
+      id = deterministicId;
+      usedIds.add(id);
+    } else {
+      id = uniqueId(usedIds, createId ?? (() => crypto.randomUUID()));
+      requiresCompatibilityMapping = true;
+    }
+    if (requiresCompatibilityMapping) legacyIds[legacyId] = id;
     usedIds.add(id);
-    if (id !== deterministicId) legacyIds[legacyId] = id;
     document.sets[id] = {
       id,
       name: recoveredName(legacySet.set_name, document.sets),
       tabs: [...legacySet.tabs],
     };
+    legacyReferences[legacyId] = id;
     if (
       legacySet.autoload === 1
       && document.autoload.setIds.length === 0
@@ -176,13 +199,14 @@ export async function recoverSyncDocument(
   } else {
     delete document.migration;
   }
-  return document;
+  return { document, legacyReferences };
 }
 
 /** Converts valid historical local references into a current local document. */
 export async function convertLegacyLocalDocument(
   stored: HistoricalStorageRecord,
   syncDocument: SyncDocument,
+  legacyReferences: Readonly<Record<string, string>> = {},
 ): Promise<LocalDocument> {
   const document = emptyLocalDocument();
   const legacyIds = syncDocument.migration?.legacyIds ?? {};
@@ -193,7 +217,9 @@ export async function convertLegacyLocalDocument(
 
   for (const [windowId, reference] of Object.entries(legacySessions)) {
     if (typeof reference !== 'string') continue;
-    const setId = legacyIds[reference] ?? await legacySetId(reference);
+    const setId = legacyReferences[reference]
+      ?? legacyIds[reference]
+      ?? await legacySetId(reference);
     if (knownIds.has(setId)) document.windowSessions[windowId] = setId;
   }
   return document;

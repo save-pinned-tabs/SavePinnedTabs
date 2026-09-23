@@ -29,7 +29,7 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
   const failures = new Set(Array.isArray(failAt) ? failAt : [failAt]);
   const syncState = {
     [SYNC_DOCUMENT_KEY]: {
-      version: 2,
+      version: 3,
       sets: structuredClone(state.sets),
       autoload: structuredClone(state.autoload),
       deletedSetIds: [],
@@ -55,14 +55,14 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
           if (key === null) {
             return Promise.resolve({
               [LOCAL_DOCUMENT_KEY]: {
-                version: 2,
+                version: 3,
                 windowSessions: structuredClone(state.sessions),
               },
             });
           }
           return browserAwait('storage.local.get', () => ({
             [LOCAL_DOCUMENT_KEY]: {
-              version: 2,
+              version: 3,
               windowSessions: structuredClone(state.sessions),
             },
           }));
@@ -91,7 +91,7 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
         set(values) {
           return browserAwait('storage.sync.set', () => {
             Object.assign(syncState, structuredClone(values));
-            const index = values['s:i'];
+            const index = values['savePinnedTabs:index'];
             if (!index) return;
             const document = JSON.parse(index.chunks.map((key) => syncState[key]).join(''));
             state.sets = structuredClone(document.sets);

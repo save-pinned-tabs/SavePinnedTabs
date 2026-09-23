@@ -15,8 +15,6 @@ import {
   SYNC_DOCUMENT_KEY,
 } from '../.extension-build/storage/storage-schema.js';
 import {
-  CURRENT_SYNC_CHUNK_PREFIX,
-  CURRENT_SYNC_INDEX_KEY,
   SyncDocumentStorage,
   SYNC_CHUNK_PAYLOAD_BYTES,
   SYNC_CHUNK_PREFIX,
@@ -82,9 +80,8 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
 }
 
 function activeSyncDocument(storage) {
-  const currentIndex = storage.state[CURRENT_SYNC_INDEX_KEY];
-  const keys = currentIndex?.chunks ?? storage.state[SYNC_INDEX_KEY].chunks;
-  return JSON.parse(keys.map((key) => storage.state[key]).join(''));
+  const index = storage.state[SYNC_INDEX_KEY];
+  return JSON.parse(index.chunks.map((key) => storage.state[key]).join(''));
 }
 
 function synchronizedStorageBytes(values) {
@@ -158,7 +155,7 @@ test('browser storage rejects incomplete persisted tab sets', async () => {
   );
 });
 
-test('current schema documents recover missing optional fields', async () => {
+test('version-two documents upgrade while recovering optional fields', async () => {
   const savedSet = {
     id: FIRST_ID,
     name: 'Recovered',
@@ -180,6 +177,7 @@ test('current schema documents recover missing optional fields', async () => {
 
   assert.deepEqual(await harness.tabSets.list(), [savedSet]);
   const migrated = activeSyncDocument(harness.syncStorage);
+  assert.equal(migrated.version, 3);
   assert.deepEqual(
     migrated.autoload,
     { scope: 'first-window', setIds: [] },
@@ -290,7 +288,7 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
   assert.equal(Object.keys(activeSyncDocument(harness.syncStorage).migration.legacyIds).length, 3);
-  assert.equal(CURRENT_SYNC_INDEX_KEY in harness.syncStorage.state, true);
+  assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
   assert.deepEqual(Object.keys(harness.localStorage.state).sort(), [LOCAL_DOCUMENT_KEY, 'unrelated']);
   assert.equal(SYNC_DOCUMENT_KEY in harness.syncStorage.state, false);
 
@@ -392,6 +390,7 @@ test('deterministic migration retires metadata without duplicating a late legacy
 
   await new BrowserStorageMigration(syncStorage, localStorage).ensureMigrated();
   const firstDocument = activeSyncDocument(syncStorage);
+  assert.equal(firstDocument.version, 3);
   const firstId = Object.keys(firstDocument.sets)[0];
   assert.equal(firstId, '7dcf521f-5d09-556b-ba7b-b190087e0182');
   assert.equal(firstDocument.migration, undefined);
@@ -407,6 +406,9 @@ test('deterministic migration retires metadata without duplicating a late legacy
 
 test('legacy metadata prefers its mapped exact set over another exact match', async () => {
   const legacyKey = 'TGVnYWN5';
+  const localStorage = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
   const duplicatedValue = {
     name: 'Legacy',
     tabs: ['https://legacy.example/'],
@@ -431,7 +433,7 @@ test('legacy metadata prefers its mapped exact set over another exact match', as
 
   await new BrowserStorageMigration(
     syncStorage,
-    createStorageArea(),
+    localStorage,
     { createId: idGenerator(3) },
   ).ensureMigrated();
 
@@ -439,8 +441,96 @@ test('legacy metadata prefers its mapped exact set over another exact match', as
     Object.keys(activeSyncDocument(syncStorage).sets),
     [FIRST_ID, SECOND_ID],
   );
+  assert.equal(
+    localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    SECOND_ID,
+  );
+  assert.equal(
+    activeSyncDocument(syncStorage).migration.legacyIds[legacyKey],
+    SECOND_ID,
+  );
 });
-test('version-three chunk generations remain readable', async () => {
+
+test('version-two exact match preserves legacy local references without ID inference', async () => {
+  const legacyKey = 'TGVnYWN5';
+  const legacyValue = {
+    set_name: 'Legacy',
+    tabs: ['https://legacy.example/'],
+    autoload: 0,
+  };
+  const syncStorage = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: {
+        [FIRST_ID]: {
+          id: FIRST_ID,
+          name: legacyValue.set_name,
+          tabs: legacyValue.tabs,
+        },
+      },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+    },
+    [legacyKey]: legacyValue,
+  });
+  const localStorage = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
+
+  await new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+  ).ensureMigrated();
+
+  assert.equal(
+    localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    FIRST_ID,
+  );
+  assert.equal(
+    activeSyncDocument(syncStorage).migration.legacyIds[legacyKey],
+    FIRST_ID,
+  );
+});
+test('version-three exact match preserves local references without metadata', async () => {
+  const legacyKey = 'TGVnYWN5';
+  const legacyValue = {
+    set_name: 'Legacy',
+    tabs: ['https://legacy.example/'],
+    autoload: 0,
+  };
+  const syncStorage = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 3,
+      sets: {
+        [FIRST_ID]: {
+          id: FIRST_ID,
+          name: legacyValue.set_name,
+          tabs: legacyValue.tabs,
+        },
+      },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+    },
+    [legacyKey]: legacyValue,
+  });
+  const localStorage = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
+
+  await new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+  ).ensureMigrated();
+
+  assert.equal(
+    localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    FIRST_ID,
+  );
+  assert.equal(activeSyncDocument(syncStorage).migration, undefined);
+});
+
+
+test('version-three generation reads an explicit version-two document', async () => {
   const document = {
     version: 2,
     sets: {
@@ -461,14 +551,12 @@ test('version-three chunk generations remain readable', async () => {
       chunks: [chunkKey],
     },
     [chunkKey]: JSON.stringify(document),
-    [CURRENT_SYNC_INDEX_KEY]: {
-      version: 4,
-      generation: 'incomplete',
-      chunks: [`${CURRENT_SYNC_CHUNK_PREFIX}incomplete:0`],
-    },
   });
 
-  assert.deepEqual(await new SyncDocumentStorage(storage).read(), document);
+  assert.deepEqual(
+    await new SyncDocumentStorage(storage).read(),
+    { ...document, version: 3 },
+  );
 });
 
 test('migrated quota fixture materially reduces aggregate synchronized bytes', async () => {
@@ -544,7 +632,9 @@ test('interrupted quota migration resumes from local staging after reclaiming sy
   const syncStorage = createStorageArea({
     [legacyKey]: { set_name: 'Legacy', autoload: 0, tabs: ['https://example.com/'] },
   });
-  const localStorage = createStorageArea();
+  const localStorage = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
   const migration = new BrowserStorageMigration(
     syncStorage,
     localStorage,
@@ -554,12 +644,21 @@ test('interrupted quota migration resumes from local staging after reclaiming sy
 
   await assert.rejects(migration.ensureMigrated(), /injected storage interruption/);
   assert.equal(legacyKey in syncStorage.state, false);
+  assert.equal(
+    'savePinnedTabs:migration-local-staging' in localStorage.state,
+    true,
+  );
 
   await migration.ensureMigrated();
 
   assert.deepEqual(
     Object.values(activeSyncDocument(syncStorage).sets).map(({ name }) => name),
     ['Legacy'],
+  );
+  const migratedId = Object.keys(activeSyncDocument(syncStorage).sets)[0];
+  assert.equal(
+    localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    migratedId,
   );
 });
 
@@ -604,7 +703,7 @@ test('large UTF-8 documents use bounded chunks and remain readable', async () =>
   });
 
   assert.deepEqual(await harness.tabSets.get(saved.id), saved);
-  const index = harness.syncStorage.state[CURRENT_SYNC_INDEX_KEY];
+  const index = harness.syncStorage.state[SYNC_INDEX_KEY];
   assert.ok(index.chunks.length > 1);
   for (const key of index.chunks) {
     assert.ok(
@@ -649,7 +748,7 @@ test('failed import preserves the active generation and reports total quota', as
   const harness = createBrowserHarness();
   await harness.tabSets.save({ name: 'Before', tabs: ['https://before.example/'] });
   const previousIndex = structuredClone(
-    harness.syncStorage.state[CURRENT_SYNC_INDEX_KEY],
+    harness.syncStorage.state[SYNC_INDEX_KEY],
   );
   harness.syncStorage.failNextSet(
     new Error('QUOTA_BYTES quota exceeded: total synchronized storage'),
@@ -665,7 +764,7 @@ test('failed import preserves the active generation and reports total quota', as
   );
 
   assert.deepEqual(
-    harness.syncStorage.state[CURRENT_SYNC_INDEX_KEY],
+    harness.syncStorage.state[SYNC_INDEX_KEY],
     previousIndex,
   );
   assert.deepEqual(
@@ -933,7 +1032,7 @@ test('large synchronized documents batch quota-safe chunks into one write', asyn
   const storage = createStorageArea();
   const documents = new SyncDocumentStorage(storage);
   const document = {
-    version: 2,
+    version: 3,
     sets: {
       [FIRST_ID]: {
         id: FIRST_ID,
