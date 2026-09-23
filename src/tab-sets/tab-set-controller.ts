@@ -23,6 +23,7 @@ interface TabSets {
   getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization?: 'synchronized' | 'local-only';
   }>;
 
   /** Permanently removes a saved tab set. */
@@ -178,6 +179,7 @@ export class TabSetController {
       sets: popupData.sets,
       activeSetId: activeSetId ?? null,
       autoloadSetIds: popupData.autoload.setIds,
+      synchronization: popupData.synchronization ?? 'synchronized',
     };
   }
 

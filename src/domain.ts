@@ -55,6 +55,7 @@ export interface PopupState {
   sets: TabSet[];
   activeSetId: TabSetId | null;
   autoloadSetIds: TabSetId[];
+  synchronization: 'synchronized' | 'local-only';
 }
 
 /** Captures the data required to render extension options. */

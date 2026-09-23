@@ -201,7 +201,7 @@ export function createPopupUi(document: Document): View {
       clearStatusTimer = undefined;
       status.textContent = message;
       status.dataset.kind = kind;
-      if (kind !== 'loading' && message) {
+      if (kind !== 'loading' && kind !== 'warning' && message) {
         clearStatusTimer = setTimeout(() => {
           status.textContent = '';
           delete status.dataset.kind;

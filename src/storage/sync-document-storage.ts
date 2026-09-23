@@ -62,6 +62,9 @@ function generationId(): string {
   return `${Date.now().toString(36)}-${crypto.randomUUID()}`;
 }
 
+/** Identifies aggregate quota exhaustion for this extension's sync storage. */
+export class AggregateSyncQuotaError extends Error {}
+
 /** Translates browser quota failures into actionable synchronized-storage errors. */
 function quotaError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
@@ -71,8 +74,15 @@ function quotaError(error: unknown): Error {
     guidance = 'A synchronized storage item exceeded the browser per-item quota';
   } else if (normalized.includes('max_items') || normalized.includes('item-count')) {
     guidance = 'Synchronized storage has reached the browser item-count quota';
-  } else if (normalized.includes('quota_bytes') || normalized.includes('total')) {
-    guidance = 'Synchronized storage is full; remove other synchronized extension data or reduce the import';
+  } else if (
+    normalized.includes('quota_bytes')
+    || normalized.includes('kquotabytes')
+    || normalized.includes('total')
+  ) {
+    return new AggregateSyncQuotaError(
+      `Synchronized storage for this extension is full; reduce saved tab data: ${message}`,
+      { cause: error },
+    );
   } else if (normalized.includes('write') && (normalized.includes('rate') || normalized.includes('thrott'))) {
     guidance = 'The browser is throttling synchronized storage writes; wait before retrying';
   }

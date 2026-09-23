@@ -36,6 +36,7 @@ interface TabSetStorage {
   getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized' | 'local-only';
   }>;
 
   /** Returns the matching set or null when it does not exist. */
@@ -203,6 +204,7 @@ export class TabSetRepository {
   async getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized' | 'local-only';
   }> {
     try {
       return await this.#storage.getPopupData();

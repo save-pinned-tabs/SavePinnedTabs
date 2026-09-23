@@ -35,17 +35,18 @@ function idGenerator(start = 1) {
   return () => `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`;
 }
 
+function storageBytes(values) {
+  return Object.entries(values).reduce(
+    (total, [key, value]) =>
+      total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
+    0,
+  );
+}
+
 function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infinity) {
   const state = structuredClone(initialState);
   const calls = { get: 0, set: 0 };
   let failingSetCall = failSetAt;
-  function storageBytes(values) {
-    return Object.entries(values).reduce(
-      (total, [key, value]) =>
-        total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
-      0,
-    );
-  }
   return {
     calls,
     state,
@@ -277,7 +278,7 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
-  assert.equal(Object.keys(activeSyncDocument(harness.syncStorage).migration.legacyIds).length, 3);
+  assert.equal(activeSyncDocument(harness.syncStorage).migration, undefined);
   assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
   assert.deepEqual(Object.keys(harness.localStorage.state).sort(), [LOCAL_DOCUMENT_KEY, 'unrelated']);
   assert.equal(SYNC_DOCUMENT_KEY in harness.syncStorage.state, false);
@@ -363,7 +364,7 @@ test('interrupted migration resumes idempotently from its persisted identity map
   const migrated = activeSyncDocument(syncStorage);
   const stagedId = Object.keys(migrated.sets)[0];
   assert.equal(localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7], stagedId);
-  assert.equal(migrated.migration.legacyIds.TGVnYWN5, stagedId);
+  assert.equal(migrated.migration, undefined);
   assert.equal('TGVnYWN5' in syncStorage.state, false);
   assert.equal('activeTabs' in localStorage.state, false);
 });
@@ -488,7 +489,7 @@ test('failed import preserves the active generation and reports total quota', as
       sets: [{ id: SECOND_ID, name: 'After', tabs: ['https://after.example/'] }],
       autoload: { scope: 'first-window', setIds: [] },
     }),
-    /Synchronized storage is full/,
+    /Synchronized storage for this extension is full/,
   );
 
   assert.deepEqual(harness.syncStorage.state[SYNC_INDEX_KEY], previousIndex);
@@ -526,6 +527,77 @@ test('popup data migration succeeds when legacy records nearly fill sync quota',
   assert.deepEqual(
     popupData.sets.map(({ name: setName, tabs }) => ({ name: setName, tabs })),
     [{ name, tabs: legacySet.tabs }],
+  );
+});
+
+test('quota-bound migration stays usable locally and promotes after reduction', async () => {
+  const legacySets = Object.fromEntries(
+    Array.from({ length: 260 }, (_, index) => {
+      const name = `Recovered ${String(index).padStart(3, '0')}`;
+      return [
+        btoa(name),
+        {
+          set_name: name,
+          tabs: [`https://example.com/${index}/${'x'.repeat(290)}`],
+          autoload: 0,
+        },
+      ];
+    }),
+  );
+  assert.ok(storageBytes(legacySets) < 102_400);
+
+  const syncStorage = createStorageArea(legacySets, null, 102_400);
+  const localStorage = createStorageArea();
+  const firstMigration = new BrowserStorageMigration(
+    syncStorage,
+    localStorage,
+    { createId: idGenerator() },
+  );
+  const firstRepository = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, firstMigration),
+  );
+
+  const firstPopupData = await firstRepository.getPopupData();
+
+  assert.equal(firstPopupData.sets.length, 260);
+  assert.equal(firstPopupData.synchronization, 'local-only');
+  assert.equal(SYNC_INDEX_KEY in syncStorage.state, false);
+  assert.equal('savePinnedTabs:migration-staging' in localStorage.state, true);
+
+  const restartedMigration = new BrowserStorageMigration(syncStorage, localStorage);
+  const restartedRepository = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, restartedMigration),
+  );
+  const restartedPopupData = await restartedRepository.getPopupData();
+
+  assert.equal(restartedPopupData.sets.length, 260);
+  assert.deepEqual(
+    restartedPopupData.sets.map(({ id }) => id),
+    firstPopupData.sets.map(({ id }) => id),
+  );
+
+  let promotedPopupData = restartedPopupData;
+  for (const set of restartedPopupData.sets) {
+    await restartedRepository.remove(set.id);
+    promotedPopupData = await restartedRepository.getPopupData();
+    if (promotedPopupData.synchronization === 'synchronized') break;
+  }
+
+  assert.ok(promotedPopupData.sets.length < 260);
+  assert.equal(promotedPopupData.synchronization, 'synchronized');
+  assert.equal(SYNC_INDEX_KEY in syncStorage.state, true);
+  assert.equal('savePinnedTabs:migration-staging' in localStorage.state, false);
+});
+
+test('Chromium aggregate quota spelling identifies this extension storage area', async () => {
+  const harness = createBrowserHarness();
+  harness.syncStorage.failNextSet(
+    new Error('Resource::kQuotaBytes quota exceeded'),
+  );
+
+  await assert.rejects(
+    harness.tabSets.save({ name: 'Too large', tabs: [] }),
+    /Synchronized storage for this extension is full; reduce saved tab data/,
   );
 });
 
