@@ -1,13 +1,13 @@
 /** Isolates compatibility reads for pre-deterministic version-two documents. */
 
-import { isRecord } from '../validation.js';
+import { isRecord } from '../../validation.js';
 import {
   parseLocalDocument,
   parseSyncDocument,
   STORAGE_SCHEMA_VERSION,
   type LocalDocument,
   type SyncDocument,
-} from './storage-schema.js';
+} from '../storage-schema.js';
 
 /** Identifies the last document version that assigned random migration IDs. */
 const VERSION_TWO = 2;

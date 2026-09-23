@@ -1,13 +1,12 @@
 /** Orchestrates restart-safe conversion of historical browser storage. */
 
 import type { BrowserStorageArea } from '../browser-api.js';
+import { migrateStorageState } from './migration/migrate-storage-state.js';
 import {
-  convertLegacyLocalDocument,
-  legacySetEntries,
   LEGACY_SESSIONS_KEY,
   OBSOLETE_LOCAL_REFERENCES_KEY,
-  recoverSyncDocument,
-} from './legacy-storage.js';
+  unversionedSetEntries,
+} from './migration/unversioned-records.js';
 import {
   createSerializedStorageOperation,
   type SerializedOperation,
@@ -22,14 +21,13 @@ import {
 } from './storage-schema.js';
 import {
   AggregateSyncQuotaError,
-  CURRENT_SYNC_INDEX_KEY,
   SYNC_INDEX_KEY,
   SyncDocumentStorage,
 } from './sync-document-storage.js';
 import {
   parseMigratingSyncDocument,
   parseStoredLocalDocument,
-} from './version-two-storage.js';
+} from './migration/v2-documents.js';
 
 /** Serializes migration across extension contexts. */
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
@@ -104,7 +102,7 @@ export class BrowserStorageMigration implements StorageMigration {
     const staged = stagedRecord[MIGRATION_STAGING_KEY];
     if (staged !== undefined) {
       return {
-        document: parseSyncDocument(staged),
+        document: parseMigratingSyncDocument(staged),
         synchronization: 'local-only',
       };
     }
@@ -180,13 +178,13 @@ export class BrowserStorageMigration implements StorageMigration {
         // Invalid local staging cannot replace recoverable legacy references.
       }
     }
-    const historicalEntries = legacySetEntries(
+    const unversionedSets = unversionedSetEntries(
       storedSync,
       new Set([SYNC_DOCUMENT_KEY, SYNC_INDEX_KEY]),
     );
     const hasRecoverySources = staged !== null
       || monolithic !== null
-      || historicalEntries.length > 0;
+      || unversionedSets.length > 0;
 
     if (!active && !hasRecoverySources) {
       const hasInvalidSource = SYNC_INDEX_KEY in storedSync
@@ -195,30 +193,20 @@ export class BrowserStorageMigration implements StorageMigration {
         throw new Error('No valid synchronized storage source is available');
       }
     }
-    const { document: syncDocument, legacyReferences } =
-      await recoverSyncDocument(
-        active,
-        staged ?? monolithic,
-        historicalEntries,
-        this.#createId === newSetId ? undefined : this.#createId,
-      );
-
     const storedLocalDocument = storedLocal[LOCAL_DOCUMENT_KEY];
-    const localDocument = stagedLocal
-      ?? (storedLocalDocument === undefined
-        ? await convertLegacyLocalDocument(
-            storedLocal,
-            syncDocument,
-            legacyReferences,
-          )
-        : parseStoredLocalDocument(
-            storedLocalDocument,
-            new Set(Object.keys(syncDocument.sets)),
-          ));
+    const { syncDocument, localDocument } = await migrateStorageState({
+      activeSyncDocument: active,
+      fallbackSyncDocument: staged ?? monolithic,
+      unversionedSets,
+      localStorage: storedLocal,
+      storedLocalDocument,
+      stagedLocalDocument: stagedLocal,
+      createId: this.#createId === newSetId ? undefined : this.#createId,
+    });
     const localChanged = storedLocalDocument === undefined
       || JSON.stringify(localDocument) !== JSON.stringify(storedLocalDocument);
 
-    const obsoleteSyncKeys = historicalEntries.map(([key]) => key).concat(
+    const obsoleteSyncKeys = unversionedSets.map(([key]) => key).concat(
       monolithic ? [SYNC_DOCUMENT_KEY] : [],
     );
     let synchronized = true;

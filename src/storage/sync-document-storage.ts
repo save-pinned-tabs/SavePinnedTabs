@@ -2,7 +2,7 @@
 
 import type { BrowserStorageArea } from '../browser-api.js';
 import { parseSyncDocument, type SyncDocument } from './storage-schema.js';
-import { parseStoredSyncDocument } from './version-two-storage.js';
+import { parseStoredSyncDocument } from './migration/v2-documents.js';
 
 export const SYNC_INDEX_KEY = 'savePinnedTabs:index';
 export const SYNC_CHUNK_PREFIX = 'savePinnedTabs:generation:';

@@ -9,7 +9,7 @@ Document versions define identity semantics explicitly:
 - Version 2 assigned random UUIDs during legacy migration and persisted the assignment in `migration.legacyIds`.
 - Version 3 derives UUIDs deterministically and does not create migration metadata.
 
-`src/storage/version-two-storage.ts` is the isolated compatibility adapter for version-two documents. It upgrades their explicit `version: 2` representation to the current model while preserving `migration.legacyIds`. No code infers a document version or identity strategy from the shape or value of an ID.
+`src/storage/migration/v2-documents.ts` is the isolated compatibility adapter for version-two documents. `migration/unversioned-records.ts` recognizes the older scattered set records, while `migration/migrate-storage-state.ts` combines validated historical sources into current synchronized and local documents. No code infers a document version or identity strategy from the shape or value of an ID.
 
 A retained version-two mapping remains necessary because an offline device can upload its legacy record after another device migrated it. Browser sync exposes no proof that every device has retired its legacy source, so those compatibility mappings cannot be removed automatically. Version-three migrations never create them, and the `migration` object is omitted when no compatibility entries exist.
 
