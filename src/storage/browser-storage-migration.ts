@@ -243,10 +243,6 @@ export class BrowserStorageMigration implements StorageMigration {
       });
       await documents.removeGenerations();
       await removeKeys(this.syncStorage, obsoleteSyncKeys);
-      delete syncDocument.migration;
-      await this.localStorage.set({
-        [MIGRATION_STAGING_KEY]: syncDocument,
-      });
       try {
         await documents.save(syncDocument);
       } catch (error: unknown) {

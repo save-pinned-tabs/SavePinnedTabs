@@ -402,7 +402,13 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
-  assert.equal((await activeSyncDocument(harness.syncStorage)).migration, undefined);
+  assert.deepEqual((await activeSyncDocument(harness.syncStorage)).migration, {
+    legacyIds: {
+      'Rmlyc3Q=': ids[0],
+      U2Vjb25k: ids[1],
+      '5pel5pys6Kqe': ids[2],
+    },
+  });
   assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
   assert.deepEqual(
     Object.keys(harness.localStorage.state).sort(),
@@ -488,7 +494,9 @@ test('interrupted migration resumes idempotently from its persisted identity map
   const migrated = await activeSyncDocument(syncStorage);
   const stagedId = Object.keys(migrated.sets)[0];
   assert.equal(localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7], stagedId);
-  assert.equal(migrated.migration, undefined);
+  assert.deepEqual(migrated.migration, {
+    legacyIds: { TGVnYWN5: stagedId },
+  });
   assert.equal('TGVnYWN5' in syncStorage.state, false);
   assert.equal('activeTabs' in localStorage.state, false);
 });
@@ -597,6 +605,69 @@ test('version-two exact match preserves legacy local references without ID infer
     localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
     FIRST_ID,
   );
+});
+
+test('version-two identity mappings survive cross-device generation replacement', async () => {
+  const legacyKey = 'TGVnYWN5';
+  const legacyTabs = Array.from(
+    { length: 200 },
+    (_, index) => `https://legacy.example/${index}/repeated-path`,
+  );
+  const deviceASync = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: {
+        [FIRST_ID]: {
+          id: FIRST_ID,
+          name: 'Legacy',
+          tabs: legacyTabs,
+        },
+      },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+      migration: { legacyIds: { [legacyKey]: FIRST_ID } },
+    },
+    [legacyKey]: {
+      set_name: 'Legacy',
+      tabs: legacyTabs,
+      autoload: 0,
+    },
+  });
+  const deviceALocal = createStorageArea();
+  await new BrowserStorageMigration(
+    deviceASync,
+    deviceALocal,
+  ).ensureMigrated();
+
+  const firstGeneration = deviceASync.state[SYNC_INDEX_KEY].generation;
+  const deviceADocument = await activeSyncDocument(deviceASync);
+  assert.deepEqual(deviceADocument.migration, {
+    legacyIds: { [legacyKey]: FIRST_ID },
+  });
+
+  await new SyncDocumentStorage(deviceASync, deviceALocal).save(deviceADocument);
+
+  assert.notEqual(
+    deviceASync.state[SYNC_INDEX_KEY].generation,
+    firstGeneration,
+  );
+  assert.equal(deviceASync.state[SYNC_INDEX_KEY].encoding, 'gzip-base64');
+  assert.equal(legacyKey in deviceASync.state, false);
+
+  const deviceBSync = createStorageArea(deviceASync.state);
+  const deviceBLocal = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
+  await new BrowserStorageMigration(deviceBSync, deviceBLocal).ensureMigrated();
+
+  const deviceBDocument = await activeSyncDocument(deviceBSync);
+  assert.deepEqual(Object.keys(deviceBDocument.sets), [FIRST_ID]);
+  assert.deepEqual(deviceBDocument.migration, deviceADocument.migration);
+  assert.equal(
+    deviceBLocal.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    FIRST_ID,
+  );
+  assert.equal('activeTabs' in deviceBLocal.state, false);
 });
 test('version-three exact match preserves local references without metadata', async () => {
   const legacyKey = 'TGVnYWN5';
