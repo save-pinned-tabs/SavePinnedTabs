@@ -52,7 +52,11 @@ export function createBrowserRepositories(
   );
 
   const tabSets = new TabSetRepository(
-    new BrowserTabSetStorage(browser.storage.sync, migration),
+    new BrowserTabSetStorage(
+      browser.storage.sync,
+      migration,
+      browser.storage.local,
+    ),
     {
       validateImport(document: unknown): document is TabSetImportDocument {
         return (

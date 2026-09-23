@@ -1427,6 +1427,49 @@ test("environment: quota-bound migration remains usable and promotes after delet
     await thirdLaunch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
   }
+test("environment: near-quota generation can be replaced without double quota", async ({
+  extension,
+}) => {
+  test.slow();
+  const popup = await openExtensionPage(
+    extension.context,
+    extension.extensionId,
+    "popup/popup.html",
+  );
+  const result = await popup.evaluate(async () => {
+    const { SyncDocumentStorage } = await import(
+      chrome.runtime.getURL("storage/sync-document-storage.js")
+    );
+    const documents = new SyncDocumentStorage(
+      chrome.storage.sync,
+      chrome.storage.local,
+    );
+    const createDocument = (name, character) => ({
+      version: 2,
+      sets: {
+        "00000000-0000-4000-8000-000000000130": {
+          id: "00000000-0000-4000-8000-000000000130",
+          name,
+          tabs: [`https://example.com/${character.repeat(84_000)}`],
+        },
+      },
+      autoload: { scope: "first-window", setIds: [] },
+      deletedSetIds: [],
+    });
+    await documents.save(createDocument("Before replacement", "a"));
+    await documents.save(createDocument("After replacement", "b"));
+    const stored = await chrome.storage.sync.get(null);
+    const active = await documents.read();
+    return {
+      name: active.sets["00000000-0000-4000-8000-000000000130"].name,
+      bytes: new TextEncoder().encode(JSON.stringify(stored)).byteLength,
+      recovery: await chrome.storage.local.get("savePinnedTabs:sync-recovery"),
+    };
+  });
+
+  expect(result.name).toBe("After replacement");
+  expect(result.bytes).toBeLessThan(102_400);
+  expect(result.recovery).toEqual({});
 });
 
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {

@@ -17,6 +17,7 @@ The suites use disposable persisted profiles and the real browser `storage.sync`
 - Firefox rejects writes after the 102,400-byte aggregate quota is reached and retains every preceding readable item.
 - In Firefox and Chromium, a non-ASCII legacy collection larger than 8,192 bytes migrates after restart, the popup lists and loads every set, and the active generation uses multiple items no larger than the 6 KiB safe payload size.
 - At most 17 full-size 6 KiB chunks fit below Firefox's total-byte quota, so this layout cannot approach Firefox's 512-item limit.
+- In Firefox and Chromium, a generation near the 102,400-byte aggregate quota can be replaced by another generation that fits alone, without requiring both generations to coexist in Sync.
 - The normal browser commands exclude these expensive scenarios.
 
 Firefox measures the JSON-stringified value plus key bytes. Assertions deliberately accept browser-version-specific error wording but require an actual rejected `storage.sync.set()` call. This is product and browser behavior, not a storage mock.
@@ -52,10 +53,11 @@ Expected product result in spanning mode: private windows use the shared extensi
 2. Capture the browser PID from the launcher, not a renderer PID.
 3. During an idle state, terminate the browser process tree without a graceful shutdown (`kill -KILL <browser-pid>` on Linux, `taskkill /F /T /PID <pid>` on Windows).
 4. Relaunch the same profile. Verify Options lists and loads both sets and that Autoload creates no duplicate pinned tabs.
-5. Repeat while writing a new multi-chunk generation: terminate after one or more new chunk keys appear but before the index changes. Relaunch and verify the previous indexed generation remains readable; retry the operation and verify recovery.
-6. Repeat immediately after the index changes. Relaunch and verify the new generation is readable; orphan cleanup may happen later.
+5. Repeat while replacing a multi-chunk generation: terminate after the local recovery record appears but before old synchronized chunks are removed. Relaunch and verify the previous generation remains readable and the unused recovery record is removed.
+6. Repeat after old chunks are removed and after one or more replacement chunks appear, but before the index changes. Relaunch and verify the local recovery copy restores the previous indexed generation and removes replacement orphans.
+7. Repeat immediately after the index changes. Relaunch and verify the new generation is readable, old-generation orphans are removed, and local recovery staging is removed.
 
-Expected product result: the index always points to a complete readable generation. A crash before index switch keeps the old generation; a crash after switch keeps the new generation. Browser session-restore prompts and restored ordinary tabs are browser behavior and must not be counted as Autoload duplicates.
+Expected product result: the index never exposes a partial document to extension readers. Before the index switch, an interrupted replacement restores the previous generation from `storage.local`; after the switch, it retains the verified new generation. Each device caches its last complete synchronized document locally so independently propagated chunk deletion and index updates cannot expose a partial generation; a later complete generation refreshes that cache.
 
 ## Chrome startup settings
 

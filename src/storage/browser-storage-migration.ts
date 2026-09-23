@@ -21,7 +21,9 @@ import {
 } from './storage-schema.js';
 import {
   AggregateSyncQuotaError,
+  SYNC_COMMITTED_CACHE_KEY,
   SYNC_INDEX_KEY,
+  SYNC_RECOVERY_KEY,
   SyncDocumentStorage,
 } from './sync-document-storage.js';
 import {
@@ -136,19 +138,30 @@ export class BrowserStorageMigration implements StorageMigration {
 
   /** Recovers every valid source, commits a verified generation, then cleans up. */
   async #migrate(): Promise<void> {
+    const initialLocal = await this.localStorage.get([
+      SYNC_RECOVERY_KEY,
+      SYNC_COMMITTED_CACHE_KEY,
+    ]);
+    const documents = new SyncDocumentStorage(
+      this.syncStorage,
+      this.localStorage,
+      parseMigratingSyncDocument,
+    );
+    const recoveredOrCached = initialLocal[SYNC_RECOVERY_KEY] !== undefined
+      || initialLocal[SYNC_COMMITTED_CACHE_KEY] !== undefined
+      ? await documents.read()
+      : null;
     const [storedSync, storedLocal] = await Promise.all([
       this.syncStorage.get(null),
       this.localStorage.get(null),
     ]);
-    const documents = new SyncDocumentStorage(
-      this.syncStorage,
-      parseMigratingSyncDocument,
-    );
-    let active: SyncDocument | null = null;
-    try {
-      active = documents.readSnapshot(storedSync);
-    } catch {
-      // An invalid or incomplete generation is not allowed to hide old sources.
+    let active: SyncDocument | null = recoveredOrCached;
+    if (!active) {
+      try {
+        active = documents.readSnapshot(storedSync);
+      } catch {
+        // An invalid or incomplete generation is not allowed to hide old sources.
+      }
     }
 
     let staged: SyncDocument | null = null;

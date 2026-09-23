@@ -1,19 +1,41 @@
 /** Persists synchronized documents as verified, generation-scoped chunks. */
 
 import type { BrowserStorageArea } from '../browser-api.js';
+import {
+  createSerializedStorageOperation,
+  type SerializedOperation,
+} from './serialized-operation.js';
 import { parseSyncDocument, type SyncDocument } from './storage-schema.js';
 import { parseStoredSyncDocument } from './migration/v2-documents.js';
 
 export const SYNC_INDEX_KEY = 'savePinnedTabs:index';
 export const SYNC_CHUNK_PREFIX = 'savePinnedTabs:generation:';
 export const SYNC_CHUNK_PAYLOAD_BYTES = 6 * 1024;
+export const SYNC_RECOVERY_KEY = 'savePinnedTabs:sync-recovery';
+export const SYNC_COMMITTED_CACHE_KEY = 'savePinnedTabs:sync-committed-cache';
 const CHUNK_SCHEMA_VERSION = 3;
+const DOCUMENT_LOCK = 'save-pinned-tabs:sync-document';
 
 /** Points readers at one complete ordered chunk generation. */
 interface SyncIndex {
   version: typeof CHUNK_SCHEMA_VERSION;
   generation: string;
   chunks: string[];
+}
+
+/** Preserves the previous generation while its synchronized chunks are reclaimed. */
+interface SyncRecovery {
+  version: 1;
+  previousIndex: SyncIndex;
+  previousChunks: Record<string, string>;
+  nextIndex: SyncIndex;
+}
+
+/** Caches the last complete synchronized document observed on this device. */
+interface SyncCommittedCache {
+  version: 1;
+  generation: string;
+  document: SyncDocument;
 }
 
 /** Checks the persisted shape and generation ownership of a chunk index. */
@@ -26,6 +48,40 @@ function isSyncIndex(value: unknown): value is SyncIndex {
     && index.chunks.length > 0
     && index.chunks.every((key) => typeof key === 'string'
       && key.startsWith(`${SYNC_CHUNK_PREFIX}${index.generation}:chunk:`));
+}
+
+/** Checks a locally staged rollback record before using it for recovery. */
+function isSyncRecovery(value: unknown): value is SyncRecovery {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const recovery = value as Record<string, unknown>;
+  if (recovery.version !== 1
+    || !isSyncIndex(recovery.previousIndex)
+    || !isSyncIndex(recovery.nextIndex)
+    || !recovery.previousChunks
+    || typeof recovery.previousChunks !== 'object'
+    || Array.isArray(recovery.previousChunks)) {
+    return false;
+  }
+  const chunks = recovery.previousChunks as Record<string, unknown>;
+  return recovery.previousIndex.chunks.every(
+    (key) => typeof chunks[key] === 'string',
+  );
+}
+
+/** Parses a local committed-document cache used during non-atomic Sync propagation. */
+function parseCommittedCache(value: unknown): SyncCommittedCache | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const cache = value as Record<string, unknown>;
+  if (cache.version !== 1 || typeof cache.generation !== 'string') return null;
+  try {
+    return {
+      version: 1,
+      generation: cache.generation,
+      document: parseSyncDocument(cache.document),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Measures one character after JSON string escaping. */
@@ -104,14 +160,29 @@ async function removeQuietly(storage: BrowserStorageArea, keys: string[]): Promi
 
 /** Reads and transactionally replaces synchronized chunk generations. */
 export class SyncDocumentStorage {
-  /** Creates a document store with an explicit compatibility parser. */
+  #runExclusive: SerializedOperation;
+
+  /** Creates a document store over synchronized storage and optional local recovery storage. */
   constructor(
     private readonly storage: BrowserStorageArea,
+    private readonly recoveryStorage?: BrowserStorageArea,
     private readonly parseStoredDocument = parseStoredSyncDocument,
-  ) {}
+  ) {
+    this.#runExclusive = createSerializedStorageOperation(
+      storage,
+      DOCUMENT_LOCK,
+    );
+  }
 
-  /** Reads the active generation, with a version-two fallback for migration. */
-  async read(): Promise<SyncDocument | null> {
+  /** Reads a complete active generation under cross-context serialization. */
+  read(): Promise<SyncDocument | null> {
+    return this.#runExclusive(() => this.readDocument());
+  }
+
+  /** Reads a complete active generation or the last locally observed committed generation. */
+  private async readDocument(): Promise<SyncDocument | null> {
+    const recovered = await this.recover();
+    if (recovered) return recovered;
     const indexRecord = await this.storage.get(SYNC_INDEX_KEY);
     const index = indexRecord[SYNC_INDEX_KEY];
     if (index === undefined) {
@@ -120,7 +191,15 @@ export class SyncDocumentStorage {
       return document === undefined ? null : this.parseStoredDocument(document);
     }
     if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
-    return this.parseIndex(index, await this.storage.get(index.chunks));
+    try {
+      const document = this.parseIndex(index, await this.storage.get(index.chunks));
+      await this.cacheCommitted(index.generation, document);
+      return document;
+    } catch (error) {
+      const cached = await this.readCommittedCache();
+      if (cached) return cached.document;
+      throw error;
+    }
   }
 
   /** Reads an active generation from a previously fetched complete storage snapshot. */
@@ -145,8 +224,14 @@ export class SyncDocumentStorage {
     if (keys.length > 0) await this.storage.remove(keys);
   }
 
-  /** Writes and verifies a generation before atomically switching the index. */
-  async save(document: SyncDocument): Promise<void> {
+  /** Reclaims the previous generation under cross-context serialization. */
+  save(document: SyncDocument): Promise<void> {
+    return this.#runExclusive(() => this.saveDocument(document));
+  }
+
+  /** Reclaims the previous generation through a locally staged rollback copy. */
+  private async saveDocument(document: SyncDocument): Promise<void> {
+    await this.recover();
     const previousRecord = await this.storage.get(SYNC_INDEX_KEY);
     const previous = isSyncIndex(previousRecord[SYNC_INDEX_KEY])
       ? previousRecord[SYNC_INDEX_KEY]
@@ -157,17 +242,31 @@ export class SyncDocumentStorage {
     const keys = chunks.map((_, index) =>
       `${SYNC_CHUNK_PREFIX}${generation}:chunk:${index}`
     );
+    const nextIndex: SyncIndex = {
+      version: CHUNK_SCHEMA_VERSION,
+      generation,
+      chunks: keys,
+    };
+    let recovery: SyncRecovery | null = null;
+    let committed = false;
 
-    let switched = false;
     try {
+      if (previous && this.recoveryStorage) {
+        const previousChunks = await this.storage.get(previous.chunks);
+        this.parseIndex(previous, previousChunks);
+        recovery = {
+          version: 1,
+          previousIndex: previous,
+          previousChunks: previousChunks as Record<string, string>,
+          nextIndex,
+        };
+        await this.recoveryStorage.set({ [SYNC_RECOVERY_KEY]: recovery });
+        await this.storage.remove(previous.chunks);
+      }
+
       await this.storage.set(
         Object.fromEntries(keys.map((key, index) => [key, chunks[index]])),
       );
-      const nextIndex: SyncIndex = {
-        version: CHUNK_SCHEMA_VERSION,
-        generation,
-        chunks: keys,
-      };
       const verified = this.parseIndex(
         nextIndex,
         await this.storage.get(nextIndex.chunks),
@@ -176,21 +275,114 @@ export class SyncDocumentStorage {
         throw new Error('Verified synchronized generation differs from the requested document');
       }
       await this.storage.set({ [SYNC_INDEX_KEY]: nextIndex });
-      switched = true;
-      await this.read();
+      committed = true;
+      this.parseIndex(nextIndex, await this.storage.get(nextIndex.chunks));
     } catch (error: unknown) {
-      if (switched) {
-        if (previous) {
-          await this.storage.set({ [SYNC_INDEX_KEY]: previous });
+      if (!committed) {
+        if (recovery) {
+          await this.restore(recovery);
         } else {
-          await this.storage.remove(SYNC_INDEX_KEY);
+          await removeQuietly(this.storage, keys);
         }
+        throw quotaError(error);
       }
-      await removeQuietly(this.storage, keys);
-      throw quotaError(error);
     }
 
     if (previous) await removeQuietly(this.storage, previous.chunks);
+    await this.cacheCommitted(nextIndex.generation, normalizedDocument);
+    if (this.recoveryStorage) {
+      await removeQuietly(this.recoveryStorage, [SYNC_RECOVERY_KEY]);
+    }
+  }
+
+  /** Resolves an interrupted replacement to one complete committed generation. */
+  private async recover(): Promise<SyncDocument | null> {
+    if (!this.recoveryStorage) return null;
+    const record = await this.recoveryStorage.get(SYNC_RECOVERY_KEY);
+    const recovery = record[SYNC_RECOVERY_KEY];
+    if (recovery === undefined) return null;
+    if (!isSyncRecovery(recovery)) {
+      throw new TypeError('Stored synchronized recovery record is invalid');
+    }
+
+    const indexRecord = await this.storage.get(SYNC_INDEX_KEY);
+    const activeIndex = indexRecord[SYNC_INDEX_KEY];
+    if (isSyncIndex(activeIndex)
+      && activeIndex.generation === recovery.nextIndex.generation) {
+      try {
+        const document = this.parseIndex(
+          activeIndex,
+          await this.storage.get(activeIndex.chunks),
+        );
+        await removeQuietly(this.storage, recovery.previousIndex.chunks);
+        await removeQuietly(this.recoveryStorage, [SYNC_RECOVERY_KEY]);
+        return document;
+      } catch {
+        return this.restore(recovery);
+      }
+    }
+    if (isSyncIndex(activeIndex)
+      && activeIndex.generation !== recovery.previousIndex.generation) {
+      let document: SyncDocument;
+      try {
+        document = this.parseIndex(
+          activeIndex,
+          await this.storage.get(activeIndex.chunks),
+        );
+      } catch {
+        return this.parseIndex(
+          recovery.previousIndex,
+          recovery.previousChunks,
+        );
+      }
+      try {
+        await this.cacheCommitted(activeIndex.generation, document);
+      } catch {
+        // The complete synchronized generation remains authoritative and readable.
+      }
+      await removeQuietly(this.storage, [
+        ...recovery.previousIndex.chunks,
+        ...recovery.nextIndex.chunks,
+      ]);
+      await removeQuietly(this.recoveryStorage, [SYNC_RECOVERY_KEY]);
+      return document;
+    }
+
+
+    return this.restore(recovery);
+  }
+
+  /** Restores the previous index after discarding an incomplete replacement. */
+  private async restore(recovery: SyncRecovery): Promise<SyncDocument> {
+    await removeQuietly(this.storage, recovery.nextIndex.chunks);
+    await this.storage.set(recovery.previousChunks);
+    await this.storage.set({ [SYNC_INDEX_KEY]: recovery.previousIndex });
+    const document = this.parseIndex(
+      recovery.previousIndex,
+      await this.storage.get(recovery.previousIndex.chunks),
+    );
+    await this.cacheCommitted(recovery.previousIndex.generation, document);
+    if (this.recoveryStorage) {
+      await removeQuietly(this.recoveryStorage, [SYNC_RECOVERY_KEY]);
+    }
+    return document;
+  }
+
+  /** Stores the latest complete document for reads during cross-device propagation gaps. */
+  private async cacheCommitted(
+    generation: string,
+    document: SyncDocument,
+  ): Promise<void> {
+    if (!this.recoveryStorage) return;
+    const cache: SyncCommittedCache = { version: 1, generation, document };
+    await this.recoveryStorage.set({ [SYNC_COMMITTED_CACHE_KEY]: cache });
+  }
+
+  /** Reads and validates this device's last complete synchronized document. */
+  private async readCommittedCache(): Promise<SyncCommittedCache | null> {
+    if (!this.recoveryStorage) return null;
+    const stored = await this.recoveryStorage.get(SYNC_COMMITTED_CACHE_KEY);
+    return parseCommittedCache(stored[SYNC_COMMITTED_CACHE_KEY]);
   }
 
 

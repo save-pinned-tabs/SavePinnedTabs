@@ -18,7 +18,9 @@ import {
   SyncDocumentStorage,
   SYNC_CHUNK_PAYLOAD_BYTES,
   SYNC_CHUNK_PREFIX,
+  SYNC_COMMITTED_CACHE_KEY,
   SYNC_INDEX_KEY,
+  SYNC_RECOVERY_KEY,
 } from '../.extension-build/storage/sync-document-storage.js';
 import {
   BrowserWindowSessionStorage,
@@ -45,8 +47,17 @@ function storageBytes(values) {
 
 function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infinity) {
   const state = structuredClone(initialState);
-  const calls = { get: 0, set: 0 };
+  const calls = { get: 0, set: 0, remove: 0 };
+  let failingSetKey = null;
   let failingSetCall = failSetAt;
+  let failingRemoveCall = null;
+  function storageBytes(values) {
+    return Object.entries(values).reduce(
+      (total, [key, value]) =>
+        total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
+      0,
+    );
+  }
   return {
     calls,
     state,
@@ -60,7 +71,9 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
     },
     async set(values) {
       calls.set += 1;
-      if (calls.set === failingSetCall) {
+      if (calls.set === failingSetCall
+        || (failingSetKey && failingSetKey in values)) {
+        failingSetKey = null;
         throw this.failure ?? new Error('injected storage interruption');
       }
       const nextState = { ...state, ...structuredClone(values) };
@@ -70,11 +83,26 @@ function createStorageArea(initialState = {}, failSetAt = null, maxBytes = Infin
       Object.assign(state, structuredClone(values));
     },
     async remove(keys) {
+      calls.remove += 1;
+      if (calls.remove === failingRemoveCall) {
+        throw this.failure ?? new Error('injected storage interruption');
+      }
       for (const key of Array.isArray(keys) ? keys : [keys]) delete state[key];
     },
-    failNextSet(error = new Error('injected storage interruption')) {
+    failSetIn(offset, error = new Error('injected storage interruption')) {
       this.failure = error;
-      failingSetCall = calls.set + 1;
+      failingSetCall = calls.set + offset;
+    },
+    failNextSet(error = new Error('injected storage interruption')) {
+      this.failSetIn(1, error);
+    },
+    failNextSetForKey(key, error = new Error('injected storage interruption')) {
+      this.failure = error;
+      failingSetKey = key;
+    },
+    failNextRemove(error = new Error('injected storage interruption')) {
+      this.failure = error;
+      failingRemoveCall = calls.remove + 1;
     },
   };
 }
@@ -117,7 +145,7 @@ function createBrowserHarness({ sync = {}, local = {}, createId = idGenerator() 
   const references = new BrowserReferenceStorage(localStorage, migration);
   const windowSessions = new WindowSessionRepository(new BrowserWindowSessionStorage(references));
   const tabSets = new TabSetRepository(
-    new BrowserTabSetStorage(syncStorage, migration),
+    new BrowserTabSetStorage(syncStorage, migration, localStorage),
     {
       createId,
       validateImport: isValidImport,
@@ -280,6 +308,7 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
 
   const sets = await harness.tabSets.list();
+  const ids = sets.map((set) => set.id);
   assert.deepEqual(sets.map((set) => set.name), ['First', 'Second', '日本語']);
   assert.deepEqual(await harness.tabSets.getAutoload(), {
     scope: 'first-window',
@@ -289,10 +318,10 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   assert.equal(await harness.windowSessions.get(2), null);
   assert.equal(Object.keys(activeSyncDocument(harness.syncStorage).migration.legacyIds).length, 3);
   assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
-  assert.deepEqual(Object.keys(harness.localStorage.state).sort(), [LOCAL_DOCUMENT_KEY, 'unrelated']);
-  assert.equal(SYNC_DOCUMENT_KEY in harness.syncStorage.state, false);
-
-  const ids = sets.map((set) => set.id);
+  assert.deepEqual(
+    Object.keys(harness.localStorage.state).sort(),
+    [LOCAL_DOCUMENT_KEY, SYNC_COMMITTED_CACHE_KEY, 'unrelated'].sort(),
+  );
   assert.deepEqual((await harness.tabSets.list()).map((set) => set.id), ids);
 });
 
@@ -318,7 +347,7 @@ test('saveForWindow rolls back new and updated records when session activation f
   const generatedIds = [FIRST_ID, FIRST_ID, SECOND_ID];
   const harness = createBrowserHarness({ createId: () => generatedIds.shift() });
   await harness.tabSets.list();
-  harness.localStorage.failNextSet();
+  harness.localStorage.failNextSetForKey(LOCAL_DOCUMENT_KEY);
 
   await assert.rejects(
     harness.tabSets.saveForWindow({ name: 'New', tabs: [] }, 1),
@@ -328,7 +357,7 @@ test('saveForWindow rolls back new and updated records when session activation f
 
   const saved = await harness.tabSets.save({ name: 'Existing', tabs: ['before'] });
   assert.equal(saved.id, SECOND_ID);
-  harness.localStorage.failNextSet();
+  harness.localStorage.failNextSetForKey(LOCAL_DOCUMENT_KEY);
   await assert.rejects(
     harness.tabSets.saveForWindow({ ...saved, name: 'Updated', tabs: ['after'] }, 1),
     /injected storage interruption/,
@@ -1048,4 +1077,305 @@ test('large synchronized documents batch quota-safe chunks into one write', asyn
 
   assert.equal(storage.calls.set, 2);
   assert.deepEqual(await documents.read(), document);
+});
+
+test('large committed generation can be replaced without double sync quota', async () => {
+  const syncStorage = createStorageArea({}, null, 16_000);
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const document = (name, character) => ({
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name,
+        tabs: [`https://example.com/${character.repeat(12_000)}`],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  });
+  const previous = document('Before', 'a');
+  const replacement = document('After', 'b');
+  await documents.save(previous);
+
+  await documents.save(replacement);
+
+  assert.deepEqual(await documents.read(), replacement);
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
+  assert.equal(SYNC_COMMITTED_CACHE_KEY in localStorage.state, true);
+});
+
+test('interrupted replacements recover the last committed document after restart', async () => {
+  const previous = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Before interruption',
+        tabs: ['https://before.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    sets: {
+      [SECOND_ID]: {
+        id: SECOND_ID,
+        name: 'After interruption',
+        tabs: ['https://after.example/'],
+      },
+    },
+  };
+  const interruptions = [
+    ['local recovery staging', ({ localStorage }) => localStorage.failNextSet()],
+    ['old chunk removal', ({ syncStorage }) => syncStorage.failNextRemove()],
+    ['new chunk write', ({ syncStorage }) => syncStorage.failNextSet()],
+    ['index switch', ({ syncStorage }) => syncStorage.failSetIn(2)],
+  ];
+
+  for (const [mutation, interrupt] of interruptions) {
+    const syncStorage = createStorageArea();
+    const localStorage = createStorageArea();
+    const documents = new SyncDocumentStorage(syncStorage, localStorage);
+    await documents.save(previous);
+    interrupt({ syncStorage, localStorage });
+
+    await assert.rejects(
+      documents.save(replacement),
+      /injected storage interruption/,
+      mutation,
+    );
+
+    const restarted = new SyncDocumentStorage(syncStorage, localStorage);
+    assert.deepEqual(await restarted.read(), previous, mutation);
+    assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false, mutation);
+  }
+});
+
+test('committed replacement survives interrupted recovery cleanup', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 2,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  await documents.save(previous);
+  localStorage.failNextRemove();
+
+  await documents.save(replacement);
+
+  const restarted = new SyncDocumentStorage(syncStorage, localStorage);
+  assert.deepEqual(await restarted.read(), replacement);
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
+});
+
+test('committed replacement recovers when local cache update is interrupted', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 2,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  await documents.save(previous);
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+
+  await assert.rejects(
+    documents.save(replacement),
+    /injected storage interruption/,
+  );
+
+  const restarted = new SyncDocumentStorage(syncStorage, localStorage);
+  assert.deepEqual(await restarted.read(), replacement);
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
+});
+
+test('reads wait for an active replacement instead of rolling it back', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 2,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  await documents.save(previous);
+  const originalSet = syncStorage.set.bind(syncStorage);
+  let resumeChunkWrite;
+  let markChunkWriteReached;
+  const chunkWriteReached = new Promise((resolve) => {
+    markChunkWriteReached = resolve;
+  });
+  const resumeChunkWritePromise = new Promise((resolve) => {
+    resumeChunkWrite = resolve;
+  });
+  let shouldPause = true;
+  syncStorage.set = async (values) => {
+    const writesGenerationChunk = Object.keys(values).some(
+      (key) => key.startsWith(SYNC_CHUNK_PREFIX),
+    );
+    if (shouldPause && writesGenerationChunk) {
+      shouldPause = false;
+      markChunkWriteReached();
+      await resumeChunkWritePromise;
+    }
+    await originalSet(values);
+  };
+
+  const save = documents.save(replacement);
+  await chunkWriteReached;
+  let readSettled = false;
+  const read = documents.read().finally(() => {
+    readSettled = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(readSettled, false);
+
+  resumeChunkWrite();
+
+  await save;
+  assert.deepEqual(await read, replacement);
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
+});
+
+test('local committed cache covers non-atomic cross-device propagation', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Last complete',
+        tabs: ['https://complete.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  await documents.save(previous);
+  const previousIndex = syncStorage.state[SYNC_INDEX_KEY];
+  await syncStorage.remove(previousIndex.chunks);
+
+  assert.deepEqual(await documents.read(), previous);
+});
+
+test('startup migration recovers an interrupted normal replacement first', async () => {
+  const previous = {
+    version: 2,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Recovered on startup',
+        tabs: ['https://recovered.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}previous:chunk:0`;
+  const nextChunkKey = `${SYNC_CHUNK_PREFIX}next:chunk:0`;
+  const previousIndex = {
+    version: 3,
+    generation: 'previous',
+    chunks: [chunkKey],
+  };
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: previousIndex,
+    [nextChunkKey]: '{"version":2',
+  });
+  const localStorage = createStorageArea({
+    [SYNC_RECOVERY_KEY]: {
+      version: 1,
+      previousIndex,
+      previousChunks: { [chunkKey]: JSON.stringify(previous) },
+      nextIndex: {
+        version: 3,
+        generation: 'next',
+        chunks: [nextChunkKey],
+      },
+    },
+  });
+  const migration = new BrowserStorageMigration(syncStorage, localStorage);
+  const tabSets = new TabSetRepository(
+    new BrowserTabSetStorage(syncStorage, migration, localStorage),
+  );
+
+  assert.deepEqual(await tabSets.list(), Object.values(previous.sets));
+  assert.equal(nextChunkKey in syncStorage.state, false);
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
+});
+
+test('recovery waits for a remotely committed generation to finish propagating', async () => {
+  const previous = {
+    version: 2,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const remote = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  const previousChunk = `${SYNC_CHUNK_PREFIX}previous:chunk:0`;
+  const nextChunk = `${SYNC_CHUNK_PREFIX}next:chunk:0`;
+  const remoteChunk = `${SYNC_CHUNK_PREFIX}remote:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'remote',
+      chunks: [remoteChunk],
+    },
+    [nextChunk]: '{"version":2',
+  });
+  const localStorage = createStorageArea({
+    [SYNC_RECOVERY_KEY]: {
+      version: 1,
+      previousIndex: {
+        version: 3,
+        generation: 'previous',
+        chunks: [previousChunk],
+      },
+      previousChunks: { [previousChunk]: JSON.stringify(previous) },
+      nextIndex: {
+        version: 3,
+        generation: 'next',
+        chunks: [nextChunk],
+      },
+    },
+  });
+
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+
+  assert.deepEqual(await documents.read(), previous);
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, true);
+
+  await syncStorage.set({ [remoteChunk]: JSON.stringify(remote) });
+
+  assert.deepEqual(await documents.read(), remote);
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false);
 });

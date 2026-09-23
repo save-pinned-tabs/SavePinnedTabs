@@ -942,6 +942,48 @@ test("popup, set loading, and window creation recover after browser restart", as
   assert.equal(typeof windowId, "number");
 });
 
+test("environment: near-quota generation can be replaced without double quota", async () => {
+  await openExtensionPage("popup/popup.html");
+  const result = await driver.executeAsyncScript((done) => {
+    (async () => {
+      const { SyncDocumentStorage } = await import(
+        browser.runtime.getURL("storage/sync-document-storage.js")
+      );
+      const documents = new SyncDocumentStorage(
+        browser.storage.sync,
+        browser.storage.local,
+      );
+      const id = "00000000-0000-4000-8000-000000000130";
+      const createDocument = (name, character) => ({
+        version: 2,
+        sets: {
+          [id]: {
+            id,
+            name,
+            tabs: [`https://example.com/${character.repeat(84_000)}`],
+          },
+        },
+        autoload: { scope: "first-window", setIds: [] },
+        deletedSetIds: [],
+      });
+      await documents.save(createDocument("Before replacement", "a"));
+      await documents.save(createDocument("After replacement", "b"));
+      const stored = await browser.storage.sync.get(null);
+      const active = await documents.read();
+      done({
+        name: active.sets[id].name,
+        bytes: new TextEncoder().encode(JSON.stringify(stored)).byteLength,
+        recovery: await browser.storage.local.get("savePinnedTabs:sync-recovery"),
+      });
+    })().catch((error) => done({ error: String(error) }));
+  });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.name, "After replacement");
+  assert.ok(result.bytes < 102_400);
+  assert.deepEqual(result.recovery, {});
+});
+
 test("environment: Firefox enforces quotas without losing the readable generation", async () => {
   await openExtensionPage("popup/popup.html");
   const retainedUrl = `${extensionOrigin}/options/options.html?retained-after-quota`;

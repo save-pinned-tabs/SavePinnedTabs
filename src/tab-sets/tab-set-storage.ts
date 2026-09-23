@@ -57,9 +57,10 @@ export class BrowserTabSetStorage {
   constructor(
     syncStorage: BrowserStorageArea,
     migration: StorageMigration = NOOP_MIGRATION,
+    localStorage?: BrowserStorageArea,
   ) {
     this.#migration = migration;
-    this.#documents = new SyncDocumentStorage(syncStorage);
+    this.#documents = new SyncDocumentStorage(syncStorage, localStorage);
     this.#runExclusive = createSerializedStorageOperation(
       syncStorage,
       TAB_SET_LOCK,
