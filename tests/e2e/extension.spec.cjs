@@ -478,26 +478,34 @@ test("a legacy profile migrates sets and references exactly once across restarts
       const setId = Object.keys(document.sets)[0];
       return {
         legacyRemoved: !(legacyKey in sync),
+        migration: document.migration,
         set: document.sets[setId],
         autoloadSetIds: document.autoload.setIds,
       };
     }, { legacyKey });
     expect(migrated.legacyRemoved).toBe(true);
-    expect(migrated.set).toMatchObject({
+    expect(migrated.migration).toBeUndefined();
+    expect(migrated.set).toEqual({
+      id: "d10d25ff-7633-5634-a0d4-eccf2505daad",
       name: "Legacy Work",
       tabs: ["https://example.com/legacy"],
     });
     expect(migrated.autoloadSetIds).toEqual([migrated.set.id]);
 
-    await popup.evaluate(async ({ lateLegacyKey }) => {
+    await popup.evaluate(async ({ legacyKey, lateLegacyKey }) => {
       await chrome.storage.sync.set({
+        [legacyKey]: {
+          autoload: 1,
+          set_name: "Legacy Work",
+          tabs: ["https://example.com/legacy"],
+        },
         [lateLegacyKey]: {
           autoload: 0,
           set_name: "Late Legacy",
           tabs: ["https://example.com/late"],
         },
       });
-    }, { lateLegacyKey });
+    }, { legacyKey, lateLegacyKey });
     await secondLaunch.context.close();
     secondLaunch = undefined;
 
@@ -507,10 +515,12 @@ test("a legacy profile migrates sets and references exactly once across restarts
       thirdLaunch.extensionId,
       "popup/popup.html",
     );
-    await expect(restartedPopup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     await expect(
-      restartedPopup.locator(".load-row", { hasText: "Late Legacy" }),
-    ).toBeVisible();
+      restartedPopup.locator('.load-row[data-name="Legacy Work"]'),
+    ).toHaveCount(1);
+    await expect(
+      restartedPopup.locator('.load-row[data-name="Late Legacy"]'),
+    ).toHaveCount(1);
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();

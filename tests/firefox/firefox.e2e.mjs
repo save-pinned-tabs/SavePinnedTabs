@@ -531,25 +531,37 @@ test("a legacy profile migrates sets and references exactly once across restarts
         const setId = Object.keys(document.sets)[0];
         done({
           legacyRemoved: !(setKey in sync),
+          migration: document.migration,
           set: document.sets[setId],
           autoloadSetIds: document.autoload.setIds,
         });
       });
   }, legacyKey);
   assert.equal(migrated.legacyRemoved, true);
+  assert.equal(migrated.migration, null);
   assert.deepEqual(migrated.set, {
-    id: migrated.set.id,
+    id: "d10d25ff-7633-5634-a0d4-eccf2505daad",
     name: "Legacy Work",
     tabs: ["https://example.com/legacy"],
   });
   assert.deepEqual(migrated.autoloadSetIds, [migrated.set.id]);
-  await driver.executeAsyncScript((setKey, done) => {
+  await driver.executeAsyncScript((originalKey, lateKey, done) => {
     browser.storage.sync.set({
-      [setKey]: { autoload: 0, set_name: "Late Legacy", tabs: ["https://example.com/late"] },
+      [originalKey]: {
+        autoload: 1,
+        set_name: "Legacy Work",
+        tabs: ["https://example.com/legacy"],
+      },
+      [lateKey]: {
+        autoload: 0,
+        set_name: "Late Legacy",
+        tabs: ["https://example.com/late"],
+      },
     }).then(() => done());
-  }, lateLegacyKey);
+  }, legacyKey, lateLegacyKey);
   await restartFirefox();
   await openExtensionPage("popup/popup.html");
+  assert.equal((await driver.findElements(By.css('.load-row[data-name="Legacy Work"]'))).length, 1);
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 1);
 });
 

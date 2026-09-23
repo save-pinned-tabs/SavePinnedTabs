@@ -393,6 +393,7 @@ test('deterministic migration retires metadata without duplicating a late legacy
   await new BrowserStorageMigration(syncStorage, localStorage).ensureMigrated();
   const firstDocument = activeSyncDocument(syncStorage);
   const firstId = Object.keys(firstDocument.sets)[0];
+  assert.equal(firstId, '7dcf521f-5d09-556b-ba7b-b190087e0182');
   assert.equal(firstDocument.migration, undefined);
 
   await syncStorage.set({ [legacyKey]: legacySet });
