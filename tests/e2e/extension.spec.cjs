@@ -1304,6 +1304,119 @@ test("popup and window operations recover after the background worker stops", as
   expect(createdWindow.id).toEqual(expect.any(Number));
 });
 
+test("environment: quota-bound migration remains usable and promotes after deletion", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-local-recovery-"));
+  let firstLaunch;
+  let secondLaunch;
+  let thirdLaunch;
+  const expectedSets = Array.from({ length: 16 }, (_, index) => {
+    const name = `Quota recovery ${String(index).padStart(2, "0")}`;
+    return {
+      key: Buffer.from(name).toString("base64"),
+      name,
+      tabs: [`https://example.com/${index}/${"x".repeat(6_100)}`],
+    };
+  });
+
+  try {
+    firstLaunch = await launchExtension(userDataDir);
+    const seededBytes = await firstLaunch.context.serviceWorkers()[0].evaluate(
+      async (sets) => {
+        const sync = await chrome.storage.sync.get(null);
+        const index = sync["savePinnedTabs:index"];
+        const entries = Object.fromEntries(sets.map((set) => [
+          set.key,
+          { autoload: 0, set_name: set.name, tabs: set.tabs },
+        ]));
+        await chrome.storage.sync.set(entries);
+        await chrome.storage.sync.remove([
+          "savePinnedTabs:index",
+          ...(index?.chunks ?? []),
+        ]);
+        await chrome.storage.local.remove([
+          "savePinnedTabs:local",
+          "savePinnedTabs:migration-staging",
+        ]);
+        return Object.entries(entries).reduce(
+          (total, [key, value]) =>
+            total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
+          0,
+        );
+      },
+      expectedSets,
+    );
+    expect(seededBytes).toBeLessThan(102_400);
+    await firstLaunch.context.close();
+    firstLaunch = undefined;
+
+    secondLaunch = await launchExtension(userDataDir);
+    const popup = await openExtensionPage(
+      secondLaunch.context,
+      secondLaunch.extensionId,
+      "popup/popup.html",
+    );
+    await expect(popup.locator(".load-row")).toHaveCount(expectedSets.length);
+    await expect(popup.getByRole("status")).toContainText(
+      "Tab sets are available locally",
+    );
+    const stagedIds = await popup.evaluate(async () => {
+      const local = await chrome.storage.local.get(
+        "savePinnedTabs:migration-staging",
+      );
+      return Object.keys(local["savePinnedTabs:migration-staging"].sets);
+    });
+
+    await secondLaunch.context.close();
+    secondLaunch = undefined;
+    thirdLaunch = await launchExtension(userDataDir);
+    const restartedPopup = await openExtensionPage(
+      thirdLaunch.context,
+      thirdLaunch.extensionId,
+      "popup/popup.html",
+    );
+    await expect(restartedPopup.locator(".load-row")).toHaveCount(expectedSets.length);
+    expect(await restartedPopup.evaluate(async () => {
+      const local = await chrome.storage.local.get(
+        "savePinnedTabs:migration-staging",
+      );
+      return Object.keys(local["savePinnedTabs:migration-staging"].sets);
+    })).toEqual(stagedIds);
+
+    const firstRow = restartedPopup.locator(
+      `.load-row[data-name="${expectedSets[0].name}"]`,
+    );
+    await firstRow.getByRole("button", { name: "Del" }).click();
+    await restartedPopup.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(firstRow).toHaveCount(0);
+    await expect(restartedPopup.getByRole("status")).not.toContainText(
+      "available locally",
+    );
+
+    const promoted = await restartedPopup.evaluate(async () => {
+      const [sync, local] = await Promise.all([
+        chrome.storage.sync.get(null),
+        chrome.storage.local.get("savePinnedTabs:migration-staging"),
+      ]);
+      const index = sync["savePinnedTabs:index"];
+      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      return {
+        setCount: Object.keys(document.sets).length,
+        stagingPresent: "savePinnedTabs:migration-staging" in local,
+      };
+    });
+    expect(promoted).toEqual({
+      setCount: expectedSets.length - 1,
+      stagingPresent: false,
+    });
+  } finally {
+    await firstLaunch?.context.close();
+    await secondLaunch?.context.close();
+    await thirdLaunch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-quota-"));

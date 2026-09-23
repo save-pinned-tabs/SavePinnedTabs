@@ -997,6 +997,104 @@ test("environment: Firefox enforces quotas without losing the readable generatio
   await waitForPinnedUrls([retainedUrl]);
 });
 
+test("environment: quota-bound migration remains usable and promotes after deletion", async () => {
+  const expectedSets = Array.from({ length: 16 }, (_, index) => {
+    const name = `Quota recovery ${String(index).padStart(2, "0")}`;
+    return {
+      key: Buffer.from(name).toString("base64"),
+      name,
+      tabs: [`https://example.com/${index}/${"x".repeat(6_100)}`],
+    };
+  });
+  await openStorageFixturePage();
+  const seededBytes = await driver.executeAsyncScript(async (sets, done) => {
+    try {
+      const sync = await browser.storage.sync.get(null);
+      const index = sync["savePinnedTabs:index"];
+      const entries = Object.fromEntries(sets.map((set) => [
+        set.key,
+        { autoload: 0, set_name: set.name, tabs: set.tabs },
+      ]));
+      await browser.storage.sync.set(entries);
+      await browser.storage.sync.remove([
+        "savePinnedTabs:index",
+        ...(index?.chunks ?? []),
+      ]);
+      await browser.storage.local.remove([
+        "savePinnedTabs:local",
+        "savePinnedTabs:migration-staging",
+      ]);
+      done(Object.entries(entries).reduce(
+        (total, [key, value]) =>
+          total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
+        0,
+      ));
+    } catch (error) {
+      done({ error: error.message });
+    }
+  }, expectedSets);
+  assert.equal(seededBytes.error, undefined);
+  assert.ok(seededBytes < 102_400);
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  assert.equal(
+    (await driver.findElements(By.css(".load-row"))).length,
+    expectedSets.length,
+  );
+  assert.match(
+    await driver.findElement(By.id("popup-status")).getText(),
+    /Tab sets are available locally/,
+  );
+  const stagedIds = await driver.executeAsyncScript((done) => {
+    browser.storage.local.get("savePinnedTabs:migration-staging").then((local) => {
+      done(Object.keys(local["savePinnedTabs:migration-staging"].sets));
+    });
+  });
+
+  await restartFirefox();
+  await openExtensionPage("popup/popup.html");
+  assert.equal(
+    (await driver.findElements(By.css(".load-row"))).length,
+    expectedSets.length,
+  );
+  assert.deepEqual(
+    await driver.executeAsyncScript((done) => {
+      browser.storage.local.get("savePinnedTabs:migration-staging").then((local) => {
+        done(Object.keys(local["savePinnedTabs:migration-staging"].sets));
+      });
+    }),
+    stagedIds,
+  );
+
+  const firstRow = await driver.findElement(
+    By.css(`.load-row[data-name="${expectedSets[0].name}"]`),
+  );
+  await firstRow.findElement(By.css(".set-delete")).click();
+  await driver.findElement(By.css("#delete-dialog button[value=delete]")).click();
+  await driver.wait(until.stalenessOf(firstRow), 10_000);
+  await driver.wait(async () => !(
+    await driver.findElement(By.id("popup-status")).getText()
+  ).includes("available locally"), 10_000);
+
+  const promoted = await driver.executeAsyncScript(async (done) => {
+    const [sync, local] = await Promise.all([
+      browser.storage.sync.get(null),
+      browser.storage.local.get("savePinnedTabs:migration-staging"),
+    ]);
+    const index = sync["savePinnedTabs:index"];
+    const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+    done({
+      setCount: Object.keys(document.sets).length,
+      stagingPresent: "savePinnedTabs:migration-staging" in local,
+    });
+  });
+  assert.deepEqual(promoted, {
+    setCount: expectedSets.length - 1,
+    stagingPresent: false,
+  });
+});
+
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
   const legacySets = Array.from({ length: 4 }, (_, index) => {
     const name = `Legacy ${index} 日本語`;
