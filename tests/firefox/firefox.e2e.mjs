@@ -36,7 +36,7 @@ async function launchFirefox({ installAddon = false } = {}) {
     .build();
 
   try {
-    if (installAddon) await nextDriver.installAddon(addonPath, false);
+    if (installAddon) await nextDriver.installAddon(addonPath, true);
     await nextDriver.setContext(firefox.Context.CHROME);
     const extensionUuids = await nextDriver.executeScript(
       'return Services.prefs.getStringPref("extensions.webextensions.uuids");',
@@ -183,7 +183,7 @@ async function deleteSet(name) {
 async function restartFirefox() {
   await driver.quit();
   driver = undefined;
-  ({ driver, extensionOrigin } = await launchFirefox());
+  ({ driver, extensionOrigin } = await launchFirefox({ installAddon: true }));
 }
 
 async function runStartupHandler() {
@@ -1038,9 +1038,11 @@ test("environment: quota-bound migration remains usable and promotes after delet
 
   await restartFirefox();
   await openExtensionPage("popup/popup.html");
+  const firstLaunchRows = await driver.findElements(By.css(".load-row"));
   assert.equal(
-    (await driver.findElements(By.css(".load-row"))).length,
+    firstLaunchRows.length,
     expectedSets.length,
+    await driver.findElement(By.id("popup-status")).getText(),
   );
   assert.match(
     await driver.findElement(By.id("popup-status")).getText(),

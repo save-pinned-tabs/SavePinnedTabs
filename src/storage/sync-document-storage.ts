@@ -77,6 +77,8 @@ function quotaError(error: unknown): Error {
   } else if (
     normalized.includes('quota_bytes')
     || normalized.includes('kquotabytes')
+    || normalized.includes('quotaexceedederror')
+    || normalized.includes('exceeded its quota')
     || normalized.includes('total')
   ) {
     return new AggregateSyncQuotaError(

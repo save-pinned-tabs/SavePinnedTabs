@@ -589,17 +589,20 @@ test('quota-bound migration stays usable locally and promotes after reduction', 
   assert.equal('savePinnedTabs:migration-staging' in localStorage.state, false);
 });
 
-test('Chromium aggregate quota spelling identifies this extension storage area', async () => {
-  const harness = createBrowserHarness();
-  harness.syncStorage.failNextSet(
-    new Error('Resource::kQuotaBytes quota exceeded'),
-  );
+for (const quotaMessage of [
+  'Resource::kQuotaBytes quota exceeded',
+  'QuotaExceededError: storage.sync API call exceeded its quota limitations.',
+]) {
+  test(`aggregate quota spelling identifies this extension storage area: ${quotaMessage}`, async () => {
+    const harness = createBrowserHarness();
+    harness.syncStorage.failNextSet(new Error(quotaMessage));
 
-  await assert.rejects(
-    harness.tabSets.save({ name: 'Too large', tabs: [] }),
-    /Synchronized storage for this extension is full; reduce saved tab data/,
-  );
-});
+    await assert.rejects(
+      harness.tabSets.save({ name: 'Too large', tabs: [] }),
+      /Synchronized storage for this extension is full; reduce saved tab data/,
+    );
+  });
+}
 
 test('version-two document migrates when it nearly fills the sync quota', async () => {
   const savedSet = {
