@@ -111,7 +111,10 @@ export class BrowserStorageMigration implements StorageMigration {
       };
     }
     return {
-      document: await new SyncDocumentStorage(this.syncStorage).read(),
+      document: await new SyncDocumentStorage(
+        this.syncStorage,
+        this.localStorage,
+      ).read(),
       synchronization: 'synchronized',
     };
   }
@@ -121,7 +124,10 @@ export class BrowserStorageMigration implements StorageMigration {
     await this.ensureMigrated();
     await this.#runExclusive(async () => {
       const stagedRecord = await this.localStorage.get(MIGRATION_STAGING_KEY);
-      const documents = new SyncDocumentStorage(this.syncStorage);
+      const documents = new SyncDocumentStorage(
+        this.syncStorage,
+        this.localStorage,
+      );
       if (stagedRecord[MIGRATION_STAGING_KEY] === undefined) {
         await documents.save(document);
         return;
@@ -148,6 +154,7 @@ export class BrowserStorageMigration implements StorageMigration {
   /** Recovers every valid source, commits a verified generation, then cleans up. */
   async #migrate(): Promise<void> {
     const initialLocal = await this.localStorage.get([
+      MIGRATION_STAGING_KEY,
       SYNC_RECOVERY_KEY,
       SYNC_COMMITTED_CACHE_KEY,
     ]);
@@ -156,8 +163,11 @@ export class BrowserStorageMigration implements StorageMigration {
       this.localStorage,
       parseMigratingSyncDocument,
     );
+    const hasStagedMigration =
+      initialLocal[MIGRATION_STAGING_KEY] !== undefined;
     const recoveredOrCached = initialLocal[SYNC_RECOVERY_KEY] !== undefined
-      || initialLocal[SYNC_COMMITTED_CACHE_KEY] !== undefined
+      || (!hasStagedMigration
+        && initialLocal[SYNC_COMMITTED_CACHE_KEY] !== undefined)
       ? await documents.read()
       : null;
     const [storedSync, storedLocal] = await Promise.all([
@@ -217,8 +227,10 @@ export class BrowserStorageMigration implements StorageMigration {
     }
     const storedLocalDocument = storedLocal[LOCAL_DOCUMENT_KEY];
     const { syncDocument, localDocument } = await migrateStorageState({
-      activeSyncDocument: active,
-      fallbackSyncDocument: staged ?? monolithic,
+      activeSyncDocument: staged ?? active,
+      fallbackSyncDocument: staged
+        ? active ?? monolithic
+        : monolithic,
       unversionedSets,
       localStorage: storedLocal,
       storedLocalDocument,

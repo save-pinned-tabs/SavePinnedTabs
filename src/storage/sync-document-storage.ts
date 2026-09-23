@@ -174,17 +174,23 @@ async function gzipBase64(value: string): Promise<string> {
 
 /** Decompresses a base64 gzip representation into UTF-8 text. */
 async function gunzipBase64(value: string): Promise<string> {
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('This browser cannot decompress synchronized tab sets');
+  }
   const stream = new Blob([decodeBase64(value)]).stream().pipeThrough(
     new DecompressionStream('gzip'),
   );
   return new Response(stream).text();
 }
 
-/** Selects gzip only when its JSON-encoded stored value is smaller. */
+/** Selects gzip only when supported and smaller than raw JSON. */
 async function encodeDocument(serialized: string): Promise<{
   encoding: SyncEncoding;
   representation: string;
 }> {
+  if (typeof CompressionStream !== 'function') {
+    return { encoding: 'json', representation: serialized };
+  }
   const compressed = await gzipBase64(serialized);
   const encoder = new TextEncoder();
   const rawBytes = encoder.encode(JSON.stringify(serialized)).byteLength;

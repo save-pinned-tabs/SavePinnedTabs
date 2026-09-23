@@ -1,4 +1,5 @@
 const http = require("node:http");
+const { createHash } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { mkdtemp, readFile, rm } = require("node:fs/promises");
 const os = require("node:os");
@@ -15,6 +16,18 @@ const {
 
 
 const execFileAsync = promisify(execFile);
+function opaqueToken(seed, length) {
+  let token = "";
+  let block = 0;
+  while (token.length < length) {
+    token += createHash("sha256")
+      .update(`${seed}:${block}`)
+      .digest("base64url");
+    block += 1;
+  }
+  return token.slice(0, length);
+}
+
 
 async function installUnpackedExtension(page) {
   await page.goto("chrome://extensions");
@@ -1327,53 +1340,89 @@ test("environment: quota-bound migration remains usable and promotes after delet
   let firstLaunch;
   let secondLaunch;
   let thirdLaunch;
-  const expectedSets = Array.from({ length: 16 }, (_, index) => {
+  const expectedSets = Array.from({ length: 17 }, (_, index) => {
     const name = `Quota recovery ${String(index).padStart(2, "0")}`;
     return {
-      key: Buffer.from(name).toString("base64"),
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
       name,
-      tabs: [`https://example.com/${index}/${"x".repeat(6_100)}`],
+      tabs: [`https://example.com/${index}/${opaqueToken(index, 6_100)}`],
     };
   });
 
   try {
     firstLaunch = await launchExtension(userDataDir);
-    const seededBytes = await firstLaunch.context.serviceWorkers()[0].evaluate(
+    const fixturePage = await openExtensionPage(
+      firstLaunch.context,
+      firstLaunch.extensionId,
+      "popup/popup.html",
+    );
+    const seededBytes = await fixturePage.evaluate(
       async (sets) => {
+        const { createBrowserRepositories } = await import(
+          chrome.runtime.getURL("storage/browser-repositories.js")
+        );
+        await createBrowserRepositories(chrome).tabSets.getPopupData();
         const sync = await chrome.storage.sync.get(null);
         const index = sync["savePinnedTabs:index"];
-        const entries = Object.fromEntries(sets.map((set) => [
-          set.key,
-          { autoload: 0, set_name: set.name, tabs: set.tabs },
-        ]));
-        await chrome.storage.sync.set(entries);
+        const document = {
+          version: 3,
+          sets: Object.fromEntries(sets.map((set) => [set.id, set])),
+          autoload: { scope: "first-window", setIds: [] },
+          deletedSetIds: [],
+        };
         await chrome.storage.sync.remove([
           "savePinnedTabs:index",
           ...(index?.chunks ?? []),
         ]);
-        await chrome.storage.local.remove([
-          "savePinnedTabs:local",
-          "savePinnedTabs:migration-staging",
-        ]);
-        return Object.entries(entries).reduce(
-          (total, [key, value]) =>
-            total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
-          0,
-        );
+        await chrome.storage.local.set({
+          "savePinnedTabs:migration-staging": document,
+        });
+        await chrome.storage.local.remove("savePinnedTabs:local");
+        return new TextEncoder().encode(JSON.stringify(document)).byteLength;
       },
       expectedSets,
     );
-    expect(seededBytes).toBeLessThan(102_400);
+    expect(seededBytes).toBeGreaterThan(102_400);
+    await fixturePage.close();
     await firstLaunch.context.close();
     firstLaunch = undefined;
 
     secondLaunch = await launchExtension(userDataDir);
+    const storedBeforePopup = await secondLaunch.context.serviceWorkers()[0].evaluate(
+      () => chrome.storage.local.get(null),
+    );
+    expect(storedBeforePopup).toHaveProperty("savePinnedTabs:migration-staging");
     const popup = await openExtensionPage(
       secondLaunch.context,
       secondLaunch.extensionId,
       "popup/popup.html",
     );
-    await expect(popup.locator(".load-row")).toHaveCount(expectedSets.length);
+    const recoveryState = await popup.evaluate(async () => {
+      const { BrowserStorageMigration } = await import(
+        chrome.runtime.getURL("storage/browser-storage-migration.js")
+      );
+      try {
+        const recovered = await new BrowserStorageMigration(
+          chrome.storage.sync,
+          chrome.storage.local,
+        ).readDocument();
+        const local = await chrome.storage.local.get(null);
+        return {
+          setCount: Object.keys(recovered.document?.sets ?? {}).length,
+          synchronization: recovered.synchronization,
+          localKeys: Object.keys(local),
+        };
+      } catch (error) {
+        return { error: String(error), stack: error.stack };
+      }
+    });
+    expect(recoveryState).toMatchObject({
+      setCount: expectedSets.length,
+      synchronization: "local-only",
+    });
+    await expect(popup.locator(".load-row")).toHaveCount(expectedSets.length, {
+      timeout: 30_000,
+    });
     await expect(popup.getByRole("status")).toContainText(
       "Tab sets are available locally",
     );
@@ -1392,7 +1441,10 @@ test("environment: quota-bound migration remains usable and promotes after delet
       thirdLaunch.extensionId,
       "popup/popup.html",
     );
-    await expect(restartedPopup.locator(".load-row")).toHaveCount(expectedSets.length);
+    await expect(restartedPopup.locator(".load-row")).toHaveCount(
+      expectedSets.length,
+      { timeout: 30_000 },
+    );
     expect(await restartedPopup.evaluate(async () => {
       const local = await chrome.storage.local.get(
         "savePinnedTabs:migration-staging",
@@ -1411,12 +1463,14 @@ test("environment: quota-bound migration remains usable and promotes after delet
     );
 
     const promoted = await restartedPopup.evaluate(async () => {
-      const [sync, local] = await Promise.all([
-        chrome.storage.sync.get(null),
+      const [{ SyncDocumentStorage }, local] = await Promise.all([
+        import(chrome.runtime.getURL("storage/sync-document-storage.js")),
         chrome.storage.local.get("savePinnedTabs:migration-staging"),
       ]);
-      const index = sync["savePinnedTabs:index"];
-      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      const document = await new SyncDocumentStorage(
+        chrome.storage.sync,
+        chrome.storage.local,
+      ).read();
       return {
         setCount: Object.keys(document.sets).length,
         stagingPresent: "savePinnedTabs:migration-staging" in local,
@@ -1432,6 +1486,8 @@ test("environment: quota-bound migration remains usable and promotes after delet
     await thirdLaunch?.context.close();
     await rm(userDataDir, { recursive: true, force: true });
   }
+});
+
 test("environment: near-quota generation can be replaced without double quota", async ({
   extension,
 }) => {
@@ -1441,40 +1497,59 @@ test("environment: near-quota generation can be replaced without double quota", 
     extension.extensionId,
     "popup/popup.html",
   );
-  const result = await popup.evaluate(async () => {
-    const { SyncDocumentStorage } = await import(
-      chrome.runtime.getURL("storage/sync-document-storage.js")
+  const previousToken = opaqueToken(130, 84_000);
+  const replacementToken = opaqueToken(131, 84_000);
+  const result = await popup.evaluate(async ({ previousToken, replacementToken }) => {
+    const { createBrowserRepositories } = await import(
+      chrome.runtime.getURL("storage/browser-repositories.js")
     );
-    const documents = new SyncDocumentStorage(
-      chrome.storage.sync,
-      chrome.storage.local,
-    );
-    const createDocument = (name, character) => ({
-      version: 2,
-      sets: {
-        "00000000-0000-4000-8000-000000000130": {
-          id: "00000000-0000-4000-8000-000000000130",
-          name,
-          tabs: [`https://example.com/${character.repeat(84_000)}`],
-        },
-      },
-      autoload: { scope: "first-window", setIds: [] },
-      deletedSetIds: [],
+    const repositories = createBrowserRepositories(chrome);
+    const saveStarted = performance.now();
+    const saved = await repositories.tabSets.save({
+      name: "Before replacement",
+      tabs: [`https://example.com/${previousToken}`],
     });
-    await documents.save(createDocument("Before replacement", "a"));
-    await documents.save(createDocument("After replacement", "b"));
+    const firstSaveMs = performance.now() - saveStarted;
+    const previous = await chrome.storage.sync.get(null);
+    const replaceStarted = performance.now();
+    await repositories.tabSets.save({
+      ...saved,
+      name: "After replacement",
+      tabs: [`https://example.com/${replacementToken}`],
+    });
+    const replacementMs = performance.now() - replaceStarted;
     const stored = await chrome.storage.sync.get(null);
-    const active = await documents.read();
+    const readStarted = performance.now();
+    const active = await repositories.tabSets.get(saved.id);
+    const readMs = performance.now() - readStarted;
+    const bytes = (value) =>
+      Object.entries(value).reduce(
+        (total, [key, item]) =>
+          total + new TextEncoder().encode(key + JSON.stringify(item)).byteLength,
+        0,
+      );
     return {
-      name: active.sets["00000000-0000-4000-8000-000000000130"].name,
-      bytes: new TextEncoder().encode(JSON.stringify(stored)).byteLength,
+      name: active.name,
+      previousBytes: bytes(previous),
+      bytes: bytes(stored),
+      combinedBytes: bytes(previous) + bytes(stored),
+      firstSaveMs,
+      replacementMs,
+      readMs,
       recovery: await chrome.storage.local.get("savePinnedTabs:sync-recovery"),
     };
-  });
+  }, { previousToken, replacementToken });
 
   expect(result.name).toBe("After replacement");
+  expect(result.previousBytes).toBeLessThan(102_400);
   expect(result.bytes).toBeLessThan(102_400);
+  expect(result.combinedBytes).toBeGreaterThan(102_400);
+  expect(result.firstSaveMs).toBeLessThan(5_000);
+  expect(result.replacementMs).toBeLessThan(5_000);
+  expect(result.readMs).toBeLessThan(5_000);
   expect(result.recovery).toEqual({});
+});
+
 test("compressed tab sets remain readable after Chromium restart", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-gzip-"));

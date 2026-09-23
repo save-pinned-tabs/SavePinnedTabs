@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +20,17 @@ let temporaryDirectory;
 let addonPath;
 let extensionOrigin;
 let profileDirectory;
+function opaqueToken(seed, length) {
+  let token = "";
+  let block = 0;
+  while (token.length < length) {
+    token += createHash("sha256")
+      .update(`${seed}:${block}`)
+      .digest("base64url");
+    block += 1;
+  }
+  return token.slice(0, length);
+}
 
 async function launchFirefox({ installAddon = false } = {}) {
   const options = new firefox.Options()
@@ -535,6 +547,8 @@ test("a legacy profile migrates sets and references exactly once across restarts
       done({
         legacyRemoved: !(setKey in sync),
         set: document.sets[setId],
+        version: document.version,
+        migration: document.migration ?? null,
         autoloadSetIds: document.autoload.setIds,
       });
     })().catch((error) => done({ error: String(error) }));
@@ -639,6 +653,7 @@ test("export and import preserve multiple sets, tab order, identities, and autol
   );
   await driver.findElement(By.css('.load-row[data-name="First backup"] .set-load')).click();
   await waitForPinnedUrls(firstUrls);
+  await openExtensionPage("popup/popup.html");
   await driver.findElement(By.css('.load-row[data-name="Second backup"] .set-load')).click();
   await waitForPinnedUrls(secondUrls);
 });
@@ -947,44 +962,65 @@ test("popup, set loading, and window creation recover after browser restart", as
 
 test("environment: near-quota generation can be replaced without double quota", async () => {
   await openExtensionPage("popup/popup.html");
-  const result = await driver.executeAsyncScript((done) => {
-    (async () => {
-      const { SyncDocumentStorage } = await import(
-        browser.runtime.getURL("storage/sync-document-storage.js")
-      );
-      const documents = new SyncDocumentStorage(
-        browser.storage.sync,
-        browser.storage.local,
-      );
-      const id = "00000000-0000-4000-8000-000000000130";
-      const createDocument = (name, character) => ({
-        version: 2,
-        sets: {
-          [id]: {
-            id,
-            name,
-            tabs: [`https://example.com/${character.repeat(84_000)}`],
-          },
-        },
-        autoload: { scope: "first-window", setIds: [] },
-        deletedSetIds: [],
-      });
-      await documents.save(createDocument("Before replacement", "a"));
-      await documents.save(createDocument("After replacement", "b"));
-      const stored = await browser.storage.sync.get(null);
-      const active = await documents.read();
-      done({
-        name: active.sets[id].name,
-        bytes: new TextEncoder().encode(JSON.stringify(stored)).byteLength,
-        recovery: await browser.storage.local.get("savePinnedTabs:sync-recovery"),
-      });
-    })().catch((error) => done({ error: String(error) }));
-  });
+  const previousToken = opaqueToken(130, 84_000);
+  const replacementToken = opaqueToken(131, 84_000);
+  const result = await driver.executeAsyncScript(
+    ({ previousToken, replacementToken }, done) => {
+      (async () => {
+        const { createBrowserRepositories } = await import(
+          browser.runtime.getURL("storage/browser-repositories.js")
+        );
+        const repositories = createBrowserRepositories(browser);
+        const saveStarted = performance.now();
+        const saved = await repositories.tabSets.save({
+          name: "Before replacement",
+          tabs: [`https://example.com/${previousToken}`],
+        });
+        const firstSaveMs = performance.now() - saveStarted;
+        const previous = await browser.storage.sync.get(null);
+        const replaceStarted = performance.now();
+        await repositories.tabSets.save({
+          ...saved,
+          name: "After replacement",
+          tabs: [`https://example.com/${replacementToken}`],
+        });
+        const replacementMs = performance.now() - replaceStarted;
+        const stored = await browser.storage.sync.get(null);
+        const readStarted = performance.now();
+        const active = await repositories.tabSets.get(saved.id);
+        const readMs = performance.now() - readStarted;
+        const bytes = (value) =>
+          Object.entries(value).reduce(
+            (total, [key, item]) =>
+              total + new TextEncoder().encode(key + JSON.stringify(item)).byteLength,
+            0,
+          );
+        done({
+          name: active.name,
+          previousBytes: bytes(previous),
+          bytes: bytes(stored),
+          combinedBytes: bytes(previous) + bytes(stored),
+          firstSaveMs,
+          replacementMs,
+          readMs,
+          recovery: await browser.storage.local.get("savePinnedTabs:sync-recovery"),
+        });
+      })().catch((error) => done({ error: String(error) }));
+    },
+    { previousToken, replacementToken },
+  );
 
   assert.equal(result.error, undefined);
   assert.equal(result.name, "After replacement");
+  assert.ok(result.previousBytes < 102_400);
   assert.ok(result.bytes < 102_400);
+  assert.ok(result.combinedBytes > 102_400);
+  assert.ok(result.firstSaveMs < 5_000);
+  assert.ok(result.replacementMs < 5_000);
+  assert.ok(result.readMs < 5_000);
   assert.deepEqual(result.recovery, {});
+});
+
 test("compressed tab sets remain readable after Firefox restart", async () => {
   const setId = "00000000-0000-4000-8000-000000000135";
   const tabs = Array.from(
@@ -1102,43 +1138,44 @@ test("environment: Firefox enforces quotas without losing the readable generatio
 });
 
 test("environment: quota-bound migration remains usable and promotes after deletion", async () => {
-  const expectedSets = Array.from({ length: 16 }, (_, index) => {
+  const expectedSets = Array.from({ length: 17 }, (_, index) => {
     const name = `Quota recovery ${String(index).padStart(2, "0")}`;
     return {
-      key: Buffer.from(name).toString("base64"),
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
       name,
-      tabs: [`https://example.com/${index}/${"x".repeat(6_100)}`],
+      tabs: [`https://example.com/${index}/${opaqueToken(index, 6_100)}`],
     };
   });
   await openStorageFixturePage();
   const seededBytes = await driver.executeAsyncScript(async (sets, done) => {
     try {
+      const { createBrowserRepositories } = await import(
+        browser.runtime.getURL("storage/browser-repositories.js")
+      );
+      await createBrowserRepositories(browser).tabSets.getPopupData();
       const sync = await browser.storage.sync.get(null);
       const index = sync["savePinnedTabs:index"];
-      const entries = Object.fromEntries(sets.map((set) => [
-        set.key,
-        { autoload: 0, set_name: set.name, tabs: set.tabs },
-      ]));
-      await browser.storage.sync.set(entries);
+      const document = {
+        version: 3,
+        sets: Object.fromEntries(sets.map((set) => [set.id, set])),
+        autoload: { scope: "first-window", setIds: [] },
+        deletedSetIds: [],
+      };
       await browser.storage.sync.remove([
         "savePinnedTabs:index",
         ...(index?.chunks ?? []),
       ]);
-      await browser.storage.local.remove([
-        "savePinnedTabs:local",
-        "savePinnedTabs:migration-staging",
-      ]);
-      done(Object.entries(entries).reduce(
-        (total, [key, value]) =>
-          total + new TextEncoder().encode(key + JSON.stringify(value)).byteLength,
-        0,
-      ));
+      await browser.storage.local.set({
+        "savePinnedTabs:migration-staging": document,
+      });
+      await browser.storage.local.remove("savePinnedTabs:local");
+      done(new TextEncoder().encode(JSON.stringify(document)).byteLength);
     } catch (error) {
       done({ error: error.message });
     }
   }, expectedSets);
   assert.equal(seededBytes.error, undefined);
-  assert.ok(seededBytes < 102_400);
+  assert.ok(seededBytes > 102_400);
 
   await restartFirefox();
   await openExtensionPage("popup/popup.html");
@@ -1184,12 +1221,14 @@ test("environment: quota-bound migration remains usable and promotes after delet
   ).includes("available locally"), 10_000);
 
   const promoted = await driver.executeAsyncScript(async (done) => {
-    const [sync, local] = await Promise.all([
-      browser.storage.sync.get(null),
+    const [{ SyncDocumentStorage }, local] = await Promise.all([
+      import(browser.runtime.getURL("storage/sync-document-storage.js")),
       browser.storage.local.get("savePinnedTabs:migration-staging"),
     ]);
-    const index = sync["savePinnedTabs:index"];
-    const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+    const document = await new SyncDocumentStorage(
+      browser.storage.sync,
+      browser.storage.local,
+    ).read();
     done({
       setCount: Object.keys(document.sets).length,
       stagingPresent: "savePinnedTabs:migration-staging" in local,
