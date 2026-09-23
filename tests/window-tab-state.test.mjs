@@ -91,7 +91,7 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
         set(values) {
           return browserAwait('storage.sync.set', () => {
             Object.assign(syncState, structuredClone(values));
-            const index = values['savePinnedTabs:index'];
+            const index = values['s:i'];
             if (!index) return;
             const document = JSON.parse(index.chunks.map((key) => syncState[key]).join(''));
             state.sets = structuredClone(document.sets);

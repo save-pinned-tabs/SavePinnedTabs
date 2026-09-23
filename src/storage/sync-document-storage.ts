@@ -5,17 +5,39 @@ import { parseSyncDocument, type SyncDocument } from './storage-schema.js';
 
 export const SYNC_INDEX_KEY = 'savePinnedTabs:index';
 export const SYNC_CHUNK_PREFIX = 'savePinnedTabs:generation:';
+export const CURRENT_SYNC_INDEX_KEY = 's:i';
+export const CURRENT_SYNC_CHUNK_PREFIX = 's:';
 export const SYNC_CHUNK_PAYLOAD_BYTES = 6 * 1024;
-const CHUNK_SCHEMA_VERSION = 3;
+const LEGACY_CHUNK_SCHEMA_VERSION = 3;
+const CHUNK_SCHEMA_VERSION = 4;
 
 /** Points readers at one complete ordered chunk generation. */
+interface LegacySyncIndex {
+  version: typeof LEGACY_CHUNK_SCHEMA_VERSION;
+  generation: string;
+  chunks: string[];
+}
+
+/** Points readers at one complete compact chunk generation. */
 interface SyncIndex {
   version: typeof CHUNK_SCHEMA_VERSION;
   generation: string;
   chunks: string[];
 }
 
-/** Checks the persisted shape and generation ownership of a chunk index. */
+/** Checks a version-three index and its explicit chunk ownership. */
+function isLegacySyncIndex(value: unknown): value is LegacySyncIndex {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const index = value as Record<string, unknown>;
+  return index.version === LEGACY_CHUNK_SCHEMA_VERSION
+    && typeof index.generation === 'string'
+    && Array.isArray(index.chunks)
+    && index.chunks.length > 0
+    && index.chunks.every((key) => typeof key === 'string'
+      && key.startsWith(`${SYNC_CHUNK_PREFIX}${index.generation}:chunk:`));
+}
+
+/** Checks a version-four index and compact chunk ownership. */
 function isSyncIndex(value: unknown): value is SyncIndex {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const index = value as Record<string, unknown>;
@@ -24,8 +46,11 @@ function isSyncIndex(value: unknown): value is SyncIndex {
     && Array.isArray(index.chunks)
     && index.chunks.length > 0
     && index.chunks.every((key) => typeof key === 'string'
-      && key.startsWith(`${SYNC_CHUNK_PREFIX}${index.generation}:chunk:`));
+      && key.startsWith(
+        `${CURRENT_SYNC_CHUNK_PREFIX}${index.generation}:`,
+      ));
 }
+
 
 /** Measures one character after JSON string escaping. */
 function jsonStringCharacterBytes(character: string): number {
@@ -106,97 +131,152 @@ export class SyncDocumentStorage {
   /** Creates a document store over one browser synchronization area. */
   constructor(private readonly storage: BrowserStorageArea) {}
 
-  /** Reads the active generation, with a version-two fallback for migration. */
+  /** Reads the active generation, with version-three and monolithic fallbacks. */
   async read(): Promise<SyncDocument | null> {
-    const indexRecord = await this.storage.get(SYNC_INDEX_KEY);
-    const index = indexRecord[SYNC_INDEX_KEY];
-    if (index === undefined) {
-      const legacy = await this.storage.get('savePinnedTabs:sync');
-      const document = legacy['savePinnedTabs:sync'];
-      return document === undefined ? null : parseSyncDocument(document);
+    const indexRecord = await this.storage.get([
+      CURRENT_SYNC_INDEX_KEY,
+      SYNC_INDEX_KEY,
+    ]);
+    const currentIndex = indexRecord[CURRENT_SYNC_INDEX_KEY];
+    if (isSyncIndex(currentIndex)) {
+      try {
+        return this.parseIndex(
+          currentIndex.chunks,
+          await this.storage.get(currentIndex.chunks),
+        );
+      } catch {
+        // A partially synchronized new generation must not hide older data.
+      }
     }
-    if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
-    return this.parseIndex(index, await this.storage.get(index.chunks));
+    const legacyIndex = indexRecord[SYNC_INDEX_KEY];
+    if (isLegacySyncIndex(legacyIndex)) {
+      try {
+        return this.parseIndex(
+          legacyIndex.chunks,
+          await this.storage.get(legacyIndex.chunks),
+        );
+      } catch {
+        // A damaged version-three generation may still have a monolithic fallback.
+      }
+    }
+    const legacy = await this.storage.get('savePinnedTabs:sync');
+    const document = legacy['savePinnedTabs:sync'];
+    if (document !== undefined) return parseSyncDocument(document);
+    if (currentIndex !== undefined || legacyIndex !== undefined) {
+      throw new TypeError('Stored synchronized index is invalid');
+    }
+    return null;
   }
 
   /** Reads an active generation from a previously fetched complete storage snapshot. */
   readSnapshot(stored: Record<string, unknown>): SyncDocument | null {
-    const index = stored[SYNC_INDEX_KEY];
-    if (index === undefined) {
-      const document = stored['savePinnedTabs:sync'];
-      return document === undefined ? null : parseSyncDocument(document);
+    const currentIndex = stored[CURRENT_SYNC_INDEX_KEY];
+    if (isSyncIndex(currentIndex)) {
+      try {
+        return this.parseIndex(currentIndex.chunks, stored);
+      } catch {
+        // A partially synchronized new generation must not hide older data.
+      }
     }
-    if (!isSyncIndex(index)) {
+    const legacyIndex = stored[SYNC_INDEX_KEY];
+    if (isLegacySyncIndex(legacyIndex)) {
+      try {
+        return this.parseIndex(legacyIndex.chunks, stored);
+      } catch {
+        // A damaged version-three generation may still have a monolithic fallback.
+      }
+    }
+    const document = stored['savePinnedTabs:sync'];
+    if (document !== undefined) return parseSyncDocument(document);
+    if (currentIndex !== undefined || legacyIndex !== undefined) {
       throw new TypeError('Stored synchronized index is invalid');
     }
-    return this.parseIndex(index, stored);
+    return null;
   }
 
   /** Removes every indexed or orphaned chunk generation after recovery is staged. */
   async removeGenerations(): Promise<void> {
     const stored = await this.storage.get(null);
     const keys = Object.keys(stored).filter(
-      (key) => key === SYNC_INDEX_KEY || key.startsWith(SYNC_CHUNK_PREFIX),
+      (key) => key === CURRENT_SYNC_INDEX_KEY
+        || key === SYNC_INDEX_KEY
+        || key.startsWith(CURRENT_SYNC_CHUNK_PREFIX)
+        || key.startsWith(SYNC_CHUNK_PREFIX),
     );
     if (keys.length > 0) await this.storage.remove(keys);
   }
 
   /** Writes and verifies a generation before atomically switching the index. */
   async save(document: SyncDocument): Promise<void> {
-    const previousRecord = await this.storage.get(SYNC_INDEX_KEY);
-    const previous = isSyncIndex(previousRecord[SYNC_INDEX_KEY])
+    const previousRecord = await this.storage.get([
+      CURRENT_SYNC_INDEX_KEY,
+      SYNC_INDEX_KEY,
+    ]);
+    const previousCurrent = isSyncIndex(previousRecord[CURRENT_SYNC_INDEX_KEY])
+      ? previousRecord[CURRENT_SYNC_INDEX_KEY]
+      : null;
+    const previousLegacy = isLegacySyncIndex(previousRecord[SYNC_INDEX_KEY])
       ? previousRecord[SYNC_INDEX_KEY]
       : null;
     const generation = generationId();
     const normalizedDocument = parseSyncDocument(document);
     const chunks = splitUtf8(JSON.stringify(normalizedDocument));
-    const keys = chunks.map((_, index) =>
-      `${SYNC_CHUNK_PREFIX}${generation}:chunk:${index}`
-    );
+    const nextIndex: SyncIndex = {
+      version: CHUNK_SCHEMA_VERSION,
+      generation,
+      chunks: chunks.map(
+        (_, chunkIndex) =>
+          `${CURRENT_SYNC_CHUNK_PREFIX}${generation}:${chunkIndex}`,
+      ),
+    };
+    const keys = nextIndex.chunks;
 
     let switched = false;
     try {
       await this.storage.set(
         Object.fromEntries(keys.map((key, index) => [key, chunks[index]])),
       );
-      const nextIndex: SyncIndex = {
-        version: CHUNK_SCHEMA_VERSION,
-        generation,
-        chunks: keys,
-      };
       const verified = this.parseIndex(
-        nextIndex,
-        await this.storage.get(nextIndex.chunks),
+        keys,
+        await this.storage.get(keys),
       );
       if (JSON.stringify(verified) !== JSON.stringify(normalizedDocument)) {
         throw new Error('Verified synchronized generation differs from the requested document');
       }
-      await this.storage.set({ [SYNC_INDEX_KEY]: nextIndex });
+      await this.storage.set({ [CURRENT_SYNC_INDEX_KEY]: nextIndex });
       switched = true;
       await this.read();
     } catch (error: unknown) {
       if (switched) {
-        if (previous) {
-          await this.storage.set({ [SYNC_INDEX_KEY]: previous });
+        if (previousCurrent) {
+          await this.storage.set({ [CURRENT_SYNC_INDEX_KEY]: previousCurrent });
         } else {
-          await this.storage.remove(SYNC_INDEX_KEY);
+          await this.storage.remove(CURRENT_SYNC_INDEX_KEY);
         }
       }
       await removeQuietly(this.storage, keys);
       throw quotaError(error);
     }
 
-    if (previous) await removeQuietly(this.storage, previous.chunks);
+    if (previousCurrent) {
+      await removeQuietly(this.storage, previousCurrent.chunks);
+    }
+    if (previousLegacy) {
+      await removeQuietly(this.storage, [
+        SYNC_INDEX_KEY,
+        ...previousLegacy.chunks,
+      ]);
+    }
   }
 
 
   /** Reconstructs and validates an indexed generation from retrieved chunks. */
   private parseIndex(
-    index: SyncIndex,
+    keys: readonly string[],
     stored: Record<string, unknown>,
   ): SyncDocument {
     let serialized = '';
-    for (const key of index.chunks) {
+    for (const key of keys) {
       const chunk = stored[key];
       if (typeof chunk !== 'string') {
         throw new TypeError(`Synchronized generation is missing chunk "${key}"`);

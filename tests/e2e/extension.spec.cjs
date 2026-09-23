@@ -439,11 +439,11 @@ test("a legacy profile migrates sets and references exactly once across restarts
     expect(await firstLaunch.context.serviceWorkers()[0].evaluate(
       async ({ legacyKey }) => {
         let sync = await chrome.storage.sync.get(null);
-        while (!("savePinnedTabs:index" in sync)) {
+        while (!("s:i" in sync)) {
           await new Promise((resolve) => setTimeout(resolve, 10));
           sync = await chrome.storage.sync.get(null);
         }
-        const oldChunks = sync["savePinnedTabs:index"].chunks;
+        const oldChunks = sync["s:i"].chunks;
         await chrome.storage.sync.set({
           [legacyKey]: {
             autoload: 1,
@@ -454,9 +454,9 @@ test("a legacy profile migrates sets and references exactly once across restarts
         await chrome.storage.local.set({
           activeTabs: { 1: legacyKey },
         });
-        await chrome.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]);
+        await chrome.storage.sync.remove(["s:i", ...oldChunks]);
         await chrome.storage.local.remove("savePinnedTabs:local");
-        return "savePinnedTabs:index" in await chrome.storage.sync.get(null);
+        return "s:i" in await chrome.storage.sync.get(null);
       },
       { legacyKey },
     )).toBe(false);
@@ -473,7 +473,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
     const migrated = await popup.evaluate(async ({ legacyKey }) => {
       const sync = await chrome.storage.sync.get(null);
       const local = await chrome.storage.local.get(null);
-      const index = sync["savePinnedTabs:index"];
+      const index = sync["s:i"];
       const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
       const setId = Object.keys(document.sets)[0];
       return {
@@ -537,17 +537,17 @@ test("oversized legacy storage migrates and exports without losing tab sets", as
     firstLaunch = await launchExtension(userDataDir);
     await firstLaunch.context.serviceWorkers()[0].evaluate(async (sets) => {
       let sync = await chrome.storage.sync.get(null);
-      while (!("savePinnedTabs:index" in sync)) {
+      while (!("s:i" in sync)) {
         await new Promise((resolve) => setTimeout(resolve, 10));
         sync = await chrome.storage.sync.get(null);
       }
-      const oldChunks = sync["savePinnedTabs:index"].chunks;
+      const oldChunks = sync["s:i"].chunks;
       const legacyEntries = Object.fromEntries(sets.map((set) => [
         btoa(set.name),
         { autoload: 0, set_name: set.name, tabs: set.tabs },
       ]));
       await chrome.storage.sync.set(legacyEntries);
-      await chrome.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]);
+      await chrome.storage.sync.remove(["s:i", ...oldChunks]);
       await chrome.storage.local.remove("savePinnedTabs:local");
     }, expectedSets);
     await firstLaunch.context.close();
@@ -574,7 +574,7 @@ test("oversized legacy storage migrates and exports without losing tab sets", as
     );
     const storageState = await options.evaluate(async (legacyNames) => {
       const sync = await chrome.storage.sync.get(null);
-      const index = sync["savePinnedTabs:index"];
+      const index = sync["s:i"];
       return {
         chunkCount: index.chunks.length,
         legacyRecordsRemain: legacyNames.some((name) => btoa(name) in sync),
@@ -692,7 +692,7 @@ test("identity collisions and repeated imports create independent usable sets", 
   await saveSet(popup, "Duplicate");
   const existingId = await popup.evaluate(async () => {
     const storage = await chrome.storage.sync.get(null);
-    const index = storage["savePinnedTabs:index"];
+    const index = storage["s:i"];
     const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
     return Object.keys(document.sets)[0];
   });
@@ -1442,14 +1442,14 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
     });
     const seededBytes = await popup.evaluate(async (sets) => {
       const sync = await chrome.storage.sync.get(null);
-      const index = sync["savePinnedTabs:index"];
+      const index = sync["s:i"];
       const entries = Object.fromEntries(sets.map((set) => [
         set.key,
         { autoload: 0, set_name: set.name, tabs: set.tabs },
       ]));
       await chrome.storage.sync.set(entries);
       await chrome.storage.sync.remove([
-        "savePinnedTabs:index",
+        "s:i",
         ...(index?.chunks ?? []),
       ]);
       return new TextEncoder().encode(JSON.stringify(entries)).byteLength;
@@ -1473,7 +1473,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
 
     const storageShape = await popup.evaluate(async () => {
       const sync = await chrome.storage.sync.get(null);
-      const index = sync["savePinnedTabs:index"];
+      const index = sync["s:i"];
       return {
         chunkCount: index.chunks.length,
         chunkBytes: index.chunks.map((key) => new TextEncoder()

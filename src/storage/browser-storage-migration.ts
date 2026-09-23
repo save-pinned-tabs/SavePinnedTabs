@@ -23,6 +23,7 @@ import {
 } from './storage-schema.js';
 import {
   AggregateSyncQuotaError,
+  CURRENT_SYNC_INDEX_KEY,
   SYNC_INDEX_KEY,
   SyncDocumentStorage,
 } from './sync-document-storage.js';
@@ -160,29 +161,30 @@ export class BrowserStorageMigration implements StorageMigration {
     }
     const historicalEntries = legacySetEntries(
       storedSync,
-      new Set([SYNC_DOCUMENT_KEY, SYNC_INDEX_KEY]),
+      new Set([SYNC_DOCUMENT_KEY, SYNC_INDEX_KEY, CURRENT_SYNC_INDEX_KEY]),
     );
     const hasRecoverySources = staged !== null
       || monolithic !== null
       || historicalEntries.length > 0;
 
     if (!active && !hasRecoverySources) {
-      const hasInvalidSource = SYNC_INDEX_KEY in storedSync
+      const hasInvalidSource = CURRENT_SYNC_INDEX_KEY in storedSync
+        || SYNC_INDEX_KEY in storedSync
         || SYNC_DOCUMENT_KEY in storedSync;
       if (hasInvalidSource) {
         throw new Error('No valid synchronized storage source is available');
       }
     }
-    const syncDocument = recoverSyncDocument(
+    const syncDocument = await recoverSyncDocument(
       active,
       staged ?? monolithic,
       historicalEntries,
-      this.#createId,
+      this.#createId === newSetId ? undefined : this.#createId,
     );
 
     const storedLocalDocument = storedLocal[LOCAL_DOCUMENT_KEY];
     const localDocument = storedLocalDocument === undefined
-      ? convertLegacyLocalDocument(storedLocal, syncDocument)
+      ? await convertLegacyLocalDocument(storedLocal, syncDocument)
       : parseLocalDocument(
           storedLocalDocument,
           new Set(Object.keys(syncDocument.sets)),

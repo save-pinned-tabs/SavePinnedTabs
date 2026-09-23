@@ -497,11 +497,11 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const schemaExists = await driver.executeAsyncScript((setKey, done) => {
     (async () => {
       let sync = await browser.storage.sync.get(null);
-      while (!("savePinnedTabs:index" in sync)) {
+      while (!("s:i" in sync)) {
         await new Promise((resolve) => setTimeout(resolve, 10));
         sync = await browser.storage.sync.get(null);
       }
-      const oldChunks = sync["savePinnedTabs:index"].chunks;
+      const oldChunks = sync["s:i"].chunks;
       await browser.storage.sync.set({
         [setKey]: {
           autoload: 1,
@@ -513,10 +513,10 @@ test("a legacy profile migrates sets and references exactly once across restarts
         activeTabs: { 1: setKey },
       });
       await Promise.all([
-        browser.storage.sync.remove(["savePinnedTabs:index", ...oldChunks]),
+        browser.storage.sync.remove(["s:i", ...oldChunks]),
         browser.storage.local.remove("savePinnedTabs:local"),
       ]);
-      done("savePinnedTabs:index" in await browser.storage.sync.get(null));
+      done("s:i" in await browser.storage.sync.get(null));
     })().catch((error) => done({ error: String(error) }));
   }, legacyKey);
   assert.equal(schemaExists, false);
@@ -526,7 +526,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
   const migrated = await driver.executeAsyncScript((setKey, done) => {
     Promise.all([browser.storage.sync.get(null), browser.storage.local.get(null)])
       .then(([sync, local]) => {
-        const index = sync["savePinnedTabs:index"];
+        const index = sync["s:i"];
         const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
         const setId = Object.keys(document.sets)[0];
         done({
@@ -636,7 +636,7 @@ test("identity collisions and repeated imports create independent usable sets", 
   await saveSet("Duplicate");
   const existingId = await driver.executeAsyncScript((done) => {
     browser.storage.sync.get(null).then((storage) => {
-      const index = storage["savePinnedTabs:index"];
+      const index = storage["s:i"];
       const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
       done(Object.keys(document.sets)[0]);
     });
@@ -938,7 +938,7 @@ test("environment: Firefox enforces quotas without losing the readable generatio
   const result = await driver.executeAsyncScript(async (done) => {
     const keys = [];
     const before = await browser.storage.sync.get(null);
-    const previousIndex = before["savePinnedTabs:index"];
+    const previousIndex = before["s:i"];
     try {
       let perItemError = "";
       try {
@@ -959,7 +959,7 @@ test("environment: Firefox enforces quotas without losing the readable generatio
         }
       }
       const retained = await browser.storage.sync.get(null);
-      const activeIndex = retained["savePinnedTabs:index"];
+      const activeIndex = retained["s:i"];
       const activeDocument = JSON.parse(
         activeIndex.chunks.map((key) => retained[key]).join(""),
       );
@@ -1117,7 +1117,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
   await openStorageFixturePage();
   const seededBytes = await driver.executeAsyncScript(async (sets, currentSet, done) => {
     const sync = await browser.storage.sync.get(null);
-    const index = sync["savePinnedTabs:index"];
+    const index = sync["s:i"];
     const entries = Object.fromEntries(sets.map((set) => [
       set.key,
       { autoload: 0, set_name: set.name, tabs: set.tabs },
@@ -1129,7 +1129,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
       deletedSetIds: [],
     };
     await browser.storage.sync.set(entries);
-    await browser.storage.sync.remove(["savePinnedTabs:index", ...(index?.chunks ?? [])]);
+    await browser.storage.sync.remove(["s:i", ...(index?.chunks ?? [])]);
     done(new TextEncoder().encode(JSON.stringify(entries)).byteLength);
   }, legacySets, versionTwoSet);
   assert.ok(seededBytes > 8_192);
@@ -1154,7 +1154,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
 
   const storageShape = await driver.executeAsyncScript((sets, done) => {
     browser.storage.sync.get(null).then((sync) => {
-      const index = sync["savePinnedTabs:index"];
+      const index = sync["s:i"];
       done({
         chunkCount: index.chunks.length,
         chunkBytes: index.chunks.map((key) => new TextEncoder()

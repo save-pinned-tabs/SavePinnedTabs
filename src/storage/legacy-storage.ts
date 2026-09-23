@@ -63,6 +63,25 @@ export function legacySetEntries(
   );
 }
 
+/** Derives a cross-browser UUID from the stable synchronized legacy key. */
+export async function legacySetId(legacyId: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(legacyId)),
+  );
+  digest[6] = ((digest[6] ?? 0) & 0x0f) | 0x50;
+  digest[8] = ((digest[8] ?? 0) & 0x3f) | 0x80;
+  const hex = Array.from(digest.slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0')
+  ).join('');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-');
+}
+
 /** Generates an unused valid UUID and reserves it in the supplied set. */
 function uniqueId(usedIds: Set<string>, createId: () => string): string {
   let id: string;
@@ -86,12 +105,12 @@ function recoveredName(
 }
 
 /** Recovers the deterministic union of current and historical sources. */
-export function recoverSyncDocument(
+export async function recoverSyncDocument(
   active: SyncDocument | null,
   monolithic: SyncDocument | null,
   legacyEntries: readonly LegacySetEntry[],
-  createId: () => string,
-): SyncDocument {
+  createId?: () => string,
+): Promise<SyncDocument> {
   const document = active
     ? structuredClone(active)
     : monolithic
@@ -116,18 +135,29 @@ export function recoverSyncDocument(
   }
 
   for (const [legacyId, legacySet] of legacyEntries) {
+    const deterministicId = await legacySetId(legacyId);
     const mappedId = legacyIds[legacyId];
+    if (mappedId === deterministicId) delete legacyIds[legacyId];
     const mappedSet = mappedId ? document.sets[mappedId] : undefined;
-    const isExactMigratedCopy = mappedSet
+    const mappedSetIsExact = mappedSet
       && mappedSet.name === legacySet.set_name
       && JSON.stringify(mappedSet.tabs) === JSON.stringify(legacySet.tabs);
-    if (isExactMigratedCopy) continue;
+    if (mappedSetIsExact) continue;
+    const exactSet = Object.values(document.sets).find(
+      (set) => set.name === legacySet.set_name
+        && JSON.stringify(set.tabs) === JSON.stringify(legacySet.tabs),
+    );
+    if (!mappedId && exactSet) {
+      if (exactSet.id !== deterministicId) legacyIds[legacyId] = exactSet.id;
+      continue;
+    }
 
-    const id = mappedId && !usedIds.has(mappedId)
-      ? mappedId
-      : uniqueId(usedIds, createId);
+    const preferredId = mappedId ?? (createId ? undefined : deterministicId);
+    const id = preferredId && !usedIds.has(preferredId)
+      ? preferredId
+      : uniqueId(usedIds, createId ?? (() => crypto.randomUUID()));
     usedIds.add(id);
-    legacyIds[legacyId] = id;
+    if (id !== deterministicId) legacyIds[legacyId] = id;
     document.sets[id] = {
       id,
       name: recoveredName(legacySet.set_name, document.sets),
@@ -143,15 +173,17 @@ export function recoverSyncDocument(
 
   if (Object.keys(legacyIds).length > 0) {
     document.migration = { legacyIds };
+  } else {
+    delete document.migration;
   }
   return document;
 }
 
 /** Converts valid historical local references into a current local document. */
-export function convertLegacyLocalDocument(
+export async function convertLegacyLocalDocument(
   stored: HistoricalStorageRecord,
   syncDocument: SyncDocument,
-): LocalDocument {
+): Promise<LocalDocument> {
   const document = emptyLocalDocument();
   const legacyIds = syncDocument.migration?.legacyIds ?? {};
   const knownIds = new Set(Object.keys(syncDocument.sets));
@@ -161,7 +193,7 @@ export function convertLegacyLocalDocument(
 
   for (const [windowId, reference] of Object.entries(legacySessions)) {
     if (typeof reference !== 'string') continue;
-    const setId = legacyIds[reference] ?? reference;
+    const setId = legacyIds[reference] ?? await legacySetId(reference);
     if (knownIds.has(setId)) document.windowSessions[windowId] = setId;
   }
   return document;
