@@ -1,4 +1,5 @@
 const http = require("node:http");
+const { createHash } = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { mkdtemp, readFile, rm } = require("node:fs/promises");
 const os = require("node:os");
@@ -15,6 +16,18 @@ const {
 
 
 const execFileAsync = promisify(execFile);
+function opaqueToken(seed, length) {
+  let token = "";
+  let block = 0;
+  while (token.length < length) {
+    token += createHash("sha256")
+      .update(`${seed}:${block}`)
+      .digest("base64url");
+    block += 1;
+  }
+  return token.slice(0, length);
+}
+
 
 async function installUnpackedExtension(page) {
   await page.goto("chrome://extensions");
@@ -471,33 +484,45 @@ test("a legacy profile migrates sets and references exactly once across restarts
     );
     await expect(popup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     const migrated = await popup.evaluate(async ({ legacyKey }) => {
-      const sync = await chrome.storage.sync.get(null);
+      const sync = await chrome.storage.sync.get(legacyKey);
       const local = await chrome.storage.local.get(null);
-      const index = sync["savePinnedTabs:index"];
-      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      const { SyncDocumentStorage } = await import(
+        chrome.runtime.getURL("storage/sync-document-storage.js")
+      );
+      const document = await new SyncDocumentStorage(chrome.storage.sync).read();
       const setId = Object.keys(document.sets)[0];
       return {
+        version: document.version,
         legacyRemoved: !(legacyKey in sync),
+        migration: document.migration,
         set: document.sets[setId],
         autoloadSetIds: document.autoload.setIds,
       };
     }, { legacyKey });
     expect(migrated.legacyRemoved).toBe(true);
-    expect(migrated.set).toMatchObject({
+    expect(migrated.version).toBe(3);
+    expect(migrated.migration).toBeUndefined();
+    expect(migrated.set).toEqual({
+      id: "d10d25ff-7633-5634-a0d4-eccf2505daad",
       name: "Legacy Work",
       tabs: ["https://example.com/legacy"],
     });
     expect(migrated.autoloadSetIds).toEqual([migrated.set.id]);
 
-    await popup.evaluate(async ({ lateLegacyKey }) => {
+    await popup.evaluate(async ({ legacyKey, lateLegacyKey }) => {
       await chrome.storage.sync.set({
+        [legacyKey]: {
+          autoload: 1,
+          set_name: "Legacy Work",
+          tabs: ["https://example.com/legacy"],
+        },
         [lateLegacyKey]: {
           autoload: 0,
           set_name: "Late Legacy",
           tabs: ["https://example.com/late"],
         },
       });
-    }, { lateLegacyKey });
+    }, { legacyKey, lateLegacyKey });
     await secondLaunch.context.close();
     secondLaunch = undefined;
 
@@ -507,10 +532,12 @@ test("a legacy profile migrates sets and references exactly once across restarts
       thirdLaunch.extensionId,
       "popup/popup.html",
     );
-    await expect(restartedPopup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     await expect(
-      restartedPopup.locator(".load-row", { hasText: "Late Legacy" }),
-    ).toBeVisible();
+      restartedPopup.locator('.load-row[data-name="Legacy Work"]'),
+    ).toHaveCount(1);
+    await expect(
+      restartedPopup.locator('.load-row[data-name="Late Legacy"]'),
+    ).toHaveCount(1);
   } finally {
     await firstLaunch?.context.close();
     await secondLaunch?.context.close();
@@ -577,10 +604,12 @@ test("oversized legacy storage migrates and exports without losing tab sets", as
       const index = sync["savePinnedTabs:index"];
       return {
         chunkCount: index.chunks.length,
+        encoding: index.encoding,
         legacyRecordsRemain: legacyNames.some((name) => btoa(name) in sync),
       };
     }, expectedSets.map(({ name }) => name));
-    expect(storageState.chunkCount).toBeGreaterThan(1);
+    expect(storageState.encoding).toBe("gzip-base64");
+    expect(storageState.chunkCount).toBe(1);
     expect(storageState.legacyRecordsRemain).toBe(false);
 
     const popup = await openExtensionPage(
@@ -691,9 +720,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs(popup, [existingUrl]);
   await saveSet(popup, "Duplicate");
   const existingId = await popup.evaluate(async () => {
-    const storage = await chrome.storage.sync.get(null);
-    const index = storage["savePinnedTabs:index"];
-    const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+    const { SyncDocumentStorage } = await import(
+      chrome.runtime.getURL("storage/sync-document-storage.js")
+    );
+    const document = await new SyncDocumentStorage(chrome.storage.sync).read();
     return Object.keys(document.sets)[0];
   });
   const document = {
@@ -1304,6 +1334,272 @@ test("popup and window operations recover after the background worker stops", as
   expect(createdWindow.id).toEqual(expect.any(Number));
 });
 
+test("environment: quota-bound migration remains usable and promotes after deletion", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-local-recovery-"));
+  let firstLaunch;
+  let secondLaunch;
+  let thirdLaunch;
+  const expectedSets = Array.from({ length: 17 }, (_, index) => {
+    const name = `Quota recovery ${String(index).padStart(2, "0")}`;
+    return {
+      id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      name,
+      tabs: [`https://example.com/${index}/${opaqueToken(index, 6_100)}`],
+    };
+  });
+
+  try {
+    firstLaunch = await launchExtension(userDataDir);
+    const fixturePage = await openExtensionPage(
+      firstLaunch.context,
+      firstLaunch.extensionId,
+      "popup/popup.html",
+    );
+    const seededBytes = await fixturePage.evaluate(
+      async (sets) => {
+        const { createBrowserRepositories } = await import(
+          chrome.runtime.getURL("storage/browser-repositories.js")
+        );
+        await createBrowserRepositories(chrome).tabSets.getPopupData();
+        const sync = await chrome.storage.sync.get(null);
+        const index = sync["savePinnedTabs:index"];
+        const document = {
+          version: 3,
+          sets: Object.fromEntries(sets.map((set) => [set.id, set])),
+          autoload: { scope: "first-window", setIds: [] },
+          deletedSetIds: [],
+        };
+        await chrome.storage.sync.remove([
+          "savePinnedTabs:index",
+          ...(index?.chunks ?? []),
+        ]);
+        await chrome.storage.local.set({
+          "savePinnedTabs:migration-staging": document,
+        });
+        await chrome.storage.local.remove("savePinnedTabs:local");
+        return new TextEncoder().encode(JSON.stringify(document)).byteLength;
+      },
+      expectedSets,
+    );
+    expect(seededBytes).toBeGreaterThan(102_400);
+    await fixturePage.close();
+    await firstLaunch.context.close();
+    firstLaunch = undefined;
+
+    secondLaunch = await launchExtension(userDataDir);
+    const storedBeforePopup = await secondLaunch.context.serviceWorkers()[0].evaluate(
+      () => chrome.storage.local.get(null),
+    );
+    expect(storedBeforePopup).toHaveProperty("savePinnedTabs:migration-staging");
+    const popup = await openExtensionPage(
+      secondLaunch.context,
+      secondLaunch.extensionId,
+      "popup/popup.html",
+    );
+    const recoveryState = await popup.evaluate(async () => {
+      const { BrowserStorageMigration } = await import(
+        chrome.runtime.getURL("storage/browser-storage-migration.js")
+      );
+      try {
+        const recovered = await new BrowserStorageMigration(
+          chrome.storage.sync,
+          chrome.storage.local,
+        ).readDocument();
+        const local = await chrome.storage.local.get(null);
+        return {
+          setCount: Object.keys(recovered.document?.sets ?? {}).length,
+          synchronization: recovered.synchronization,
+          localKeys: Object.keys(local),
+        };
+      } catch (error) {
+        return { error: String(error), stack: error.stack };
+      }
+    });
+    expect(recoveryState).toMatchObject({
+      setCount: expectedSets.length,
+      synchronization: "local-only",
+    });
+    await expect(popup.locator(".load-row")).toHaveCount(expectedSets.length, {
+      timeout: 30_000,
+    });
+    await expect(popup.getByRole("status")).toContainText(
+      "Tab sets are available locally",
+    );
+    const stagedIds = await popup.evaluate(async () => {
+      const local = await chrome.storage.local.get(
+        "savePinnedTabs:migration-staging",
+      );
+      return Object.keys(local["savePinnedTabs:migration-staging"].sets);
+    });
+
+    await secondLaunch.context.close();
+    secondLaunch = undefined;
+    thirdLaunch = await launchExtension(userDataDir);
+    const restartedPopup = await openExtensionPage(
+      thirdLaunch.context,
+      thirdLaunch.extensionId,
+      "popup/popup.html",
+    );
+    await expect(restartedPopup.locator(".load-row")).toHaveCount(
+      expectedSets.length,
+      { timeout: 30_000 },
+    );
+    expect(await restartedPopup.evaluate(async () => {
+      const local = await chrome.storage.local.get(
+        "savePinnedTabs:migration-staging",
+      );
+      return Object.keys(local["savePinnedTabs:migration-staging"].sets);
+    })).toEqual(stagedIds);
+
+    const firstRow = restartedPopup.locator(
+      `.load-row[data-name="${expectedSets[0].name}"]`,
+    );
+    await firstRow.getByRole("button", { name: "Del" }).click();
+    await restartedPopup.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(firstRow).toHaveCount(0);
+    await expect(restartedPopup.getByRole("status")).not.toContainText(
+      "available locally",
+    );
+
+    const promoted = await restartedPopup.evaluate(async () => {
+      const [{ SyncDocumentStorage }, local] = await Promise.all([
+        import(chrome.runtime.getURL("storage/sync-document-storage.js")),
+        chrome.storage.local.get("savePinnedTabs:migration-staging"),
+      ]);
+      const document = await new SyncDocumentStorage(
+        chrome.storage.sync,
+        chrome.storage.local,
+      ).read();
+      return {
+        setCount: Object.keys(document.sets).length,
+        stagingPresent: "savePinnedTabs:migration-staging" in local,
+      };
+    });
+    expect(promoted).toEqual({
+      setCount: expectedSets.length - 1,
+      stagingPresent: false,
+    });
+  } finally {
+    await firstLaunch?.context.close();
+    await secondLaunch?.context.close();
+    await thirdLaunch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test("environment: near-quota generation can be replaced without double quota", async ({
+  extension,
+}) => {
+  test.slow();
+  const popup = await openExtensionPage(
+    extension.context,
+    extension.extensionId,
+    "popup/popup.html",
+  );
+  const previousToken = opaqueToken(130, 84_000);
+  const replacementToken = opaqueToken(131, 84_000);
+  const result = await popup.evaluate(async ({ previousToken, replacementToken }) => {
+    const { createBrowserRepositories } = await import(
+      chrome.runtime.getURL("storage/browser-repositories.js")
+    );
+    const repositories = createBrowserRepositories(chrome);
+    const saveStarted = performance.now();
+    const saved = await repositories.tabSets.save({
+      name: "Before replacement",
+      tabs: [`https://example.com/${previousToken}`],
+    });
+    const firstSaveMs = performance.now() - saveStarted;
+    const previous = await chrome.storage.sync.get(null);
+    const replaceStarted = performance.now();
+    await repositories.tabSets.save({
+      ...saved,
+      name: "After replacement",
+      tabs: [`https://example.com/${replacementToken}`],
+    });
+    const replacementMs = performance.now() - replaceStarted;
+    const stored = await chrome.storage.sync.get(null);
+    const readStarted = performance.now();
+    const active = await repositories.tabSets.get(saved.id);
+    const readMs = performance.now() - readStarted;
+    const bytes = (value) =>
+      Object.entries(value).reduce(
+        (total, [key, item]) =>
+          total + new TextEncoder().encode(key + JSON.stringify(item)).byteLength,
+        0,
+      );
+    return {
+      name: active.name,
+      previousBytes: bytes(previous),
+      bytes: bytes(stored),
+      combinedBytes: bytes(previous) + bytes(stored),
+      firstSaveMs,
+      replacementMs,
+      readMs,
+      recovery: await chrome.storage.local.get("savePinnedTabs:sync-recovery"),
+    };
+  }, { previousToken, replacementToken });
+
+  expect(result.name).toBe("After replacement");
+  expect(result.previousBytes).toBeLessThan(102_400);
+  expect(result.bytes).toBeLessThan(102_400);
+  expect(result.combinedBytes).toBeGreaterThan(102_400);
+  expect(result.firstSaveMs).toBeLessThan(5_000);
+  expect(result.replacementMs).toBeLessThan(5_000);
+  expect(result.readMs).toBeLessThan(5_000);
+  expect(result.recovery).toEqual({});
+});
+
+test("compressed tab sets remain readable after Chromium restart", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-gzip-"));
+  let launch;
+  const setId = "00000000-0000-4000-8000-000000000135";
+  const tabs = Array.from(
+    { length: 120 },
+    (_, index) =>
+      `https://example.com/shared/application/path/${index}/${"segment/".repeat(20)}`,
+  );
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let options = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "options/options.html",
+    );
+    await importDocument(options, {
+      version: 2,
+      sets: [{ id: setId, name: "Compressed restart", tabs }],
+      autoload: { scope: "first-window", setIds: [] },
+    });
+    await expect(options.getByRole("status"))
+      .toHaveText("Successfully imported 1 tab set.");
+    expect(await options.evaluate(async () => (
+      await chrome.storage.sync.get("savePinnedTabs:index")
+    )["savePinnedTabs:index"].encoding)).toBe("gzip-base64");
+
+    launch = await restartExtension(launch, userDataDir);
+    options = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "options/options.html",
+    );
+    const downloadPromise = options.waitForEvent("download");
+    await options.getByRole("button", { name: "Export" }).click();
+    const download = await downloadPromise;
+    const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+    expect(exported.sets).toContainEqual({
+      id: setId,
+      name: "Compressed restart",
+      tabs,
+    });
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
   test.slow();
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-quota-"));
@@ -1363,11 +1659,13 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
       const index = sync["savePinnedTabs:index"];
       return {
         chunkCount: index.chunks.length,
+        encoding: index.encoding,
         chunkBytes: index.chunks.map((key) => new TextEncoder()
           .encode(JSON.stringify(sync[key])).byteLength),
       };
     });
-    expect(storageShape.chunkCount).toBeGreaterThan(1);
+    expect(storageShape.encoding).toBe("gzip-base64");
+    expect(storageShape.chunkCount).toBe(1);
     expect(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024)).toBe(true);
   } finally {
     await launch?.context.close();

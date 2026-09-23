@@ -36,6 +36,8 @@ interface TabSetStorage {
   getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized' | 'local-only';
+    identities: Set<TabSetId>;
   }>;
 
   /** Returns the matching set or null when it does not exist. */
@@ -203,6 +205,7 @@ export class TabSetRepository {
   async getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized' | 'local-only';
   }> {
     try {
       return await this.#storage.getPopupData();
@@ -375,10 +378,11 @@ export class TabSetRepository {
   /** Builds a versioned export from the current sets and autoload configuration. */
   async export(): Promise<ExportDocument> {
     try {
+      const snapshot = await this.#storage.getPopupData();
       return {
         version: EXPORT_VERSION,
-        sets: await this.#storage.list(),
-        autoload: await this.#storage.getAutoload(),
+        sets: snapshot.sets,
+        autoload: snapshot.autoload,
       };
     } catch (error) {
       throw tabSetError('export', 'all', error);
@@ -405,7 +409,8 @@ export class TabSetRepository {
         }
 
         const normalized = normalizeImportDocument(document);
-        const identities = await this.#storage.identities();
+        const snapshot = await this.#storage.getPopupData();
+        const identities = snapshot.identities;
         const imported: TabSet[] = [];
         const importedAutoloadIds: string[] = [];
         const importedIdBySource = new Map<TabSetId, TabSetId>();
@@ -424,12 +429,10 @@ export class TabSetRepository {
           if (importedId !== undefined) importedAutoloadIds.push(importedId);
         }
 
-        const currentAutoload = await this.#storage.getAutoload();
-
         const selectedSetId =
-          currentAutoload.setIds[0] ?? importedAutoloadIds[0];
+          snapshot.autoload.setIds[0] ?? importedAutoloadIds[0];
         await this.#storage.import(imported, {
-          scope: normalized.scope ?? currentAutoload.scope,
+          scope: normalized.scope ?? snapshot.autoload.scope,
           setIds: selectedSetId === undefined ? [] : [selectedSetId],
         });
 

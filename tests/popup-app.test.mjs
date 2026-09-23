@@ -23,6 +23,68 @@ function createView() {
 
 const state = { sets: [], activeSetId: null, autoloadSetIds: [] };
 
+test('popup keeps recovered local-only sets visible with a sync warning', async () => {
+  const view = createView();
+  const localOnlyState = {
+    sets: [{ id: 'set-1', name: 'Recovered', tabs: [] }],
+    activeSetId: null,
+    autoloadSetIds: [],
+    synchronization: 'local-only',
+  };
+  const controller = {
+    getPopupState: async () => ({
+      status: 'success',
+      value: { state: localOnlyState },
+    }),
+  };
+
+  await startPopupApp(controller, view);
+
+  assert.deepEqual(view.events.slice(-4), [
+    ['render', localOnlyState],
+    [
+      'status',
+      'warning',
+      'Tab sets are available locally, but synchronization is suspended because this extension’s Chrome sync storage is full. Export or delete saved data to reduce its size.',
+    ],
+    ['pending', false],
+    ['focus'],
+  ]);
+});
+
+test('popup retains the local-only warning after a failed command', async () => {
+  const view = createView();
+  const localOnlyState = {
+    sets: [],
+    activeSetId: null,
+    autoloadSetIds: [],
+    synchronization: 'local-only',
+  };
+  const controller = {
+    getPopupState: async () => ({
+      status: 'success',
+      value: { state: localOnlyState },
+    }),
+    loadSet: async () => ({
+      status: 'error',
+      error: new Error('Cannot replace tabs'),
+    }),
+  };
+  await startPopupApp(controller, view);
+
+  await view.actions.load('set-1');
+
+  assert.deepEqual(view.events.slice(-3), [
+    ['render', localOnlyState],
+    [
+      'status',
+      'warning',
+      'Cannot replace tabs Tab sets are available locally, but synchronization is suspended because this extension’s Chrome sync storage is full. Export or delete saved data to reduce its size.',
+    ],
+    ['pending', false],
+  ]);
+});
+
 test('popup renders a deterministic controller failure without unloading', async () => {
   const view = createView();
   const controller = {

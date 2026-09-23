@@ -29,7 +29,7 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
   const failures = new Set(Array.isArray(failAt) ? failAt : [failAt]);
   const syncState = {
     [SYNC_DOCUMENT_KEY]: {
-      version: 2,
+      version: 3,
       sets: structuredClone(state.sets),
       autoload: structuredClone(state.autoload),
       deletedSetIds: [],
@@ -55,14 +55,14 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
           if (key === null) {
             return Promise.resolve({
               [LOCAL_DOCUMENT_KEY]: {
-                version: 2,
+                version: 3,
                 windowSessions: structuredClone(state.sessions),
               },
             });
           }
           return browserAwait('storage.local.get', () => ({
             [LOCAL_DOCUMENT_KEY]: {
-              version: 2,
+              version: 3,
               windowSessions: structuredClone(state.sessions),
             },
           }));
@@ -89,11 +89,24 @@ function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}
           });
         },
         set(values) {
-          return browserAwait('storage.sync.set', () => {
+          return browserAwait('storage.sync.set', async () => {
             Object.assign(syncState, structuredClone(values));
             const index = values['savePinnedTabs:index'];
             if (!index) return;
-            const document = JSON.parse(index.chunks.map((key) => syncState[key]).join(''));
+            let serialized = index.chunks.map((key) => syncState[key]).join('');
+            if (index.encoding === 'gzip-base64') {
+              const binary = atob(serialized);
+              const bytes = Uint8Array.from(
+                binary,
+                (character) => character.charCodeAt(0),
+              );
+              serialized = await new Response(
+                new Blob([bytes]).stream().pipeThrough(
+                  new DecompressionStream('gzip'),
+                ),
+              ).text();
+            }
+            const document = JSON.parse(serialized);
             state.sets = structuredClone(document.sets);
             state.autoload = structuredClone(document.autoload);
           });

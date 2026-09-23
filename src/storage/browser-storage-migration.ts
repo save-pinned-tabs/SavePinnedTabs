@@ -1,13 +1,12 @@
 /** Orchestrates restart-safe conversion of historical browser storage. */
 
 import type { BrowserStorageArea } from '../browser-api.js';
+import { migrateStorageState } from './migration/migrate-storage-state.js';
 import {
-  convertLegacyLocalDocument,
-  legacySetEntries,
   LEGACY_SESSIONS_KEY,
   OBSOLETE_LOCAL_REFERENCES_KEY,
-  recoverSyncDocument,
-} from './legacy-storage.js';
+  unversionedSetEntries,
+} from './migration/unversioned-records.js';
 import {
   createSerializedStorageOperation,
   type SerializedOperation,
@@ -15,22 +14,32 @@ import {
 import {
   LOCAL_DOCUMENT_KEY,
   newSetId,
-  parseLocalDocument,
-  parseSyncDocument,
   SYNC_DOCUMENT_KEY,
+  type LocalDocument,
   type StorageMigration,
   type SyncDocument,
 } from './storage-schema.js';
 import {
+  AggregateSyncQuotaError,
+  SYNC_COMMITTED_CACHE_KEY,
   SYNC_INDEX_KEY,
+  SYNC_RECOVERY_KEY,
   SyncDocumentStorage,
 } from './sync-document-storage.js';
+import {
+  parseMigratingSyncDocument,
+  parseStoredLocalDocument,
+} from './migration/v2-documents.js';
 
 /** Serializes migration across extension contexts. */
 const MIGRATION_LOCK = 'save-pinned-tabs:schema-migration';
 
 /** Keeps recovered sync data durable while quota-bound records are replaced. */
 const MIGRATION_STAGING_KEY = 'savePinnedTabs:migration-staging';
+
+/** Keeps converted local references durable beside staged sync recovery. */
+const MIGRATION_LOCAL_STAGING_KEY =
+  'savePinnedTabs:migration-local-staging';
 
 /** Configures identifier generation during historical conversion. */
 export interface MigrationOptions {
@@ -56,6 +65,8 @@ export class BrowserStorageMigration implements StorageMigration {
 
   /** Caches the active or completed migration attempt. */
   #migration: Promise<void> | undefined;
+  /** Holds the decoded migration result until the first document read consumes it. */
+  #syncDocument: SyncDocument | null = null;
 
   /** Creates a migration coordinator for the supplied storage areas. */
   constructor(
@@ -85,24 +96,97 @@ export class BrowserStorageMigration implements StorageMigration {
     return migration;
   }
 
+  /** Reads the durable document and whether it is currently synchronized. */
+  async readDocument(): Promise<{
+    document: SyncDocument | null;
+    synchronization: 'synchronized' | 'local-only';
+  }> {
+    await this.ensureMigrated();
+    const stagedRecord = await this.localStorage.get(MIGRATION_STAGING_KEY);
+    const staged = stagedRecord[MIGRATION_STAGING_KEY];
+    if (staged !== undefined) {
+      return {
+        document: parseMigratingSyncDocument(staged),
+        synchronization: 'local-only',
+      };
+    }
+    return {
+      document: await new SyncDocumentStorage(
+        this.syncStorage,
+        this.localStorage,
+      ).read(),
+      synchronization: 'synchronized',
+    };
+  }
+
+  /** Persists local-only changes durably and retries verified sync promotion. */
+  async saveDocument(document: SyncDocument): Promise<void> {
+    await this.ensureMigrated();
+    await this.#runExclusive(async () => {
+      const stagedRecord = await this.localStorage.get(MIGRATION_STAGING_KEY);
+      const documents = new SyncDocumentStorage(
+        this.syncStorage,
+        this.localStorage,
+      );
+      if (stagedRecord[MIGRATION_STAGING_KEY] === undefined) {
+        await documents.save(document);
+        return;
+      }
+
+      await this.localStorage.set({ [MIGRATION_STAGING_KEY]: document });
+      try {
+        await documents.save(document);
+      } catch (error: unknown) {
+        if (error instanceof AggregateSyncQuotaError) return;
+        throw error;
+      }
+      await this.localStorage.remove(MIGRATION_STAGING_KEY);
+    });
+  }
+
+  /** Returns and clears the document decoded by the completed migration. */
+  takeSyncDocument(): SyncDocument | null {
+    const document = this.#syncDocument;
+    this.#syncDocument = null;
+    return document === null ? null : structuredClone(document);
+  }
+
   /** Recovers every valid source, commits a verified generation, then cleans up. */
   async #migrate(): Promise<void> {
+    const initialLocal = await this.localStorage.get([
+      MIGRATION_STAGING_KEY,
+      SYNC_RECOVERY_KEY,
+      SYNC_COMMITTED_CACHE_KEY,
+    ]);
+    const documents = new SyncDocumentStorage(
+      this.syncStorage,
+      this.localStorage,
+      parseMigratingSyncDocument,
+    );
+    const hasStagedMigration =
+      initialLocal[MIGRATION_STAGING_KEY] !== undefined;
+    const recoveredOrCached = initialLocal[SYNC_RECOVERY_KEY] !== undefined
+      || (!hasStagedMigration
+        && initialLocal[SYNC_COMMITTED_CACHE_KEY] !== undefined)
+      ? await documents.read()
+      : null;
     const [storedSync, storedLocal] = await Promise.all([
       this.syncStorage.get(null),
       this.localStorage.get(null),
     ]);
-    const documents = new SyncDocumentStorage(this.syncStorage);
-    let active: SyncDocument | null = null;
-    try {
-      active = documents.readSnapshot(storedSync);
-    } catch {
-      // An invalid or incomplete generation is not allowed to hide old sources.
+    let active: SyncDocument | null = recoveredOrCached;
+    if (!active) {
+      try {
+        active = await documents.readSnapshot(storedSync);
+      } catch {
+        // An invalid or incomplete generation is not allowed to hide old sources.
+      }
     }
 
     let staged: SyncDocument | null = null;
     if (storedLocal[MIGRATION_STAGING_KEY] !== undefined) {
       try {
-        staged = parseSyncDocument(storedLocal[MIGRATION_STAGING_KEY]);
+        staged = parseMigratingSyncDocument(storedLocal[MIGRATION_STAGING_KEY]);
       } catch {
         // Invalid staging data cannot supersede recoverable synchronized data.
       }
@@ -110,18 +194,29 @@ export class BrowserStorageMigration implements StorageMigration {
     let monolithic: SyncDocument | null = null;
     if (storedSync[SYNC_DOCUMENT_KEY] !== undefined) {
       try {
-        monolithic = parseSyncDocument(storedSync[SYNC_DOCUMENT_KEY]);
+        monolithic = parseMigratingSyncDocument(storedSync[SYNC_DOCUMENT_KEY]);
       } catch {
         // Invalid monolithic data is independent from other recovery sources.
       }
     }
-    const historicalEntries = legacySetEntries(
+    let stagedLocal: LocalDocument | null = null;
+    if (storedLocal[MIGRATION_LOCAL_STAGING_KEY] !== undefined) {
+      try {
+        stagedLocal = parseStoredLocalDocument(
+          storedLocal[MIGRATION_LOCAL_STAGING_KEY],
+          new Set(Object.keys((staged ?? active ?? monolithic)?.sets ?? {})),
+        );
+      } catch {
+        // Invalid local staging cannot replace recoverable legacy references.
+      }
+    }
+    const unversionedSets = unversionedSetEntries(
       storedSync,
       new Set([SYNC_DOCUMENT_KEY, SYNC_INDEX_KEY]),
     );
     const hasRecoverySources = staged !== null
       || monolithic !== null
-      || historicalEntries.length > 0;
+      || unversionedSets.length > 0;
 
     if (!active && !hasRecoverySources) {
       const hasInvalidSource = SYNC_INDEX_KEY in storedSync
@@ -130,33 +225,42 @@ export class BrowserStorageMigration implements StorageMigration {
         throw new Error('No valid synchronized storage source is available');
       }
     }
-    const syncDocument = recoverSyncDocument(
-      active,
-      staged ?? monolithic,
-      historicalEntries,
-      this.#createId,
-    );
-
     const storedLocalDocument = storedLocal[LOCAL_DOCUMENT_KEY];
-    const localDocument = storedLocalDocument === undefined
-      ? convertLegacyLocalDocument(storedLocal, syncDocument)
-      : parseLocalDocument(
-          storedLocalDocument,
-          new Set(Object.keys(syncDocument.sets)),
-        );
+    const { syncDocument, localDocument } = await migrateStorageState({
+      activeSyncDocument: staged ?? active,
+      fallbackSyncDocument: staged
+        ? active ?? monolithic
+        : monolithic,
+      unversionedSets,
+      localStorage: storedLocal,
+      storedLocalDocument,
+      stagedLocalDocument: stagedLocal,
+      createId: this.#createId === newSetId ? undefined : this.#createId,
+    });
     const localChanged = storedLocalDocument === undefined
       || JSON.stringify(localDocument) !== JSON.stringify(storedLocalDocument);
 
-    const obsoleteSyncKeys = historicalEntries.map(([key]) => key).concat(
+    const obsoleteSyncKeys = unversionedSets.map(([key]) => key).concat(
       monolithic ? [SYNC_DOCUMENT_KEY] : [],
     );
+    let synchronized = true;
     if (hasRecoverySources) {
       await this.localStorage.set({
         [MIGRATION_STAGING_KEY]: syncDocument,
+        [MIGRATION_LOCAL_STAGING_KEY]: localDocument,
       });
       await documents.removeGenerations();
       await removeKeys(this.syncStorage, obsoleteSyncKeys);
-      await documents.save(syncDocument);
+      delete syncDocument.migration;
+      await this.localStorage.set({
+        [MIGRATION_STAGING_KEY]: syncDocument,
+      });
+      try {
+        await documents.save(syncDocument);
+      } catch (error: unknown) {
+        if (!(error instanceof AggregateSyncQuotaError)) throw error;
+        synchronized = false;
+      }
     } else if (!active) {
       await documents.save(syncDocument);
     }
@@ -168,9 +272,11 @@ export class BrowserStorageMigration implements StorageMigration {
     }
 
     await removeKeys(this.localStorage, [
-      MIGRATION_STAGING_KEY,
+      ...(synchronized ? [MIGRATION_STAGING_KEY] : []),
+      MIGRATION_LOCAL_STAGING_KEY,
       ...[LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]
         .filter((key) => key in storedLocal),
     ]);
+    this.#syncDocument = synchronized ? syncDocument : null;
   }
 }

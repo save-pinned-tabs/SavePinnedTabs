@@ -28,6 +28,24 @@ const NOOP_MIGRATION: StorageMigration = {
 };
 
 
+/** Extends migration with durable local fallback document access. */
+interface RecoverableStorageMigration extends StorageMigration {
+  /** Reads the synchronized document or its authoritative local recovery copy. */
+  readDocument(): Promise<{
+    document: SyncDocument | null;
+    synchronization: 'synchronized' | 'local-only';
+  }>;
+  /** Saves a document locally until a verified synchronized generation is active. */
+  saveDocument(document: SyncDocument): Promise<void>;
+}
+
+/** Checks whether migration owns synchronized-document recovery. */
+function isRecoverableMigration(
+  migration: StorageMigration,
+): migration is RecoverableStorageMigration {
+  return 'readDocument' in migration && 'saveDocument' in migration;
+}
+
 
 /** Persists tab sets and autoload settings in browser synchronization storage. */
 export class BrowserTabSetStorage {
@@ -39,9 +57,10 @@ export class BrowserTabSetStorage {
   constructor(
     syncStorage: BrowserStorageArea,
     migration: StorageMigration = NOOP_MIGRATION,
+    localStorage?: BrowserStorageArea,
   ) {
     this.#migration = migration;
-    this.#documents = new SyncDocumentStorage(syncStorage);
+    this.#documents = new SyncDocumentStorage(syncStorage, localStorage);
     this.#runExclusive = createSerializedStorageOperation(
       syncStorage,
       TAB_SET_LOCK,
@@ -59,11 +78,15 @@ export class BrowserTabSetStorage {
   async getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized' | 'local-only';
+    identities: Set<string>;
   }> {
-    const document = await this.#read();
+    const { document, synchronization } = await this.#readWithStatus();
     return {
       sets: Object.values(document.sets).map((set) => structuredClone(set)),
       autoload: structuredClone(document.autoload),
+      synchronization,
+      identities: new Set(Object.keys(document.sets).concat(document.deletedSetIds)),
     };
   }
 
@@ -158,20 +181,45 @@ export class BrowserTabSetStorage {
     await this.#write(document);
   }
 
-  /** Reads and validates the synchronized document after migration. */
-  async #read(): Promise<SyncDocument> {
+  /** Reads and validates the active synchronized or local recovery document. */
+  async #readWithStatus(): Promise<{
+    document: SyncDocument;
+    synchronization: 'synchronized' | 'local-only';
+  }> {
     await this.#migration.ensureMigrated();
-
+    const migratedDocument = this.#migration.takeSyncDocument?.();
+    if (migratedDocument) {
+      return { document: migratedDocument, synchronization: 'synchronized' };
+    }
     try {
-      const document = await this.#documents.read();
-      return document ?? emptySyncDocument();
+      if (isRecoverableMigration(this.#migration)) {
+        const recovered = await this.#migration.readDocument();
+        return {
+          document: recovered.document ?? emptySyncDocument(),
+          synchronization: recovered.synchronization,
+        };
+      }
+      await this.#migration.ensureMigrated();
+      return {
+        document: await this.#documents.read() ?? emptySyncDocument(),
+        synchronization: 'synchronized',
+      };
     } catch (cause: unknown) {
       throw new TypeError('Stored tab set document is invalid', { cause });
     }
   }
 
-  /** Writes an independent copy of the complete synchronized document. */
+  /** Reads the currently authoritative complete document. */
+  async #read(): Promise<SyncDocument> {
+    return (await this.#readWithStatus()).document;
+  }
+
+  /** Writes the complete document, retaining local recovery when sync is full. */
   async #write(document: SyncDocument): Promise<void> {
+    if (isRecoverableMigration(this.#migration)) {
+      await this.#migration.saveDocument(document);
+      return;
+    }
     await this.#documents.save(document);
   }
 }
@@ -199,16 +247,22 @@ export class InMemoryTabSetStorage {
   }
 
 
-  /** Reads tab sets and Autoload settings from one storage snapshot. */
+  /** Reads tab sets and Autoload settings from the in-memory snapshot. */
   async getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
+    synchronization: 'synchronized';
+    identities: Set<string>;
   }> {
     return {
       sets: Object.values(this.#document.sets).map((set) =>
         structuredClone(set)
       ),
       autoload: structuredClone(this.#document.autoload),
+      synchronization: 'synchronized',
+      identities: new Set(
+        Object.keys(this.#document.sets).concat(this.#document.deletedSetIds),
+      ),
     };
   }
   /** Lists independent copies of all stored tab sets. */

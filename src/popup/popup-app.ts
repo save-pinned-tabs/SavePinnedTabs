@@ -8,12 +8,15 @@ import type {
 import { errorMessage } from '../validation.js';
 
 /** Identifies the visual state of a popup status message. */
-type StatusKind = 'loading' | 'error' | 'success';
+type StatusKind = 'loading' | 'error' | 'success' | 'warning';
 
 /** Carries the latest popup state returned by a command. */
 interface PopupCommandValue {
   state: PopupState;
 }
+
+const LOCAL_ONLY_MESSAGE =
+  'Tab sets are available locally, but synchronization is suspended because this extension’s Chrome sync storage is full. Export or delete saved data to reduce its size.';
 
 /** Provides commands that read or mutate saved tab sets. */
 interface PopupController {
@@ -87,13 +90,26 @@ export async function startPopupApp(
       const result = await command();
       if (result.status === 'error') {
         if (currentState) render(currentState);
-        view.showStatus(result.error.message, 'error');
+        const isLocalOnly = currentState?.synchronization === 'local-only';
+        view.showStatus(
+          isLocalOnly
+            ? `${result.error.message} ${LOCAL_ONLY_MESSAGE}`
+            : result.error.message,
+          isLocalOnly ? 'warning' : 'error',
+        );
         return;
       }
 
       render(result.value.state);
       onSuccess?.();
-      view.showStatus(successMessage, 'success');
+      view.showStatus(
+        result.value.state.synchronization === 'local-only'
+          ? LOCAL_ONLY_MESSAGE
+          : successMessage,
+        result.value.state.synchronization === 'local-only'
+          ? 'warning'
+          : 'success',
+      );
     } finally {
       isPending = false;
       view.setPending(false);
@@ -130,9 +146,21 @@ export async function startPopupApp(
       let confirmed = false;
       try {
         confirmed = await view.confirmDelete();
-        if (!confirmed) view.showStatus('Deletion canceled.', 'success');
+        if (!confirmed) {
+          const isLocalOnly = currentState?.synchronization === 'local-only';
+          view.showStatus(
+            isLocalOnly ? LOCAL_ONLY_MESSAGE : 'Deletion canceled.',
+            isLocalOnly ? 'warning' : 'success',
+          );
+        }
       } catch (error: unknown) {
-        view.showStatus(errorMessage(error), 'error');
+        const isLocalOnly = currentState?.synchronization === 'local-only';
+        view.showStatus(
+          isLocalOnly
+            ? `${errorMessage(error)} ${LOCAL_ONLY_MESSAGE}`
+            : errorMessage(error),
+          isLocalOnly ? 'warning' : 'error',
+        );
       } finally {
         isPending = false;
         if (!confirmed) view.setPending(false);
