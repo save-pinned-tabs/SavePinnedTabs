@@ -65,6 +65,8 @@ export class BrowserStorageMigration implements StorageMigration {
 
   /** Caches the active or completed migration attempt. */
   #migration: Promise<void> | undefined;
+  /** Holds the decoded migration result until the first document read consumes it. */
+  #syncDocument: SyncDocument | null = null;
 
   /** Creates a migration coordinator for the supplied storage areas. */
   constructor(
@@ -136,6 +138,13 @@ export class BrowserStorageMigration implements StorageMigration {
     });
   }
 
+  /** Returns and clears the document decoded by the completed migration. */
+  takeSyncDocument(): SyncDocument | null {
+    const document = this.#syncDocument;
+    this.#syncDocument = null;
+    return document === null ? null : structuredClone(document);
+  }
+
   /** Recovers every valid source, commits a verified generation, then cleans up. */
   async #migrate(): Promise<void> {
     const initialLocal = await this.localStorage.get([
@@ -158,7 +167,7 @@ export class BrowserStorageMigration implements StorageMigration {
     let active: SyncDocument | null = recoveredOrCached;
     if (!active) {
       try {
-        active = documents.readSnapshot(storedSync);
+        active = await documents.readSnapshot(storedSync);
       } catch {
         // An invalid or incomplete generation is not allowed to hide old sources.
       }
@@ -256,5 +265,6 @@ export class BrowserStorageMigration implements StorageMigration {
       ...[LEGACY_SESSIONS_KEY, OBSOLETE_LOCAL_REFERENCES_KEY]
         .filter((key) => key in storedLocal),
     ]);
+    this.#syncDocument = synchronized ? syncDocument : null;
   }
 }

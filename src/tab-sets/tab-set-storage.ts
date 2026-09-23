@@ -79,12 +79,14 @@ export class BrowserTabSetStorage {
     sets: TabSet[];
     autoload: AutoloadConfiguration;
     synchronization: 'synchronized' | 'local-only';
+    identities: Set<string>;
   }> {
     const { document, synchronization } = await this.#readWithStatus();
     return {
       sets: Object.values(document.sets).map((set) => structuredClone(set)),
       autoload: structuredClone(document.autoload),
       synchronization,
+      identities: new Set(Object.keys(document.sets).concat(document.deletedSetIds)),
     };
   }
 
@@ -184,6 +186,11 @@ export class BrowserTabSetStorage {
     document: SyncDocument;
     synchronization: 'synchronized' | 'local-only';
   }> {
+    await this.#migration.ensureMigrated();
+    const migratedDocument = this.#migration.takeSyncDocument?.();
+    if (migratedDocument) {
+      return { document: migratedDocument, synchronization: 'synchronized' };
+    }
     try {
       if (isRecoverableMigration(this.#migration)) {
         const recovered = await this.#migration.readDocument();
@@ -245,6 +252,7 @@ export class InMemoryTabSetStorage {
     sets: TabSet[];
     autoload: AutoloadConfiguration;
     synchronization: 'synchronized';
+    identities: Set<string>;
   }> {
     return {
       sets: Object.values(this.#document.sets).map((set) =>
@@ -252,6 +260,9 @@ export class InMemoryTabSetStorage {
       ),
       autoload: structuredClone(this.#document.autoload),
       synchronization: 'synchronized',
+      identities: new Set(
+        Object.keys(this.#document.sets).concat(this.#document.deletedSetIds),
+      ),
     };
   }
   /** Lists independent copies of all stored tab sets. */

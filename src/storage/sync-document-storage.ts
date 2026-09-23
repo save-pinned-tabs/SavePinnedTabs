@@ -13,12 +13,16 @@ export const SYNC_CHUNK_PREFIX = 'savePinnedTabs:generation:';
 export const SYNC_CHUNK_PAYLOAD_BYTES = 6 * 1024;
 export const SYNC_RECOVERY_KEY = 'savePinnedTabs:sync-recovery';
 export const SYNC_COMMITTED_CACHE_KEY = 'savePinnedTabs:sync-committed-cache';
-const CHUNK_SCHEMA_VERSION = 3;
+const LEGACY_CHUNK_SCHEMA_VERSION = 3;
+const CHUNK_SCHEMA_VERSION = 4;
 const DOCUMENT_LOCK = 'save-pinned-tabs:sync-document';
 
+/** Names the serialized representation stored across generation chunks. */
+type SyncEncoding = 'json' | 'gzip-base64';
+
 /** Points readers at one complete ordered chunk generation. */
-interface SyncIndex {
-  version: typeof CHUNK_SCHEMA_VERSION;
+interface LegacySyncIndex {
+  version: typeof LEGACY_CHUNK_SCHEMA_VERSION;
   generation: string;
   chunks: string[];
 }
@@ -26,7 +30,7 @@ interface SyncIndex {
 /** Preserves the previous generation while its synchronized chunks are reclaimed. */
 interface SyncRecovery {
   version: 1;
-  previousIndex: SyncIndex;
+  previousIndex: ReadableSyncIndex;
   previousChunks: Record<string, string>;
   nextIndex: SyncIndex;
 }
@@ -38,12 +42,20 @@ interface SyncCommittedCache {
   document: SyncDocument;
 }
 
-/** Checks the persisted shape and generation ownership of a chunk index. */
-function isSyncIndex(value: unknown): value is SyncIndex {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const index = value as Record<string, unknown>;
-  return index.version === CHUNK_SCHEMA_VERSION
-    && typeof index.generation === 'string'
+/** Points readers at one encoded complete ordered chunk generation. */
+interface SyncIndex {
+  version: typeof CHUNK_SCHEMA_VERSION;
+  generation: string;
+  encoding: SyncEncoding;
+  chunks: string[];
+}
+
+/** Describes every supported synchronized generation index. */
+type ReadableSyncIndex = LegacySyncIndex | SyncIndex;
+
+/** Checks shared index fields and generation ownership of chunk keys. */
+function hasValidIndexFields(index: Record<string, unknown>): boolean {
+  return typeof index.generation === 'string'
     && Array.isArray(index.chunks)
     && index.chunks.length > 0
     && index.chunks.every((key) => typeof key === 'string'
@@ -84,6 +96,26 @@ function parseCommittedCache(value: unknown): SyncCommittedCache | null {
   }
 }
 
+/** Checks the persisted index version, encoding, and generation ownership. */
+function isSyncIndex(value: unknown): value is ReadableSyncIndex {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const index = value as Record<string, unknown>;
+  if (!hasValidIndexFields(index)) return false;
+  if (index.version === LEGACY_CHUNK_SCHEMA_VERSION) return true;
+  return index.version === CHUNK_SCHEMA_VERSION
+    && (index.encoding === 'json' || index.encoding === 'gzip-base64');
+}
+
+/** Compares a persisted index without depending on object property order. */
+function isSameSyncIndex(value: unknown, expected: SyncIndex): boolean {
+  return isSyncIndex(value)
+    && value.version === expected.version
+    && value.generation === expected.generation
+    && value.encoding === expected.encoding
+    && value.chunks.length === expected.chunks.length
+    && value.chunks.every((key, index) => key === expected.chunks[index]);
+}
+
 /** Measures one character after JSON string escaping. */
 function jsonStringCharacterBytes(character: string): number {
   if (character === '\"' || character === '\\\\') return 2;
@@ -112,6 +144,54 @@ function splitUtf8(value: string): string[] {
   }
   chunks.push(chunk);
   return chunks;
+}
+
+/** Encodes binary data as base64 without exceeding function argument limits. */
+function encodeBase64(bytes: Uint8Array): string {
+  const blockSize = 32 * 1024;
+  let binary = '';
+  for (let offset = 0; offset < bytes.byteLength; offset += blockSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + blockSize));
+  }
+  return btoa(binary);
+}
+
+/** Decodes a base64 string into bytes for stream decompression. */
+function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
+  return Uint8Array.from(
+    atob(value),
+    (character) => character.charCodeAt(0),
+  );
+}
+
+/** Compresses UTF-8 text with the browser's asynchronous gzip stream. */
+async function gzipBase64(value: string): Promise<string> {
+  const stream = new Blob([value]).stream().pipeThrough(
+    new CompressionStream('gzip'),
+  );
+  return encodeBase64(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+
+/** Decompresses a base64 gzip representation into UTF-8 text. */
+async function gunzipBase64(value: string): Promise<string> {
+  const stream = new Blob([decodeBase64(value)]).stream().pipeThrough(
+    new DecompressionStream('gzip'),
+  );
+  return new Response(stream).text();
+}
+
+/** Selects gzip only when its JSON-encoded stored value is smaller. */
+async function encodeDocument(serialized: string): Promise<{
+  encoding: SyncEncoding;
+  representation: string;
+}> {
+  const compressed = await gzipBase64(serialized);
+  const encoder = new TextEncoder();
+  const rawBytes = encoder.encode(JSON.stringify(serialized)).byteLength;
+  const compressedBytes = encoder.encode(JSON.stringify(compressed)).byteLength;
+  return compressedBytes < rawBytes
+    ? { encoding: 'gzip-base64', representation: compressed }
+    : { encoding: 'json', representation: serialized };
 }
 
 /** Creates a generation identifier unique across devices and writes. */
@@ -192,7 +272,10 @@ export class SyncDocumentStorage {
     }
     if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
     try {
-      const document = this.parseIndex(index, await this.storage.get(index.chunks));
+      const document = await this.parseIndex(
+        index,
+        await this.storage.get(index.chunks),
+      );
       await this.cacheCommitted(index.generation, document);
       return document;
     } catch (error) {
@@ -203,7 +286,7 @@ export class SyncDocumentStorage {
   }
 
   /** Reads an active generation from a previously fetched complete storage snapshot. */
-  readSnapshot(stored: Record<string, unknown>): SyncDocument | null {
+  async readSnapshot(stored: Record<string, unknown>): Promise<SyncDocument | null> {
     const index = stored[SYNC_INDEX_KEY];
     if (index === undefined) {
       const document = stored['savePinnedTabs:sync'];
@@ -238,13 +321,16 @@ export class SyncDocumentStorage {
       : null;
     const generation = generationId();
     const normalizedDocument = parseSyncDocument(document);
-    const chunks = splitUtf8(JSON.stringify(normalizedDocument));
+    const serialized = JSON.stringify(normalizedDocument);
+    const { encoding, representation } = await encodeDocument(serialized);
+    const chunks = splitUtf8(representation);
     const keys = chunks.map((_, index) =>
       `${SYNC_CHUNK_PREFIX}${generation}:chunk:${index}`
     );
     const nextIndex: SyncIndex = {
       version: CHUNK_SCHEMA_VERSION,
       generation,
+      encoding,
       chunks: keys,
     };
     let recovery: SyncRecovery | null = null;
@@ -253,7 +339,7 @@ export class SyncDocumentStorage {
     try {
       if (previous && this.recoveryStorage) {
         const previousChunks = await this.storage.get(previous.chunks);
-        this.parseIndex(previous, previousChunks);
+        await this.parseIndex(previous, previousChunks);
         recovery = {
           version: 1,
           previousIndex: previous,
@@ -267,16 +353,20 @@ export class SyncDocumentStorage {
       await this.storage.set(
         Object.fromEntries(keys.map((key, index) => [key, chunks[index]])),
       );
-      const verified = this.parseIndex(
+      const verified = await this.parseIndex(
         nextIndex,
         await this.storage.get(nextIndex.chunks),
       );
-      if (JSON.stringify(verified) !== JSON.stringify(normalizedDocument)) {
+      if (JSON.stringify(verified) !== serialized) {
         throw new Error('Verified synchronized generation differs from the requested document');
       }
       await this.storage.set({ [SYNC_INDEX_KEY]: nextIndex });
+      const persistedIndex = (await this.storage.get(SYNC_INDEX_KEY))[SYNC_INDEX_KEY];
+      if (!isSameSyncIndex(persistedIndex, nextIndex)) {
+        throw new Error('Synchronized generation index could not be verified');
+      }
+      await this.parseIndex(nextIndex, await this.storage.get(nextIndex.chunks));
       committed = true;
-      this.parseIndex(nextIndex, await this.storage.get(nextIndex.chunks));
     } catch (error: unknown) {
       if (!committed) {
         if (recovery) {
@@ -310,7 +400,7 @@ export class SyncDocumentStorage {
     if (isSyncIndex(activeIndex)
       && activeIndex.generation === recovery.nextIndex.generation) {
       try {
-        const document = this.parseIndex(
+        const document = await this.parseIndex(
           activeIndex,
           await this.storage.get(activeIndex.chunks),
         );
@@ -325,7 +415,7 @@ export class SyncDocumentStorage {
       && activeIndex.generation !== recovery.previousIndex.generation) {
       let document: SyncDocument;
       try {
-        document = this.parseIndex(
+        document = await this.parseIndex(
           activeIndex,
           await this.storage.get(activeIndex.chunks),
         );
@@ -357,7 +447,7 @@ export class SyncDocumentStorage {
     await removeQuietly(this.storage, recovery.nextIndex.chunks);
     await this.storage.set(recovery.previousChunks);
     await this.storage.set({ [SYNC_INDEX_KEY]: recovery.previousIndex });
-    const document = this.parseIndex(
+    const document = await this.parseIndex(
       recovery.previousIndex,
       await this.storage.get(recovery.previousIndex.chunks),
     );
@@ -386,20 +476,24 @@ export class SyncDocumentStorage {
   }
 
 
-  /** Reconstructs and validates an indexed generation from retrieved chunks. */
-  private parseIndex(
-    index: SyncIndex,
+  /** Reconstructs, decodes, and validates an indexed generation. */
+  private async parseIndex(
+    index: ReadableSyncIndex,
     stored: Record<string, unknown>,
-  ): SyncDocument {
-    let serialized = '';
+  ): Promise<SyncDocument> {
+    let representation = '';
     for (const key of index.chunks) {
       const chunk = stored[key];
       if (typeof chunk !== 'string') {
         throw new TypeError(`Synchronized generation is missing chunk "${key}"`);
       }
-      serialized += chunk;
+      representation += chunk;
     }
     try {
+      const serialized = index.version === LEGACY_CHUNK_SCHEMA_VERSION
+        || index.encoding === 'json'
+        ? representation
+        : await gunzipBase64(representation);
       return this.parseStoredDocument(JSON.parse(serialized));
     } catch (cause: unknown) {
       throw new TypeError('Stored synchronized generation is invalid', { cause });

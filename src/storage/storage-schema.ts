@@ -85,6 +85,8 @@ type StorageOperation<T> = () => T | Promise<T>;
 export interface StorageMigration {
   /** Completes migration before resolving and rejects if migration fails. */
   ensureMigrated(): Promise<void>;
+  /** Returns a migration-decoded snapshot once when one is available. */
+  takeSyncDocument?(): SyncDocument | null;
 }
 
 /** Provides a migration strategy that performs no work. */

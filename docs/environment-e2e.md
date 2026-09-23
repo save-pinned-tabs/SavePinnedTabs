@@ -15,8 +15,8 @@ The suites use disposable persisted profiles and the real browser `storage.sync`
 
 - Firefox rejects one item whose JSON-encoded UTF-8 value plus key exceeds 8,192 bytes.
 - Firefox rejects writes after the 102,400-byte aggregate quota is reached and retains every preceding readable item.
-- In Firefox and Chromium, a non-ASCII legacy collection larger than 8,192 bytes migrates after restart, the popup lists and loads every set, and the active generation uses multiple items no larger than the 6 KiB safe payload size.
-- At most 17 full-size 6 KiB chunks fit below Firefox's total-byte quota, so this layout cannot approach Firefox's 512-item limit.
+- In Firefox and Chromium, a non-ASCII legacy collection larger than 8,192 bytes migrates after restart, the popup lists and loads every set, and the active version-4 generation uses gzip-base64 chunks no larger than the 6 KiB safe payload size.
+- Compression reduces the repetitive quota fixture from multiple raw chunks to one retrieved chunk while preserving the complete document.
 - In Firefox and Chromium, a generation near the 102,400-byte aggregate quota can be replaced by another generation that fits alone, without requiring both generations to coexist in Sync.
 - The normal browser commands exclude these expensive scenarios.
 
@@ -79,7 +79,7 @@ Configure session restore at `chrome://settings/onStartup`. Configure background
 3. Quit cleanly and archive the profile as the immutable starting fixture.
 4. Reopen a copy with browser version N+1 while keeping extension 3.1.1. Record browser-driven storage or shortcut changes.
 5. Install the current extension over the same profile without uninstalling it. Restart the browser.
-6. Verify Options opens, every pre-upgrade set is visible and loadable, the Autoload selection survives, shortcuts remain assigned, legacy sources are removed only after the chunked generation is readable, and every chunk remains below 6 KiB.
+6. Verify Options opens, every pre-upgrade set is visible and loadable, the Autoload selection survives, shortcuts remain assigned, legacy sources are removed only after the encoded generation is readable, and every chunk remains below 6 KiB.
 7. Repeat from the archived fixture using forced termination during the first current-version write.
 
 Expected product result: upgrade requires no export/import and preserves set identities, tabs, Autoload configuration, and shortcut assignments. Browser removal of an extension shortcut during upgrade is vendor behavior only if reproduced without an extension manifest command change. Automated unpacked-extension replacement is a controlled substitute for store update delivery; it does not prove Chrome Web Store or AMO rollout behavior and signatures.

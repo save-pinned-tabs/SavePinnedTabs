@@ -471,10 +471,12 @@ test("a legacy profile migrates sets and references exactly once across restarts
     );
     await expect(popup.locator(".load-row", { hasText: "Legacy Work" })).toBeVisible();
     const migrated = await popup.evaluate(async ({ legacyKey }) => {
-      const sync = await chrome.storage.sync.get(null);
+      const sync = await chrome.storage.sync.get(legacyKey);
       const local = await chrome.storage.local.get(null);
-      const index = sync["savePinnedTabs:index"];
-      const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
+      const { SyncDocumentStorage } = await import(
+        chrome.runtime.getURL("storage/sync-document-storage.js")
+      );
+      const document = await new SyncDocumentStorage(chrome.storage.sync).read();
       const setId = Object.keys(document.sets)[0];
       return {
         version: document.version,
@@ -589,10 +591,12 @@ test("oversized legacy storage migrates and exports without losing tab sets", as
       const index = sync["savePinnedTabs:index"];
       return {
         chunkCount: index.chunks.length,
+        encoding: index.encoding,
         legacyRecordsRemain: legacyNames.some((name) => btoa(name) in sync),
       };
     }, expectedSets.map(({ name }) => name));
-    expect(storageState.chunkCount).toBeGreaterThan(1);
+    expect(storageState.encoding).toBe("gzip-base64");
+    expect(storageState.chunkCount).toBe(1);
     expect(storageState.legacyRecordsRemain).toBe(false);
 
     const popup = await openExtensionPage(
@@ -703,9 +707,10 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs(popup, [existingUrl]);
   await saveSet(popup, "Duplicate");
   const existingId = await popup.evaluate(async () => {
-    const storage = await chrome.storage.sync.get(null);
-    const index = storage["savePinnedTabs:index"];
-    const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+    const { SyncDocumentStorage } = await import(
+      chrome.runtime.getURL("storage/sync-document-storage.js")
+    );
+    const document = await new SyncDocumentStorage(chrome.storage.sync).read();
     return Object.keys(document.sets)[0];
   });
   const document = {
@@ -1470,6 +1475,54 @@ test("environment: near-quota generation can be replaced without double quota", 
   expect(result.name).toBe("After replacement");
   expect(result.bytes).toBeLessThan(102_400);
   expect(result.recovery).toEqual({});
+test("compressed tab sets remain readable after Chromium restart", async () => {
+  test.slow();
+  const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-gzip-"));
+  let launch;
+  const setId = "00000000-0000-4000-8000-000000000135";
+  const tabs = Array.from(
+    { length: 120 },
+    (_, index) =>
+      `https://example.com/shared/application/path/${index}/${"segment/".repeat(20)}`,
+  );
+
+  try {
+    launch = await launchExtension(userDataDir);
+    let options = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "options/options.html",
+    );
+    await importDocument(options, {
+      version: 2,
+      sets: [{ id: setId, name: "Compressed restart", tabs }],
+      autoload: { scope: "first-window", setIds: [] },
+    });
+    await expect(options.getByRole("status"))
+      .toHaveText("Successfully imported 1 tab set.");
+    expect(await options.evaluate(async () => (
+      await chrome.storage.sync.get("savePinnedTabs:index")
+    )["savePinnedTabs:index"].encoding)).toBe("gzip-base64");
+
+    launch = await restartExtension(launch, userDataDir);
+    options = await openExtensionPage(
+      launch.context,
+      launch.extensionId,
+      "options/options.html",
+    );
+    const downloadPromise = options.waitForEvent("download");
+    await options.getByRole("button", { name: "Export" }).click();
+    const download = await downloadPromise;
+    const exported = JSON.parse(await readFile(await download.path(), "utf8"));
+    expect(exported.sets).toContainEqual({
+      id: setId,
+      name: "Compressed restart",
+      tabs,
+    });
+  } finally {
+    await launch?.context.close();
+    await rm(userDataDir, { recursive: true, force: true });
+  }
 });
 
 test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
@@ -1531,11 +1584,13 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
       const index = sync["savePinnedTabs:index"];
       return {
         chunkCount: index.chunks.length,
+        encoding: index.encoding,
         chunkBytes: index.chunks.map((key) => new TextEncoder()
           .encode(JSON.stringify(sync[key])).byteLength),
       };
     });
-    expect(storageShape.chunkCount).toBeGreaterThan(1);
+    expect(storageShape.encoding).toBe("gzip-base64");
+    expect(storageShape.chunkCount).toBe(1);
     expect(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024)).toBe(true);
   } finally {
     await launch?.context.close();

@@ -524,19 +524,20 @@ test("a legacy profile migrates sets and references exactly once across restarts
   await openExtensionPage("popup/popup.html");
   await driver.wait(until.elementLocated(By.css('.load-row[data-name="Legacy Work"]')), 10_000);
   const migrated = await driver.executeAsyncScript((setKey, done) => {
-    Promise.all([browser.storage.sync.get(null), browser.storage.local.get(null)])
-      .then(([sync, local]) => {
-        const index = sync["savePinnedTabs:index"];
-        const document = JSON.parse(index.chunks.map((key) => sync[key]).join(""));
-        const setId = Object.keys(document.sets)[0];
-        done({
-          version: document.version,
-          legacyRemoved: !(setKey in sync),
-          migration: document.migration,
-          set: document.sets[setId],
-          autoloadSetIds: document.autoload.setIds,
-        });
+    (async () => {
+      const [sync, local, { SyncDocumentStorage }] = await Promise.all([
+        browser.storage.sync.get(setKey),
+        browser.storage.local.get(null),
+        import(browser.runtime.getURL("storage/sync-document-storage.js")),
+      ]);
+      const document = await new SyncDocumentStorage(browser.storage.sync).read();
+      const setId = Object.keys(document.sets)[0];
+      done({
+        legacyRemoved: !(setKey in sync),
+        set: document.sets[setId],
+        autoloadSetIds: document.autoload.setIds,
       });
+    })().catch((error) => done({ error: String(error) }));
   }, legacyKey);
   assert.equal(migrated.legacyRemoved, true);
   assert.equal(migrated.version, 3);
@@ -649,11 +650,13 @@ test("identity collisions and repeated imports create independent usable sets", 
   await createTabs([existingUrl]);
   await saveSet("Duplicate");
   const existingId = await driver.executeAsyncScript((done) => {
-    browser.storage.sync.get(null).then((storage) => {
-      const index = storage["savePinnedTabs:index"];
-      const document = JSON.parse(index.chunks.map((key) => storage[key]).join(""));
+    (async () => {
+      const { SyncDocumentStorage } = await import(
+        browser.runtime.getURL("storage/sync-document-storage.js")
+      );
+      const document = await new SyncDocumentStorage(browser.storage.sync).read();
       done(Object.keys(document.sets)[0]);
-    });
+    })().catch((error) => done({ error: String(error) }));
   });
   const document = {
     version: 2,
@@ -982,6 +985,45 @@ test("environment: near-quota generation can be replaced without double quota", 
   assert.equal(result.name, "After replacement");
   assert.ok(result.bytes < 102_400);
   assert.deepEqual(result.recovery, {});
+test("compressed tab sets remain readable after Firefox restart", async () => {
+  const setId = "00000000-0000-4000-8000-000000000135";
+  const tabs = Array.from(
+    { length: 120 },
+    (_, index) =>
+      `https://example.com/shared/application/path/${index}/${"segment/".repeat(20)}`,
+  );
+  await openExtensionPage("options/options.html");
+  await importDocument({
+    version: 2,
+    sets: [{ id: setId, name: "Compressed restart", tabs }],
+    autoload: { scope: "first-window", setIds: [] },
+  }, "compressed-restart.json");
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  const encoding = await driver.executeAsyncScript((done) => {
+    browser.storage.sync.get("savePinnedTabs:index").then((stored) => {
+      done(stored["savePinnedTabs:index"].encoding);
+    });
+  });
+  assert.equal(encoding, "gzip-base64");
+
+  await restartFirefox();
+  await openExtensionPage("options/options.html");
+  await driver.findElement(By.id("export-button")).click();
+  await waitForStatus("options-status", "Tab sets exported.");
+  let exportName;
+  await driver.wait(async () => {
+    exportName = (await readdir(temporaryDirectory))
+      .find((name) => /^SavePinnedTabs_export_.*\.json$/.test(name));
+    return Boolean(exportName);
+  }, 10_000);
+  const exported = JSON.parse(
+    await readFile(path.join(temporaryDirectory, exportName), "utf8"),
+  );
+  assert.deepEqual(exported.sets, [{
+    id: setId,
+    name: "Compressed restart",
+    tabs,
+  }]);
 });
 
 test("environment: Firefox enforces quotas without losing the readable generation", async () => {
@@ -1016,9 +1058,15 @@ test("environment: Firefox enforces quotas without losing the readable generatio
       }
       const retained = await browser.storage.sync.get(null);
       const activeIndex = retained["savePinnedTabs:index"];
-      const activeDocument = JSON.parse(
-        activeIndex.chunks.map((key) => retained[key]).join(""),
-      );
+      let serialized = activeIndex.chunks.map((key) => retained[key]).join("");
+      if (activeIndex.encoding === "gzip-base64") {
+        const binary = atob(serialized);
+        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+        serialized = await new Response(
+          new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip")),
+        ).text();
+      }
+      const activeDocument = JSON.parse(serialized);
       const generationUnchanged = activeIndex.generation === previousIndex.generation;
       const readableSetNames = Object.values(activeDocument.sets).map((set) => set.name);
       await browser.storage.sync.remove(["quota:item", ...keys]);
@@ -1213,6 +1261,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
       const index = sync["savePinnedTabs:index"];
       done({
         chunkCount: index.chunks.length,
+        encoding: index.encoding,
         chunkBytes: index.chunks.map((key) => new TextEncoder()
           .encode(JSON.stringify(sync[key])).byteLength),
         migrationSourcesRemoved: !("savePinnedTabs:sync" in sync)
@@ -1220,7 +1269,8 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
       });
     });
   }, legacySets);
-  assert.ok(storageShape.chunkCount > 1);
+  assert.equal(storageShape.encoding, "gzip-base64");
+  assert.equal(storageShape.chunkCount, 1);
   assert.ok(storageShape.chunkBytes.every((bytes) => bytes <= 6 * 1_024));
   assert.equal(storageShape.migrationSourcesRemoved, true);
 });

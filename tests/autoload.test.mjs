@@ -134,6 +134,7 @@ test('Autoload restores the selected existing set', async () => {
 
 test('creates and pins replacements before removing existing pinned tabs', async () => {
   const creation = deferred();
+  const creationStarted = deferred();
   const operations = [];
   const browser = createBrowser({
     currentTabs: [{ id: 10, url: 'https://old.example/' }],
@@ -145,6 +146,7 @@ test('creates and pins replacements before removing existing pinned tabs', async
     },
     createTab: async () => {
       operations.push('create');
+      creationStarted.resolve();
       await creation.promise;
       return { id: 100 };
     },
@@ -157,7 +159,7 @@ test('creates and pins replacements before removing existing pinned tabs', async
   });
 
   const restoration = restoreAutoloadSet(browser, 1);
-  await new Promise((resolve) => setImmediate(resolve));
+  await creationStarted.promise;
   assert.deepEqual(operations, ['create']);
 
   creation.resolve();
