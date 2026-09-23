@@ -1315,6 +1315,185 @@ test('interrupted replacements recover the last committed document after restart
   }
 });
 
+test('first save remains readable when commit verification cannot read its index', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptVerification = true;
+  syncStorage.get = async (keys) => {
+    if (interruptVerification
+      && keys === SYNC_INDEX_KEY
+      && SYNC_INDEX_KEY in syncStorage.state) {
+      interruptVerification = false;
+      throw new Error('injected index verification interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(document),
+    /injected index verification interruption/,
+  );
+
+  const verifiedIndex = syncStorage.state[SYNC_INDEX_KEY];
+  assert.ok(verifiedIndex.chunks.every((key) => key in syncStorage.state));
+  assert.deepEqual(await documents.read(), document);
+  await documents.save(document);
+});
+
+test('first save remains readable when commit verification cannot read its chunks', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptVerification = true;
+  syncStorage.get = async (keys) => {
+    if (interruptVerification
+      && Array.isArray(keys)
+      && SYNC_INDEX_KEY in syncStorage.state) {
+      interruptVerification = false;
+      throw new Error('injected chunk verification interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(document),
+    /injected chunk verification interruption/,
+  );
+
+  const verifiedIndex = syncStorage.state[SYNC_INDEX_KEY];
+  assert.ok(verifiedIndex.chunks.every((key) => key in syncStorage.state));
+  assert.deepEqual(await documents.read(), document);
+  await documents.save(document);
+});
+
+test('first-save recovery preserves a remote generation published during recheck', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const local = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const remote = {
+    ...local,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  const remoteChunk = `${SYNC_CHUNK_PREFIX}remote:chunk:0`;
+  const remoteIndex = {
+    version: 3,
+    generation: 'remote',
+    chunks: [remoteChunk],
+  };
+  await syncStorage.set({ [remoteChunk]: JSON.stringify(remote) });
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptIndexVerification = true;
+  let publishRemoteDuringRecovery = true;
+  syncStorage.get = async (keys) => {
+    const activeGeneration = syncStorage.state[SYNC_INDEX_KEY]?.generation;
+    if (interruptIndexVerification
+      && keys === SYNC_INDEX_KEY
+      && activeGeneration
+      && activeGeneration !== 'remote') {
+      interruptIndexVerification = false;
+      throw new Error('injected index verification interruption');
+    }
+    if (publishRemoteDuringRecovery
+      && Array.isArray(keys)
+      && activeGeneration
+      && activeGeneration !== 'remote') {
+      publishRemoteDuringRecovery = false;
+      syncStorage.state[SYNC_INDEX_KEY] = structuredClone(remoteIndex);
+      throw new Error('injected attempted chunk interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(local),
+    /injected index verification interruption/,
+  );
+
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(remoteChunk in syncStorage.state, true);
+  assert.deepEqual(await documents.read(), remote);
+  assert.deepEqual(
+    Object.keys(syncStorage.state).filter(
+      (key) => key.startsWith(SYNC_CHUNK_PREFIX),
+    ),
+    [remoteChunk],
+  );
+});
+
+test('replacement preserves a complete remote generation arriving during verification', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  const remote = {
+    ...previous,
+    deletedSetIds: [FIRST_ID],
+  };
+  await documents.save(previous);
+  const previousGeneration = syncStorage.state[SYNC_INDEX_KEY].generation;
+  const remoteChunk = `${SYNC_CHUNK_PREFIX}remote:chunk:0`;
+  const remoteIndex = {
+    version: 3,
+    generation: 'remote',
+    chunks: [remoteChunk],
+  };
+  await syncStorage.set({ [remoteChunk]: JSON.stringify(remote) });
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let publishRemote = true;
+  syncStorage.get = async (keys) => {
+    if (publishRemote
+      && syncStorage.state[SYNC_INDEX_KEY]?.generation !== previousGeneration
+      && syncStorage.state[SYNC_INDEX_KEY]?.generation !== 'remote') {
+      publishRemote = false;
+      syncStorage.state[SYNC_INDEX_KEY] = structuredClone(remoteIndex);
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(replacement),
+    /generation index could not be verified/,
+  );
+
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(remoteChunk in syncStorage.state, true);
+  assert.deepEqual(await documents.read(), remote);
+  assert.equal(
+    Object.keys(syncStorage.state).some(
+      (key) => key.startsWith(SYNC_CHUNK_PREFIX)
+        && key !== remoteChunk,
+    ),
+    false,
+  );
+});
+
 test('committed replacement survives interrupted recovery cleanup', async () => {
   const syncStorage = createStorageArea();
   const localStorage = createStorageArea();
