@@ -1106,6 +1106,7 @@ test('large committed generation can be replaced without double sync quota', asy
   assert.equal(SYNC_COMMITTED_CACHE_KEY in localStorage.state, true);
 });
 
+
 test('interrupted replacements recover the last committed document after restart', async () => {
   const previous = {
     version: 2,

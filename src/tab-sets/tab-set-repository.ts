@@ -201,40 +201,34 @@ export class TabSetRepository {
     this.#createId = createId;
   }
   /** Returns the popup data and wraps storage failures with repository context. */
-  getPopupData(): Promise<{
+  async getPopupData(): Promise<{
     sets: TabSet[];
     autoload: AutoloadConfiguration;
     synchronization: 'synchronized' | 'local-only';
   }> {
-    return this.#storage.runExclusive(async () => {
-      try {
-        return await this.#storage.getPopupData();
-      } catch (error) {
-        throw tabSetError('load popup data for', 'all', error);
-      }
-    });
+    try {
+      return await this.#storage.getPopupData();
+    } catch (error) {
+      throw tabSetError('load popup data for', 'all', error);
+    }
   }
 
   /** Returns all sets and wraps storage failures with repository context. */
-  list(): Promise<TabSet[]> {
-    return this.#storage.runExclusive(async () => {
-      try {
-        return await this.#storage.list();
-      } catch (error) {
-        throw tabSetError('list', 'all', error);
-      }
-    });
+  async list(): Promise<TabSet[]> {
+    try {
+      return await this.#storage.list();
+    } catch (error) {
+      throw tabSetError('list', 'all', error);
+    }
   }
 
   /** Returns a set when present and wraps storage failures with its ID. */
-  get(setId: TabSetId): Promise<TabSet | null> {
-    return this.#storage.runExclusive(async () => {
-      try {
-        return await this.#storage.get(setId);
-      } catch (error) {
-        throw tabSetError('get', setId, error);
-      }
-    });
+  async get(setId: TabSetId): Promise<TabSet | null> {
+    try {
+      return await this.#storage.get(setId);
+    } catch (error) {
+      throw tabSetError('get', setId, error);
+    }
   }
 
   /** Validates and persists a draft under exclusive access. */
@@ -328,14 +322,12 @@ export class TabSetRepository {
   }
 
   /** Returns the current autoload configuration with contextual error handling. */
-  getAutoload(): Promise<AutoloadConfiguration> {
-    return this.#storage.runExclusive(async () => {
-      try {
-        return await this.#storage.getAutoload();
-      } catch (error) {
-        throw tabSetError('get autoload for', 'all', error);
-      }
-    });
+  async getAutoload(): Promise<AutoloadConfiguration> {
+    try {
+      return await this.#storage.getAutoload();
+    } catch (error) {
+      throw tabSetError('get autoload for', 'all', error);
+    }
   }
 
   /** Validates, deduplicates, and persists references to existing sets only. */
@@ -383,18 +375,16 @@ export class TabSetRepository {
   }
 
   /** Builds a versioned export from the current sets and autoload configuration. */
-  export(): Promise<ExportDocument> {
-    return this.#storage.runExclusive(async () => {
-      try {
-        return {
-          version: EXPORT_VERSION,
-          sets: await this.#storage.list(),
-          autoload: await this.#storage.getAutoload(),
-        };
-      } catch (error) {
-        throw tabSetError('export', 'all', error);
-      }
-    });
+  async export(): Promise<ExportDocument> {
+    try {
+      return {
+        version: EXPORT_VERSION,
+        sets: await this.#storage.list(),
+        autoload: await this.#storage.getAutoload(),
+      };
+    } catch (error) {
+      throw tabSetError('export', 'all', error);
+    }
   }
 
   /** Validates and imports a supported document while remapping conflicting IDs. */
