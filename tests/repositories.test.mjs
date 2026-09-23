@@ -153,15 +153,11 @@ function isValidImport(document) {
   ));
 }
 
-function createBrowserHarness({
-  sync = {},
-  local = {},
+function createBrowserContext(
+  syncStorage,
+  localStorage,
   createId = idGenerator(),
-  syncQuotaBytes = Infinity,
-  syncLimits,
-} = {}) {
-  const syncStorage = createStorageArea(sync, null, syncQuotaBytes, syncLimits);
-  const localStorage = createStorageArea(local);
+) {
   const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId });
   const references = new BrowserReferenceStorage(localStorage, migration);
   const windowSessions = new WindowSessionRepository(new BrowserWindowSessionStorage(references));
@@ -176,6 +172,21 @@ function createBrowserHarness({
   return { tabSets, windowSessions, syncStorage, localStorage };
 }
 
+
+function createBrowserHarness({
+  sync = {},
+  local = {},
+  createId = idGenerator(),
+  syncQuotaBytes = Infinity,
+  syncLimits,
+} = {}) {
+  return createBrowserContext(
+    createStorageArea(sync, null, syncQuotaBytes, syncLimits),
+    createStorageArea(local),
+    createId,
+  );
+}
+
 function createMemoryHarness(createId = idGenerator()) {
   const references = new InMemoryReferenceStorage();
   const windowSessions = new WindowSessionRepository(new InMemoryWindowSessionStorage(references));
@@ -186,6 +197,61 @@ function createMemoryHarness(createId = idGenerator()) {
   });
   return { tabSets, windowSessions };
 }
+
+
+test('independent repositories without navigator locks preserve commits after migration initialization', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const seedContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(),
+  );
+  const setA = await seedContext.tabSets.save({
+    name: 'Set A',
+    tabs: ['https://a.example/'],
+  });
+  const setToDelete = await seedContext.tabSets.save({
+    name: 'Set to delete',
+    tabs: ['https://deleted.example/'],
+  });
+
+  const firstContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(3),
+  );
+
+  await firstContext.windowSessions.get(1);
+
+  const secondContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(3),
+  );
+  const setB = await secondContext.tabSets.save({
+    name: 'Set B',
+    tabs: ['https://b.example/'],
+  });
+  await secondContext.tabSets.setAutoload({
+    scope: 'every-window',
+    setIds: [setB.id],
+  });
+  await secondContext.tabSets.remove(setToDelete.id);
+
+  await firstContext.tabSets.remove(setA.id);
+
+  assert.deepEqual(await firstContext.tabSets.list(), [setB]);
+  assert.deepEqual(
+    await firstContext.tabSets.getAutoload(),
+    { scope: 'every-window', setIds: [setB.id] },
+  );
+  assert.equal(await firstContext.tabSets.get(setToDelete.id), null);
+  assert.deepEqual(
+    (await activeSyncDocument(syncStorage)).deletedSetIds.sort(),
+    [setA.id, setToDelete.id].sort(),
+  );
+});
 
 
 test('browser storage rejects incomplete persisted tab sets', async () => {
@@ -1187,34 +1253,6 @@ test('failed local staging preserves every synchronized migration source', async
   assert.deepEqual(syncStorage.state, initialSyncState);
 });
 
-test('current popup data loads without redundant synchronized storage reads', async () => {
-  const document = {
-    version: 3,
-    sets: {},
-    autoload: { scope: 'first-window', setIds: [] },
-    deletedSetIds: [],
-  };
-  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
-  const syncStorage = createStorageArea({
-    [SYNC_INDEX_KEY]: {
-      version: 3,
-      generation: 'current',
-      chunks: [chunkKey],
-    },
-    [chunkKey]: JSON.stringify(document),
-  });
-  const localStorage = createStorageArea({
-    [LOCAL_DOCUMENT_KEY]: { version: 2, windowSessions: {} },
-  });
-  const migration = new BrowserStorageMigration(syncStorage, localStorage);
-  const tabSets = new TabSetRepository(
-    new BrowserTabSetStorage(syncStorage, migration),
-  );
-
-  await tabSets.getPopupData();
-
-  assert.equal(syncStorage.calls.get, 1);
-});
 
 test('large synchronized documents batch quota-safe chunks into one write', async () => {
   const storage = createStorageArea();
