@@ -1730,6 +1730,138 @@ test('local committed cache covers non-atomic cross-device propagation', async (
   assert.deepEqual(await documents.read(), previous);
 });
 
+test('valid synchronized generations remain authoritative when cache refresh fails', async () => {
+  const older = {
+    version: 3,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Older cache',
+        tabs: ['https://older.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [FIRST_ID] },
+    deletedSetIds: [],
+  };
+  const newer = {
+    version: 3,
+    sets: {
+      [SECOND_ID]: {
+        id: SECOND_ID,
+        name: 'New synchronized generation',
+        tabs: ['https://newer.example/'],
+      },
+    },
+    autoload: { scope: 'every-window', setIds: [SECOND_ID] },
+    deletedSetIds: [FIRST_ID],
+  };
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  await documents.save(older);
+  const chunkKey = `${SYNC_CHUNK_PREFIX}newer:chunk:0`;
+  await syncStorage.set({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'newer',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(newer),
+  });
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+
+  assert.deepEqual(await documents.read(), newer);
+  assert.deepEqual(
+    localStorage.state[SYNC_COMMITTED_CACHE_KEY].document,
+    older,
+  );
+});
+
+test('valid synchronized generation remains readable when its first cache refresh fails', async () => {
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'current',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(document),
+  });
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+
+  assert.deepEqual(await documents.read(), document);
+  assert.equal(SYNC_COMMITTED_CACHE_KEY in localStorage.state, false);
+});
+
+test('cache refresh retries after an earlier read-time write failure', async () => {
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'current',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(document),
+  });
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+  await documents.read();
+
+  assert.deepEqual(await documents.read(), document);
+  assert.deepEqual(localStorage.state[SYNC_COMMITTED_CACHE_KEY], {
+    version: 1,
+    generation: 'current',
+    document,
+  });
+});
+
+test('invalid synchronized generation falls back only to a valid cache', async () => {
+  const cached = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}incomplete:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'incomplete',
+      chunks: [chunkKey],
+    },
+  });
+  const localStorage = createStorageArea({
+    [SYNC_COMMITTED_CACHE_KEY]: {
+      version: 1,
+      generation: 'cached',
+      document: cached,
+    },
+  });
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+
+  assert.deepEqual(await documents.read(), cached);
+  localStorage.state[SYNC_COMMITTED_CACHE_KEY].document = { version: 3 };
+  await assert.rejects(
+    documents.read(),
+    /Synchronized generation is missing chunk/,
+  );
+});
+
 test('startup migration recovers an interrupted normal replacement first', async () => {
   const previous = {
     version: 3,

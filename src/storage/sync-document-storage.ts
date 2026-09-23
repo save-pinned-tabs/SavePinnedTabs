@@ -277,18 +277,23 @@ export class SyncDocumentStorage {
       return document === undefined ? null : this.parseStoredDocument(document);
     }
     if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
+    let document: SyncDocument;
     try {
-      const document = await this.parseIndex(
+      document = await this.parseIndex(
         index,
         await this.storage.get(index.chunks),
       );
-      await this.cacheCommitted(index.generation, document);
-      return document;
     } catch (error) {
       const cached = await this.readCommittedCache();
       if (cached) return cached.document;
       throw error;
     }
+    try {
+      await this.cacheCommitted(index.generation, document);
+    } catch {
+      // The complete synchronized generation remains authoritative and readable.
+    }
+    return document;
   }
 
   /** Reads an active generation from a previously fetched complete storage snapshot. */
