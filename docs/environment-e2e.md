@@ -11,16 +11,20 @@ npm run test:e2e:environment:chromium
 npm run test:e2e:environment:firefox
 ```
 
-The suites use disposable persisted profiles and the real browser `storage.sync` API. They prove:
+The suites use disposable browser profiles and the real browser `storage.sync` API. Chromium relaunches the persistent profile with the unpacked extension supplied again on the command line. Firefox installs a temporary add-on into the profile after every relaunch. These are storage-recovery checks across browser process boundaries; they do **not** prove that a normally installed extension remains installed across restart.
 
 - Firefox rejects one item whose JSON-encoded UTF-8 value plus key exceeds 8,192 bytes.
 - Firefox rejects writes after the 102,400-byte aggregate quota is reached and retains every preceding readable item.
-- In Firefox and Chromium, a non-ASCII legacy collection larger than 8,192 bytes migrates after restart, the popup lists and loads every set, and the active version-4 generation uses gzip-base64 chunks no larger than the 6 KiB safe payload size.
+- In Firefox and Chromium, a non-ASCII legacy collection larger than 8,192 bytes migrates after a browser relaunch that supplies the unpacked or temporary extension again, the popup lists and loads every set, and the active version-4 generation uses gzip-base64 chunks no larger than the 6 KiB safe payload size.
 - Compression reduces the repetitive quota fixture from multiple raw chunks to one retrieved chunk while preserving the complete document.
 - In Firefox and Chromium, a generation near the 102,400-byte aggregate quota can be replaced by another generation that fits alone, without requiring both generations to coexist in Sync.
 - The normal browser commands exclude these expensive scenarios.
 
 Firefox measures the JSON-stringified value plus key bytes. Assertions deliberately accept browser-version-specific error wording but require an actual rejected `storage.sync.set()` call. This is product and browser behavior, not a storage mock.
+
+The current harness cannot faithfully automate a persisted, normally installed Firefox extension: WebDriver's `installAddon(path, true)` creates a temporary installation that Firefox removes on shutdown. A retained-extension restart needs a signed XPI installed persistently in a disposable profile and remains a manual environment scenario. Record it separately from the automated temporary-reinstall scenarios.
+
+Chromium/Firefox parity is defined by the observable storage, migration, popup, and Autoload results after the documented relaunch boundary—not by identical installation lifecycles. A result must identify whether it came from real installed-extension persistence, an unpacked/temporary reinstall, or a controlled storage-snapshot substitution.
 
 ## Authenticated cross-browser Sync
 

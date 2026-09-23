@@ -45,6 +45,39 @@ function storageBytes(values) {
   );
 }
 
+function rawGenerationStorage(document, generation) {
+  const serialized = JSON.stringify(document);
+  const chunks = [];
+  const encoder = new TextEncoder();
+  let chunk = '';
+  let chunkBytes = 2;
+  for (const character of serialized) {
+    const characterBytes = encoder.encode(JSON.stringify(character)).byteLength - 2;
+    if (chunkBytes + characterBytes > SYNC_CHUNK_PAYLOAD_BYTES && chunk) {
+      chunks.push(chunk);
+      chunk = '';
+      chunkBytes = 2;
+    }
+    chunk += character;
+    chunkBytes += characterBytes;
+  }
+  chunks.push(chunk);
+  const chunkKeys = chunks.map(
+    (_, index) => `${SYNC_CHUNK_PREFIX}${generation}:chunk:${index}`,
+  );
+  return {
+    [SYNC_INDEX_KEY]: {
+      version: 4,
+      generation,
+      chunks: chunkKeys,
+      encoding: 'json',
+    },
+    ...Object.fromEntries(
+      chunkKeys.map((key, index) => [key, chunks[index]]),
+    ),
+  };
+}
+
 function opaqueToken(seed, length) {
   let state = seed + 1;
   let token = '';
@@ -737,7 +770,7 @@ test('version-three generation reads an explicit version-two document', async ()
   );
 });
 
-test('migrated quota fixture materially reduces aggregate synchronized bytes', async () => {
+test('compatibility identity map overhead is measured with equivalent raw envelopes', async () => {
   const legacyEntries = Object.fromEntries(
     Array.from({ length: 142 }, (_, index) => {
       const name = `Legacy set ${index}`;
@@ -751,8 +784,7 @@ test('migrated quota fixture materially reduces aggregate synchronized bytes', a
       ];
     }),
   );
-  const quotaBytes = 70_000;
-  const syncStorage = createStorageArea(legacyEntries, null, quotaBytes);
+  const syncStorage = createStorageArea(legacyEntries);
 
   await new BrowserStorageMigration(
     syncStorage,
@@ -766,41 +798,23 @@ test('migrated quota fixture materially reduces aggregate synchronized bytes', a
       Object.keys(migratedDocument.sets)[index],
     ]),
   );
-  const previousDocument = {
+  const documentWithIdentityMap = {
     ...migratedDocument,
     migration: { legacyIds },
   };
-  const serializedPrevious = JSON.stringify(previousDocument);
-  const previousGeneration = `migrate-${'0'.repeat(36)}`;
-  const previousChunks = serializedPrevious.match(/.{1,6142}/gu) ?? [''];
-  const previousChunkKeys = previousChunks.map(
-    (_, index) =>
-      `${SYNC_CHUNK_PREFIX}${previousGeneration}:chunk:${index}`,
-  );
-  const previousStorage = {
-    [SYNC_INDEX_KEY]: {
-      version: 3,
-      generation: previousGeneration,
-      chunks: previousChunkKeys,
-    },
-    ...Object.fromEntries(
-      previousChunkKeys.map((key, index) => [key, previousChunks[index]]),
-    ),
-  };
-  const previousBytes = storageBytes(previousStorage);
-  const migratedBytes = storageBytes(syncStorage.state);
-  assert.ok(
-    previousBytes > quotaBytes,
-    `expected previous format ${previousBytes} to exceed quota ${quotaBytes}`,
-  );
-  assert.ok(
-    migratedBytes <= quotaBytes,
-    `expected migrated format ${migratedBytes} to fit quota ${quotaBytes}`,
-  );
+  const generation = `identity-map-${'0'.repeat(32)}`;
+  const withoutIdentityMap = rawGenerationStorage(migratedDocument, generation);
+  const withIdentityMap = rawGenerationStorage(documentWithIdentityMap, generation);
+  const withoutIdentityMapBytes = storageBytes(withoutIdentityMap);
+  const withIdentityMapBytes = storageBytes(withIdentityMap);
 
+  assert.equal(withoutIdentityMap[SYNC_INDEX_KEY].version, 4);
+  assert.equal(withIdentityMap[SYNC_INDEX_KEY].version, 4);
+  assert.equal(withoutIdentityMap[SYNC_INDEX_KEY].encoding, 'json');
+  assert.equal(withIdentityMap[SYNC_INDEX_KEY].encoding, 'json');
   assert.ok(
-    migratedBytes < previousBytes * 0.9,
-    `expected migrated bytes ${migratedBytes} to improve at least 10% on ${previousBytes}`,
+    withoutIdentityMapBytes < withIdentityMapBytes * 0.9,
+    `expected identity-map-free bytes ${withoutIdentityMapBytes} to improve at least 10% on ${withIdentityMapBytes}`,
   );
   assert.equal(migratedDocument.migration, undefined);
 });
@@ -912,7 +926,7 @@ test('version-three raw generations remain readable', async () => {
   assert.deepEqual(await new SyncDocumentStorage(storage).read(), document);
 });
 
-test('compressible documents use gzip and round-trip complex text', async () => {
+test('gzip separately reduces stored bytes and round-trips complex text', async () => {
   const storage = createStorageArea();
   const documents = new SyncDocumentStorage(storage);
   const longPath = `${'segment/路🚀/'.repeat(300)}?quoted="yes"&escaped=\\value`;
@@ -937,6 +951,11 @@ test('compressible documents use gzip and round-trip complex text', async () => 
   const index = storage.state[SYNC_INDEX_KEY];
   assert.equal(index.version, 4);
   assert.equal(index.encoding, 'gzip-base64');
+  const rawStorage = rawGenerationStorage(document, index.generation);
+  assert.ok(
+    storageBytes(storage.state) < storageBytes(rawStorage),
+    `expected gzip bytes ${storageBytes(storage.state)} to improve on raw bytes ${storageBytes(rawStorage)}`,
+  );
   assert.deepEqual(await documents.read(), document);
   for (const key of index.chunks) {
     assert.ok(
