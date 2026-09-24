@@ -186,11 +186,6 @@ export class BrowserTabSetStorage {
     document: SyncDocument;
     synchronization: 'synchronized' | 'local-only';
   }> {
-    await this.#migration.ensureMigrated();
-    const migratedDocument = this.#migration.takeSyncDocument?.();
-    if (migratedDocument) {
-      return { document: migratedDocument, synchronization: 'synchronized' };
-    }
     try {
       if (isRecoverableMigration(this.#migration)) {
         const recovered = await this.#migration.readDocument();

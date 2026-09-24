@@ -192,7 +192,7 @@ async function deleteSet(name) {
   await waitForStatus("popup-status", "Tab set deleted.");
 }
 
-async function restartFirefox() {
+async function restartFirefoxAndReinstallTemporaryAddon() {
   await driver.quit();
   driver = undefined;
   ({ driver, extensionOrigin } = await launchFirefox({ installAddon: true }));
@@ -502,7 +502,7 @@ test("a pending failure blocks duplicate commands and recovers in place", async 
   assert.equal(await driver.findElement(By.css("body")).getAttribute("aria-busy"), "false");
 });
 
-test("a legacy profile migrates sets and references exactly once across restarts", async () => {
+test("temporary add-on reinstall: a legacy profile migrates sets and references exactly once", async () => {
   const legacyKey = Buffer.from("Legacy Work").toString("base64");
   const lateLegacyKey = Buffer.from("Late Legacy").toString("base64");
   await openStorageFixturePage();
@@ -532,7 +532,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
     })().catch((error) => done({ error: String(error) }));
   }, legacyKey);
   assert.equal(schemaExists, false);
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   await driver.wait(until.elementLocated(By.css('.load-row[data-name="Legacy Work"]')), 10_000);
   const migrated = await driver.executeAsyncScript((setKey, done) => {
@@ -576,7 +576,7 @@ test("a legacy profile migrates sets and references exactly once across restarts
       },
     }).then(() => done());
   }, legacyKey, lateLegacyKey);
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Legacy Work"]'))).length, 1);
   assert.equal((await driver.findElements(By.css('.load-row[data-name="Late Legacy"]'))).length, 1);
@@ -806,49 +806,49 @@ test("an imported every-window set autoloads in existing and new windows", async
   }
 });
 
-test("startup keeps an already restored pinned tab open", async () => {
+test("temporary add-on reinstall: startup keeps an already restored pinned tab open", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?already-restored`;
   await createTabs([url]);
   await saveSet("Already restored");
   await selectAutoloadSet("Already restored");
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   await driver.wait(async () => (await pinnedUrls()).filter((tabUrl) => tabUrl === url).length === 1, 30_000);
 });
 
-test("startup preserves unrelated local extension state", async () => {
+test("temporary add-on reinstall: startup preserves unrelated local extension state", async () => {
   await openStorageFixturePage();
   await driver.executeAsyncScript((done) => {
     browser.storage.local.set({ unrelated: "keep" }).then(() => done());
   });
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("options/options.html");
   assert.equal(await driver.executeAsyncScript((done) => {
     browser.storage.local.get("unrelated").then(({ unrelated }) => done(unrelated));
   }), "keep");
 });
 
-test("the startup handler restores the configured pinned tabs", async () => {
+test("temporary add-on reinstall: the startup handler restores configured pinned tabs", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?startup-handler`;
   await createTabs([url]);
   await saveSet("Startup handler");
   await selectAutoloadSet("Startup handler");
   await removePinnedTabs();
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("options/options.html");
   await driver.wait(async () => (await pinnedUrls()).includes(url), 30_000);
 });
 
-test("an autoload selection persists across browser restart", async () => {
+test("temporary add-on reinstall: an autoload selection persists", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?restart`;
   await createTabs([url]);
   await saveSet("Startup");
   await selectAutoloadSet("Startup");
   await removePinnedTabs();
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   await driver.wait(async () => (await pinnedUrls()).includes(url), 30_000);
   assert.equal(
@@ -858,20 +858,20 @@ test("an autoload selection persists across browser restart", async () => {
   );
 });
 
-test("restart does not restore a saved set without an autoload selection", async () => {
+test("temporary add-on reinstall: a saved set without an autoload selection stays closed", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?no-autoload`;
   await createTabs([url]);
   await saveSet("No autoload");
   await removePinnedTabs();
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
 
   assert.equal((await pinnedUrls()).includes(url), false);
 });
 
-test("first-window autoload does not restore into a later window", async () => {
+test("temporary add-on reinstall: first-window autoload does not restore into a later window", async () => {
   await openExtensionPage("popup/popup.html");
   const autoloadUrl = `${extensionOrigin}/options/options.html?first-window`;
   const secondWindowUrl = `${extensionOrigin}/options/options.html?second-window`;
@@ -879,7 +879,7 @@ test("first-window autoload does not restore into a later window", async () => {
   await saveSet("First window");
   await selectAutoloadSet("First window");
   await removePinnedTabs();
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   const firstWindowId = await driver.executeAsyncScript((done) => {
     browser.windows.getCurrent().then((window) => done(window.id));
@@ -892,7 +892,7 @@ test("first-window autoload does not restore into a later window", async () => {
   await driver.wait(async () => (await pinnedUrls(secondWindowId)).length === 0, 30_000);
 });
 
-test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
+test("temporary add-on reinstall: repeated launches do not duplicate autoloaded pinned tabs", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?repeat`;
   await createTabs([url]);
@@ -900,7 +900,7 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   await selectAutoloadSet("Repeat");
 
   for (let restart = 0; restart < 2; restart += 1) {
-    await restartFirefox();
+    await restartFirefoxAndReinstallTemporaryAddon();
     await openExtensionPage("popup/popup.html");
     await driver.wait(
       async () => (await pinnedUrls()).filter((tabUrl) => tabUrl === url).length === 1,
@@ -909,7 +909,7 @@ test("repeated restarts do not duplicate autoloaded pinned tabs", async () => {
   }
 });
 
-test("cleared autoload selection is not restored after restart", async () => {
+test("temporary add-on reinstall: cleared autoload selection is not restored", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?clear`;
   await createTabs([url]);
@@ -918,13 +918,13 @@ test("cleared autoload selection is not restored after restart", async () => {
   await clearAutoloadSet("Clear");
   await removePinnedTabs();
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
 
   assert.equal((await pinnedUrls()).includes(url), false);
 });
 
-test("deleted autoload set is not restored after restart", async () => {
+test("temporary add-on reinstall: deleted autoload set is not restored", async () => {
   await openExtensionPage("popup/popup.html");
   const url = `${extensionOrigin}/options/options.html?deleted`;
   await createTabs([url]);
@@ -933,20 +933,20 @@ test("deleted autoload set is not restored after restart", async () => {
   await deleteSet("Deleted");
   await removePinnedTabs();
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
 
   assert.equal((await pinnedUrls()).includes(url), false);
 });
 
-test("popup, set loading, and window creation recover after browser restart", async () => {
+test("temporary add-on reinstall: popup, set loading, and window creation recover", async () => {
   await openExtensionPage("popup/popup.html");
   const savedUrl = `${extensionOrigin}/options/options.html?restart-recovery`;
   await createTabs([savedUrl]);
   await saveSet("Restart recovery");
   await removePinnedTabs();
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   await driver.findElement(
     By.css('.load-row[data-name="Restart recovery"] .set-load'),
@@ -1021,7 +1021,7 @@ test("environment: near-quota generation can be replaced without double quota", 
   assert.deepEqual(result.recovery, {});
 });
 
-test("compressed tab sets remain readable after Firefox restart", async () => {
+test("temporary add-on reinstall: compressed tab sets remain readable", async () => {
   const setId = "00000000-0000-4000-8000-000000000135";
   const tabs = Array.from(
     { length: 120 },
@@ -1042,7 +1042,7 @@ test("compressed tab sets remain readable after Firefox restart", async () => {
   });
   assert.equal(encoding, "gzip-base64");
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("options/options.html");
   await driver.findElement(By.id("export-button")).click();
   await waitForStatus("options-status", "Tab sets exported.");
@@ -1062,7 +1062,7 @@ test("compressed tab sets remain readable after Firefox restart", async () => {
   }]);
 });
 
-test("environment: Firefox enforces quotas without losing the readable generation", async () => {
+test("environment: temporary add-on reinstall keeps Firefox quota generation readable", async () => {
   await openExtensionPage("popup/popup.html");
   const retainedUrl = `${extensionOrigin}/options/options.html?retained-after-quota`;
   await createTabs([retainedUrl]);
@@ -1127,7 +1127,7 @@ test("environment: Firefox enforces quotas without losing the readable generatio
   assert.equal(result.generationUnchanged, true);
   assert.deepEqual(result.readableSetNames, ["Before quota"]);
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   const retainedRow = await driver.wait(
     until.elementLocated(By.css('.load-row[data-name="Before quota"]')),
@@ -1137,7 +1137,7 @@ test("environment: Firefox enforces quotas without losing the readable generatio
   await waitForPinnedUrls([retainedUrl]);
 });
 
-test("environment: quota-bound migration remains usable and promotes after deletion", async () => {
+test("environment: temporary add-on reinstall keeps quota-bound migration usable", async () => {
   const expectedSets = Array.from({ length: 17 }, (_, index) => {
     const name = `Quota recovery ${String(index).padStart(2, "0")}`;
     return {
@@ -1177,7 +1177,7 @@ test("environment: quota-bound migration remains usable and promotes after delet
   assert.equal(seededBytes.error, undefined);
   assert.ok(seededBytes > 102_400);
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   const firstLaunchRows = await driver.findElements(By.css(".load-row"));
   assert.equal(
@@ -1195,7 +1195,7 @@ test("environment: quota-bound migration remains usable and promotes after delet
     });
   });
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   assert.equal(
     (await driver.findElements(By.css(".load-row"))).length,
@@ -1240,7 +1240,7 @@ test("environment: quota-bound migration remains usable and promotes after delet
   });
 });
 
-test("environment: oversized UTF-8 legacy collection recovers into bounded chunks", async () => {
+test("environment: temporary add-on reinstall recovers oversized UTF-8 legacy data", async () => {
   const legacySets = Array.from({ length: 4 }, (_, index) => {
     const name = `Legacy ${index} 日本語`;
     return {
@@ -1277,7 +1277,7 @@ test("environment: oversized UTF-8 legacy collection recovers into bounded chunk
   }, legacySets, versionTwoSet);
   assert.ok(seededBytes > 8_192);
 
-  await restartFirefox();
+  await restartFirefoxAndReinstallTemporaryAddon();
   await openExtensionPage("popup/popup.html");
   for (const set of legacySets) {
     const row = await driver.wait(

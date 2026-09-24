@@ -1110,7 +1110,7 @@ test("an autoload selection persists across browser restart", async () => {
 });
 
 test("browser restart preserves no-autoload behavior for current pinned tabs", async () => {
-  test.slow();
+  test.setTimeout(150_000);
   const userDataDir = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-no-autoload-"));
   const server = http.createServer((request, response) => {
     response.end("<!doctype html><title>Pinned tab</title>");

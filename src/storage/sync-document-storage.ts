@@ -277,18 +277,23 @@ export class SyncDocumentStorage {
       return document === undefined ? null : this.parseStoredDocument(document);
     }
     if (!isSyncIndex(index)) throw new TypeError('Stored synchronized index is invalid');
+    let document: SyncDocument;
     try {
-      const document = await this.parseIndex(
+      document = await this.parseIndex(
         index,
         await this.storage.get(index.chunks),
       );
-      await this.cacheCommitted(index.generation, document);
-      return document;
     } catch (error) {
       const cached = await this.readCommittedCache();
       if (cached) return cached.document;
       throw error;
     }
+    try {
+      await this.cacheCommitted(index.generation, document);
+    } catch {
+      // The complete synchronized generation remains authoritative and readable.
+    }
+    return document;
   }
 
   /** Reads an active generation from a previously fetched complete storage snapshot. */
@@ -340,7 +345,6 @@ export class SyncDocumentStorage {
       chunks: keys,
     };
     let recovery: SyncRecovery | null = null;
-    let committed = false;
 
     try {
       if (previous && this.recoveryStorage) {
@@ -372,22 +376,81 @@ export class SyncDocumentStorage {
         throw new Error('Synchronized generation index could not be verified');
       }
       await this.parseIndex(nextIndex, await this.storage.get(nextIndex.chunks));
-      committed = true;
     } catch (error: unknown) {
-      if (!committed) {
-        if (recovery) {
-          await this.restore(recovery);
-        } else {
-          await removeQuietly(this.storage, keys);
-        }
-        throw quotaError(error);
-      }
+      await this.resolveFailedCommit(nextIndex, recovery);
+      throw quotaError(error);
     }
 
     if (previous) await removeQuietly(this.storage, previous.chunks);
     await this.cacheCommitted(nextIndex.generation, normalizedDocument);
     if (this.recoveryStorage) {
       await removeQuietly(this.recoveryStorage, [SYNC_RECOVERY_KEY]);
+    }
+  }
+
+  /** Preserves whichever complete generation is active after commit verification fails. */
+  private async resolveFailedCommit(
+    attemptedIndex: SyncIndex,
+    recovery: SyncRecovery | null,
+  ): Promise<void> {
+    const activeIndex = (await this.storage.get(SYNC_INDEX_KEY))[SYNC_INDEX_KEY];
+    if (isSyncIndex(activeIndex)
+      && activeIndex.generation === attemptedIndex.generation) {
+      try {
+        await this.parseIndex(
+          activeIndex,
+          await this.storage.get(activeIndex.chunks),
+        );
+        if (recovery) {
+          await removeQuietly(this.storage, recovery.previousIndex.chunks);
+          await removeQuietly(this.recoveryStorage!, [SYNC_RECOVERY_KEY]);
+        }
+        return;
+      } catch {
+        const currentIndex = (await this.storage.get(SYNC_INDEX_KEY))[SYNC_INDEX_KEY];
+        if (isSyncIndex(currentIndex)
+          && currentIndex.generation !== attemptedIndex.generation) {
+          await this.resolveFailedCommit(attemptedIndex, recovery);
+          return;
+        }
+        if (recovery) {
+          await this.restore(recovery);
+        } else {
+          await this.storage.remove(SYNC_INDEX_KEY);
+          await removeQuietly(this.storage, attemptedIndex.chunks);
+        }
+        return;
+      }
+    }
+
+    if (isSyncIndex(activeIndex)) {
+      try {
+        const document = await this.parseIndex(
+          activeIndex,
+          await this.storage.get(activeIndex.chunks),
+        );
+        try {
+          await this.cacheCommitted(activeIndex.generation, document);
+        } catch {
+          // The complete synchronized generation remains authoritative and readable.
+        }
+        await removeQuietly(this.storage, attemptedIndex.chunks);
+        if (recovery) {
+          if (activeIndex.generation !== recovery.previousIndex.generation) {
+            await removeQuietly(this.storage, recovery.previousIndex.chunks);
+          }
+          await removeQuietly(this.recoveryStorage!, [SYNC_RECOVERY_KEY]);
+        }
+      } catch {
+        // Keep recovery state while a foreign generation is still propagating.
+      }
+      return;
+    }
+
+    if (recovery) {
+      await this.restore(recovery);
+    } else {
+      await removeQuietly(this.storage, attemptedIndex.chunks);
     }
   }
 

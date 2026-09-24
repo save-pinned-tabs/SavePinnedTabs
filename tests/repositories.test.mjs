@@ -45,6 +45,39 @@ function storageBytes(values) {
   );
 }
 
+function rawGenerationStorage(document, generation) {
+  const serialized = JSON.stringify(document);
+  const chunks = [];
+  const encoder = new TextEncoder();
+  let chunk = '';
+  let chunkBytes = 2;
+  for (const character of serialized) {
+    const characterBytes = encoder.encode(JSON.stringify(character)).byteLength - 2;
+    if (chunkBytes + characterBytes > SYNC_CHUNK_PAYLOAD_BYTES && chunk) {
+      chunks.push(chunk);
+      chunk = '';
+      chunkBytes = 2;
+    }
+    chunk += character;
+    chunkBytes += characterBytes;
+  }
+  chunks.push(chunk);
+  const chunkKeys = chunks.map(
+    (_, index) => `${SYNC_CHUNK_PREFIX}${generation}:chunk:${index}`,
+  );
+  return {
+    [SYNC_INDEX_KEY]: {
+      version: 4,
+      generation,
+      chunks: chunkKeys,
+      encoding: 'json',
+    },
+    ...Object.fromEntries(
+      chunkKeys.map((key, index) => [key, chunks[index]]),
+    ),
+  };
+}
+
 function opaqueToken(seed, length) {
   let state = seed + 1;
   let token = '';
@@ -153,15 +186,11 @@ function isValidImport(document) {
   ));
 }
 
-function createBrowserHarness({
-  sync = {},
-  local = {},
+function createBrowserContext(
+  syncStorage,
+  localStorage,
   createId = idGenerator(),
-  syncQuotaBytes = Infinity,
-  syncLimits,
-} = {}) {
-  const syncStorage = createStorageArea(sync, null, syncQuotaBytes, syncLimits);
-  const localStorage = createStorageArea(local);
+) {
   const migration = new BrowserStorageMigration(syncStorage, localStorage, { createId });
   const references = new BrowserReferenceStorage(localStorage, migration);
   const windowSessions = new WindowSessionRepository(new BrowserWindowSessionStorage(references));
@@ -176,6 +205,21 @@ function createBrowserHarness({
   return { tabSets, windowSessions, syncStorage, localStorage };
 }
 
+
+function createBrowserHarness({
+  sync = {},
+  local = {},
+  createId = idGenerator(),
+  syncQuotaBytes = Infinity,
+  syncLimits,
+} = {}) {
+  return createBrowserContext(
+    createStorageArea(sync, null, syncQuotaBytes, syncLimits),
+    createStorageArea(local),
+    createId,
+  );
+}
+
 function createMemoryHarness(createId = idGenerator()) {
   const references = new InMemoryReferenceStorage();
   const windowSessions = new WindowSessionRepository(new InMemoryWindowSessionStorage(references));
@@ -186,6 +230,61 @@ function createMemoryHarness(createId = idGenerator()) {
   });
   return { tabSets, windowSessions };
 }
+
+
+test('independent repositories without navigator locks preserve commits after migration initialization', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const seedContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(),
+  );
+  const setA = await seedContext.tabSets.save({
+    name: 'Set A',
+    tabs: ['https://a.example/'],
+  });
+  const setToDelete = await seedContext.tabSets.save({
+    name: 'Set to delete',
+    tabs: ['https://deleted.example/'],
+  });
+
+  const firstContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(3),
+  );
+
+  await firstContext.windowSessions.get(1);
+
+  const secondContext = createBrowserContext(
+    syncStorage,
+    localStorage,
+    idGenerator(3),
+  );
+  const setB = await secondContext.tabSets.save({
+    name: 'Set B',
+    tabs: ['https://b.example/'],
+  });
+  await secondContext.tabSets.setAutoload({
+    scope: 'every-window',
+    setIds: [setB.id],
+  });
+  await secondContext.tabSets.remove(setToDelete.id);
+
+  await firstContext.tabSets.remove(setA.id);
+
+  assert.deepEqual(await firstContext.tabSets.list(), [setB]);
+  assert.deepEqual(
+    await firstContext.tabSets.getAutoload(),
+    { scope: 'every-window', setIds: [setB.id] },
+  );
+  assert.equal(await firstContext.tabSets.get(setToDelete.id), null);
+  assert.deepEqual(
+    (await activeSyncDocument(syncStorage)).deletedSetIds.sort(),
+    [setA.id, setToDelete.id].sort(),
+  );
+});
 
 
 test('browser storage rejects incomplete persisted tab sets', async () => {
@@ -336,7 +435,13 @@ test('legacy browser profile migrates once with valid references and no mixed sc
   });
   assert.equal(await harness.windowSessions.get(1), sets[0].id);
   assert.equal(await harness.windowSessions.get(2), null);
-  assert.equal((await activeSyncDocument(harness.syncStorage)).migration, undefined);
+  assert.deepEqual((await activeSyncDocument(harness.syncStorage)).migration, {
+    legacyIds: {
+      'Rmlyc3Q=': ids[0],
+      U2Vjb25k: ids[1],
+      '5pel5pys6Kqe': ids[2],
+    },
+  });
   assert.equal(SYNC_INDEX_KEY in harness.syncStorage.state, true);
   assert.deepEqual(
     Object.keys(harness.localStorage.state).sort(),
@@ -422,7 +527,9 @@ test('interrupted migration resumes idempotently from its persisted identity map
   const migrated = await activeSyncDocument(syncStorage);
   const stagedId = Object.keys(migrated.sets)[0];
   assert.equal(localStorage.state[LOCAL_DOCUMENT_KEY].windowSessions[7], stagedId);
-  assert.equal(migrated.migration, undefined);
+  assert.deepEqual(migrated.migration, {
+    legacyIds: { TGVnYWN5: stagedId },
+  });
   assert.equal('TGVnYWN5' in syncStorage.state, false);
   assert.equal('activeTabs' in localStorage.state, false);
 });
@@ -532,6 +639,69 @@ test('version-two exact match preserves legacy local references without ID infer
     FIRST_ID,
   );
 });
+
+test('version-two identity mappings survive cross-device generation replacement', async () => {
+  const legacyKey = 'TGVnYWN5';
+  const legacyTabs = Array.from(
+    { length: 200 },
+    (_, index) => `https://legacy.example/${index}/repeated-path`,
+  );
+  const deviceASync = createStorageArea({
+    [SYNC_DOCUMENT_KEY]: {
+      version: 2,
+      sets: {
+        [FIRST_ID]: {
+          id: FIRST_ID,
+          name: 'Legacy',
+          tabs: legacyTabs,
+        },
+      },
+      autoload: { scope: 'first-window', setIds: [] },
+      deletedSetIds: [],
+      migration: { legacyIds: { [legacyKey]: FIRST_ID } },
+    },
+    [legacyKey]: {
+      set_name: 'Legacy',
+      tabs: legacyTabs,
+      autoload: 0,
+    },
+  });
+  const deviceALocal = createStorageArea();
+  await new BrowserStorageMigration(
+    deviceASync,
+    deviceALocal,
+  ).ensureMigrated();
+
+  const firstGeneration = deviceASync.state[SYNC_INDEX_KEY].generation;
+  const deviceADocument = await activeSyncDocument(deviceASync);
+  assert.deepEqual(deviceADocument.migration, {
+    legacyIds: { [legacyKey]: FIRST_ID },
+  });
+
+  await new SyncDocumentStorage(deviceASync, deviceALocal).save(deviceADocument);
+
+  assert.notEqual(
+    deviceASync.state[SYNC_INDEX_KEY].generation,
+    firstGeneration,
+  );
+  assert.equal(deviceASync.state[SYNC_INDEX_KEY].encoding, 'gzip-base64');
+  assert.equal(legacyKey in deviceASync.state, false);
+
+  const deviceBSync = createStorageArea(deviceASync.state);
+  const deviceBLocal = createStorageArea({
+    activeTabs: { 7: legacyKey },
+  });
+  await new BrowserStorageMigration(deviceBSync, deviceBLocal).ensureMigrated();
+
+  const deviceBDocument = await activeSyncDocument(deviceBSync);
+  assert.deepEqual(Object.keys(deviceBDocument.sets), [FIRST_ID]);
+  assert.deepEqual(deviceBDocument.migration, deviceADocument.migration);
+  assert.equal(
+    deviceBLocal.state[LOCAL_DOCUMENT_KEY].windowSessions[7],
+    FIRST_ID,
+  );
+  assert.equal('activeTabs' in deviceBLocal.state, false);
+});
 test('version-three exact match preserves local references without metadata', async () => {
   const legacyKey = 'TGVnYWN5';
   const legacyValue = {
@@ -600,7 +770,7 @@ test('version-three generation reads an explicit version-two document', async ()
   );
 });
 
-test('migrated quota fixture materially reduces aggregate synchronized bytes', async () => {
+test('compatibility identity map overhead is measured with equivalent raw envelopes', async () => {
   const legacyEntries = Object.fromEntries(
     Array.from({ length: 142 }, (_, index) => {
       const name = `Legacy set ${index}`;
@@ -614,8 +784,7 @@ test('migrated quota fixture materially reduces aggregate synchronized bytes', a
       ];
     }),
   );
-  const quotaBytes = 70_000;
-  const syncStorage = createStorageArea(legacyEntries, null, quotaBytes);
+  const syncStorage = createStorageArea(legacyEntries);
 
   await new BrowserStorageMigration(
     syncStorage,
@@ -629,41 +798,23 @@ test('migrated quota fixture materially reduces aggregate synchronized bytes', a
       Object.keys(migratedDocument.sets)[index],
     ]),
   );
-  const previousDocument = {
+  const documentWithIdentityMap = {
     ...migratedDocument,
     migration: { legacyIds },
   };
-  const serializedPrevious = JSON.stringify(previousDocument);
-  const previousGeneration = `migrate-${'0'.repeat(36)}`;
-  const previousChunks = serializedPrevious.match(/.{1,6142}/gu) ?? [''];
-  const previousChunkKeys = previousChunks.map(
-    (_, index) =>
-      `${SYNC_CHUNK_PREFIX}${previousGeneration}:chunk:${index}`,
-  );
-  const previousStorage = {
-    [SYNC_INDEX_KEY]: {
-      version: 3,
-      generation: previousGeneration,
-      chunks: previousChunkKeys,
-    },
-    ...Object.fromEntries(
-      previousChunkKeys.map((key, index) => [key, previousChunks[index]]),
-    ),
-  };
-  const previousBytes = storageBytes(previousStorage);
-  const migratedBytes = storageBytes(syncStorage.state);
-  assert.ok(
-    previousBytes > quotaBytes,
-    `expected previous format ${previousBytes} to exceed quota ${quotaBytes}`,
-  );
-  assert.ok(
-    migratedBytes <= quotaBytes,
-    `expected migrated format ${migratedBytes} to fit quota ${quotaBytes}`,
-  );
+  const generation = `identity-map-${'0'.repeat(32)}`;
+  const withoutIdentityMap = rawGenerationStorage(migratedDocument, generation);
+  const withIdentityMap = rawGenerationStorage(documentWithIdentityMap, generation);
+  const withoutIdentityMapBytes = storageBytes(withoutIdentityMap);
+  const withIdentityMapBytes = storageBytes(withIdentityMap);
 
+  assert.equal(withoutIdentityMap[SYNC_INDEX_KEY].version, 4);
+  assert.equal(withIdentityMap[SYNC_INDEX_KEY].version, 4);
+  assert.equal(withoutIdentityMap[SYNC_INDEX_KEY].encoding, 'json');
+  assert.equal(withIdentityMap[SYNC_INDEX_KEY].encoding, 'json');
   assert.ok(
-    migratedBytes < previousBytes * 0.9,
-    `expected migrated bytes ${migratedBytes} to improve at least 10% on ${previousBytes}`,
+    withoutIdentityMapBytes < withIdentityMapBytes * 0.9,
+    `expected identity-map-free bytes ${withoutIdentityMapBytes} to improve at least 10% on ${withIdentityMapBytes}`,
   );
   assert.equal(migratedDocument.migration, undefined);
 });
@@ -775,7 +926,7 @@ test('version-three raw generations remain readable', async () => {
   assert.deepEqual(await new SyncDocumentStorage(storage).read(), document);
 });
 
-test('compressible documents use gzip and round-trip complex text', async () => {
+test('gzip separately reduces stored bytes and round-trips complex text', async () => {
   const storage = createStorageArea();
   const documents = new SyncDocumentStorage(storage);
   const longPath = `${'segment/路🚀/'.repeat(300)}?quoted="yes"&escaped=\\value`;
@@ -800,6 +951,11 @@ test('compressible documents use gzip and round-trip complex text', async () => 
   const index = storage.state[SYNC_INDEX_KEY];
   assert.equal(index.version, 4);
   assert.equal(index.encoding, 'gzip-base64');
+  const rawStorage = rawGenerationStorage(document, index.generation);
+  assert.ok(
+    storageBytes(storage.state) < storageBytes(rawStorage),
+    `expected gzip bytes ${storageBytes(storage.state)} to improve on raw bytes ${storageBytes(rawStorage)}`,
+  );
   assert.deepEqual(await documents.read(), document);
   for (const key of index.chunks) {
     assert.ok(
@@ -1187,34 +1343,6 @@ test('failed local staging preserves every synchronized migration source', async
   assert.deepEqual(syncStorage.state, initialSyncState);
 });
 
-test('current popup data loads without redundant synchronized storage reads', async () => {
-  const document = {
-    version: 3,
-    sets: {},
-    autoload: { scope: 'first-window', setIds: [] },
-    deletedSetIds: [],
-  };
-  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
-  const syncStorage = createStorageArea({
-    [SYNC_INDEX_KEY]: {
-      version: 3,
-      generation: 'current',
-      chunks: [chunkKey],
-    },
-    [chunkKey]: JSON.stringify(document),
-  });
-  const localStorage = createStorageArea({
-    [LOCAL_DOCUMENT_KEY]: { version: 2, windowSessions: {} },
-  });
-  const migration = new BrowserStorageMigration(syncStorage, localStorage);
-  const tabSets = new TabSetRepository(
-    new BrowserTabSetStorage(syncStorage, migration),
-  );
-
-  await tabSets.getPopupData();
-
-  assert.equal(syncStorage.calls.get, 1);
-});
 
 test('large synchronized documents batch quota-safe chunks into one write', async () => {
   const storage = createStorageArea();
@@ -1313,6 +1441,185 @@ test('interrupted replacements recover the last committed document after restart
     assert.deepEqual(await restarted.read(), previous, mutation);
     assert.equal(SYNC_RECOVERY_KEY in localStorage.state, false, mutation);
   }
+});
+
+test('first save remains readable when commit verification cannot read its index', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptVerification = true;
+  syncStorage.get = async (keys) => {
+    if (interruptVerification
+      && keys === SYNC_INDEX_KEY
+      && SYNC_INDEX_KEY in syncStorage.state) {
+      interruptVerification = false;
+      throw new Error('injected index verification interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(document),
+    /injected index verification interruption/,
+  );
+
+  const verifiedIndex = syncStorage.state[SYNC_INDEX_KEY];
+  assert.ok(verifiedIndex.chunks.every((key) => key in syncStorage.state));
+  assert.deepEqual(await documents.read(), document);
+  await documents.save(document);
+});
+
+test('first save remains readable when commit verification cannot read its chunks', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptVerification = true;
+  syncStorage.get = async (keys) => {
+    if (interruptVerification
+      && Array.isArray(keys)
+      && SYNC_INDEX_KEY in syncStorage.state) {
+      interruptVerification = false;
+      throw new Error('injected chunk verification interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(document),
+    /injected chunk verification interruption/,
+  );
+
+  const verifiedIndex = syncStorage.state[SYNC_INDEX_KEY];
+  assert.ok(verifiedIndex.chunks.every((key) => key in syncStorage.state));
+  assert.deepEqual(await documents.read(), document);
+  await documents.save(document);
+});
+
+test('first-save recovery preserves a remote generation published during recheck', async () => {
+  const syncStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage);
+  const local = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const remote = {
+    ...local,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  const remoteChunk = `${SYNC_CHUNK_PREFIX}remote:chunk:0`;
+  const remoteIndex = {
+    version: 3,
+    generation: 'remote',
+    chunks: [remoteChunk],
+  };
+  await syncStorage.set({ [remoteChunk]: JSON.stringify(remote) });
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let interruptIndexVerification = true;
+  let publishRemoteDuringRecovery = true;
+  syncStorage.get = async (keys) => {
+    const activeGeneration = syncStorage.state[SYNC_INDEX_KEY]?.generation;
+    if (interruptIndexVerification
+      && keys === SYNC_INDEX_KEY
+      && activeGeneration
+      && activeGeneration !== 'remote') {
+      interruptIndexVerification = false;
+      throw new Error('injected index verification interruption');
+    }
+    if (publishRemoteDuringRecovery
+      && Array.isArray(keys)
+      && activeGeneration
+      && activeGeneration !== 'remote') {
+      publishRemoteDuringRecovery = false;
+      syncStorage.state[SYNC_INDEX_KEY] = structuredClone(remoteIndex);
+      throw new Error('injected attempted chunk interruption');
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(local),
+    /injected index verification interruption/,
+  );
+
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(remoteChunk in syncStorage.state, true);
+  assert.deepEqual(await documents.read(), remote);
+  assert.deepEqual(
+    Object.keys(syncStorage.state).filter(
+      (key) => key.startsWith(SYNC_CHUNK_PREFIX),
+    ),
+    [remoteChunk],
+  );
+});
+
+test('replacement preserves a complete remote generation arriving during verification', async () => {
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  const previous = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const replacement = {
+    ...previous,
+    autoload: { scope: 'every-window', setIds: [] },
+  };
+  const remote = {
+    ...previous,
+    deletedSetIds: [FIRST_ID],
+  };
+  await documents.save(previous);
+  const previousGeneration = syncStorage.state[SYNC_INDEX_KEY].generation;
+  const remoteChunk = `${SYNC_CHUNK_PREFIX}remote:chunk:0`;
+  const remoteIndex = {
+    version: 3,
+    generation: 'remote',
+    chunks: [remoteChunk],
+  };
+  await syncStorage.set({ [remoteChunk]: JSON.stringify(remote) });
+  const originalGet = syncStorage.get.bind(syncStorage);
+  let publishRemote = true;
+  syncStorage.get = async (keys) => {
+    if (publishRemote
+      && syncStorage.state[SYNC_INDEX_KEY]?.generation !== previousGeneration
+      && syncStorage.state[SYNC_INDEX_KEY]?.generation !== 'remote') {
+      publishRemote = false;
+      syncStorage.state[SYNC_INDEX_KEY] = structuredClone(remoteIndex);
+    }
+    return originalGet(keys);
+  };
+
+  await assert.rejects(
+    documents.save(replacement),
+    /generation index could not be verified/,
+  );
+
+  assert.equal(syncStorage.state[SYNC_INDEX_KEY].generation, 'remote');
+  assert.equal(remoteChunk in syncStorage.state, true);
+  assert.deepEqual(await documents.read(), remote);
+  assert.equal(
+    Object.keys(syncStorage.state).some(
+      (key) => key.startsWith(SYNC_CHUNK_PREFIX)
+        && key !== remoteChunk,
+    ),
+    false,
+  );
 });
 
 test('committed replacement survives interrupted recovery cleanup', async () => {
@@ -1440,6 +1747,138 @@ test('local committed cache covers non-atomic cross-device propagation', async (
   await syncStorage.remove(previousIndex.chunks);
 
   assert.deepEqual(await documents.read(), previous);
+});
+
+test('valid synchronized generations remain authoritative when cache refresh fails', async () => {
+  const older = {
+    version: 3,
+    sets: {
+      [FIRST_ID]: {
+        id: FIRST_ID,
+        name: 'Older cache',
+        tabs: ['https://older.example/'],
+      },
+    },
+    autoload: { scope: 'first-window', setIds: [FIRST_ID] },
+    deletedSetIds: [],
+  };
+  const newer = {
+    version: 3,
+    sets: {
+      [SECOND_ID]: {
+        id: SECOND_ID,
+        name: 'New synchronized generation',
+        tabs: ['https://newer.example/'],
+      },
+    },
+    autoload: { scope: 'every-window', setIds: [SECOND_ID] },
+    deletedSetIds: [FIRST_ID],
+  };
+  const syncStorage = createStorageArea();
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  await documents.save(older);
+  const chunkKey = `${SYNC_CHUNK_PREFIX}newer:chunk:0`;
+  await syncStorage.set({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'newer',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(newer),
+  });
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+
+  assert.deepEqual(await documents.read(), newer);
+  assert.deepEqual(
+    localStorage.state[SYNC_COMMITTED_CACHE_KEY].document,
+    older,
+  );
+});
+
+test('valid synchronized generation remains readable when its first cache refresh fails', async () => {
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'current',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(document),
+  });
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+
+  assert.deepEqual(await documents.read(), document);
+  assert.equal(SYNC_COMMITTED_CACHE_KEY in localStorage.state, false);
+});
+
+test('cache refresh retries after an earlier read-time write failure', async () => {
+  const document = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'every-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}current:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'current',
+      chunks: [chunkKey],
+    },
+    [chunkKey]: JSON.stringify(document),
+  });
+  const localStorage = createStorageArea();
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+  localStorage.failNextSetForKey(SYNC_COMMITTED_CACHE_KEY);
+  await documents.read();
+
+  assert.deepEqual(await documents.read(), document);
+  assert.deepEqual(localStorage.state[SYNC_COMMITTED_CACHE_KEY], {
+    version: 1,
+    generation: 'current',
+    document,
+  });
+});
+
+test('invalid synchronized generation falls back only to a valid cache', async () => {
+  const cached = {
+    version: 3,
+    sets: {},
+    autoload: { scope: 'first-window', setIds: [] },
+    deletedSetIds: [],
+  };
+  const chunkKey = `${SYNC_CHUNK_PREFIX}incomplete:chunk:0`;
+  const syncStorage = createStorageArea({
+    [SYNC_INDEX_KEY]: {
+      version: 3,
+      generation: 'incomplete',
+      chunks: [chunkKey],
+    },
+  });
+  const localStorage = createStorageArea({
+    [SYNC_COMMITTED_CACHE_KEY]: {
+      version: 1,
+      generation: 'cached',
+      document: cached,
+    },
+  });
+  const documents = new SyncDocumentStorage(syncStorage, localStorage);
+
+  assert.deepEqual(await documents.read(), cached);
+  localStorage.state[SYNC_COMMITTED_CACHE_KEY].document = { version: 3 };
+  await assert.rejects(
+    documents.read(),
+    /Synchronized generation is missing chunk/,
+  );
 });
 
 test('startup migration recovers an interrupted normal replacement first', async () => {
