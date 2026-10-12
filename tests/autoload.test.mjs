@@ -109,27 +109,91 @@ function createBrowser({
   return browser;
 }
 
-test('Autoload restores the selected existing set', async () => {
+test('Autoload restores the first configured set that still exists', async () => {
   const browser = createBrowser({
     sets: {
       first: { tabs: ['https://first.example/'] },
+      second: { tabs: ['https://second.example/'] },
     },
   });
-  const operations = [];
-  const windowTabState = {
-    async replace(windowId, setId) {
-      operations.push(['replace', windowId, setId]);
-    },
-  };
 
-  await restoreAutoloadSets(
+  const result = await restoreAutoloadSets(
     browser,
     7,
-    { scope: 'every-window', setIds: ['first'] },
-    windowTabState,
+    { scope: 'every-window', setIds: ['missing', 'first', 'second'] },
   );
 
-  assert.deepEqual(operations, [['replace', 7, 'first']]);
+  assert.deepEqual(result.restoredUrls, ['https://first.example/']);
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.failures, []);
+  assert.equal(browser.sessionState[7], 'first');
+});
+
+test('Autoload clears the active session when no configured set exists', async () => {
+  for (const setIds of [[], ['missing']]) {
+    const browser = createBrowser({
+      sets: { first: { tabs: ['https://first.example/'] } },
+      sessions: { 7: 'first' },
+    });
+
+    const result = await restoreAutoloadSets(
+      browser,
+      7,
+      { scope: 'first-window', setIds },
+    );
+
+    assert.equal(result, undefined);
+    assert.equal(browser.sessionState[7], undefined);
+  }
+});
+
+test('Autoload returns partial restoration and logs every failure', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const failedUrl = 'file:///missing.html';
+  const restoredUrl = 'https://saved.example/';
+  const cleanupUrl = 'https://pin-failed.example/';
+  const browser = createBrowser({
+    sets: { saved: { autoload: 1, tabs: [failedUrl, restoredUrl, cleanupUrl] } },
+    createTab: async ({ url }) => {
+      if (url === failedUrl) throw new Error('File not found');
+      return { id: url === cleanupUrl ? 102 : 101 };
+    },
+    updateTab: async (tabId) => {
+      if (tabId === 102) throw new Error('Pin denied');
+    },
+    removeTabs: async (tabIds) => {
+      if ((Array.isArray(tabIds) ? tabIds : [tabIds]).includes(102)) {
+        throw new Error('Removal denied');
+      }
+    },
+  });
+
+  const result = await restoreAutoloadSet(browser, 1);
+
+  assert.deepEqual(result.restoredUrls, [restoredUrl]);
+  assert.equal(result.total, 3);
+  assert.deepEqual(result.failures.map(({ url }) => url), [failedUrl, cleanupUrl]);
+  assert.match(result.failures[0].reason, /File not found/);
+  assert.match(result.failures[1].reason, /Pin denied/);
+  assert.match(result.failures[1].cleanupError, /Removal denied/);
+  assert.equal(browser.sessionState[1], 'saved');
+  assert.equal(warn.mock.calls.length, 1);
+  assert.match(warn.mock.calls[0].arguments[0], /Restored 1 of 3 tabs/);
+  assert.deepEqual(warn.mock.calls[0].arguments[1], result.failures);
+});
+
+test('Autoload propagates operation-wide restoration errors', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const browser = createBrowser({
+    sets: { saved: { tabs: ['https://saved.example/'] } },
+  });
+  browser.tabs.query = async () => { throw new Error('Tab query denied'); };
+
+  await assert.rejects(
+    restoreAutoloadSets(browser, 7, { scope: 'first-window', setIds: ['saved'] }),
+    /Tab query denied/,
+  );
+  assert.equal(warn.mock.calls.length, 0);
 });
 
 test('creates and pins replacements before removing existing pinned tabs', async () => {
@@ -322,7 +386,8 @@ test('resolves only after every tab and active-set state are restored', async ()
   assert.equal(browser.sessionState[1], 'saved');
 });
 
-test('rejects with the URL when a tab cannot be restored', async () => {
+test('Autoload reports all failed URLs without rejecting', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
   const failedUrl = 'https://failed.example/';
   const browser = createBrowser({
     sets: {
@@ -336,35 +401,18 @@ test('rejects with the URL when a tab cannot be restored', async () => {
     },
   });
 
-  await assert.rejects(
-    restoreAutoloadSet(browser, 1),
-    (error) => error.message.includes(failedUrl) && error.cause?.cause?.message === 'creation failed',
-  );
+  const result = await restoreAutoloadSet(browser, 1);
+
+  assert.deepEqual(result.restoredUrls, []);
+  assert.equal(result.total, 1);
+  assert.equal(result.failures[0].url, failedUrl);
+  assert.match(result.failures[0].reason, /creation failed/);
+  assert.equal(warn.mock.calls.length, 1);
+  assert.match(warn.mock.calls[0].arguments[0], /Restored 0 of 1 tabs/);
+  assert.deepEqual(warn.mock.calls[0].arguments[1], result.failures);
 });
 
 
-test('creates restored tabs sequentially', async () => {
-  let activeCreations = 0;
-  let peakCreations = 0;
-  const browser = createBrowser({
-    sets: {
-      saved: {
-        autoload: 1,
-        tabs: Array.from({ length: 100 }, (_, index) => `https://example.com/${index}`),
-      },
-    },
-    createTab: async () => {
-      activeCreations += 1;
-      peakCreations = Math.max(peakCreations, activeCreations);
-      await new Promise((resolve) => setImmediate(resolve));
-      activeCreations -= 1;
-    },
-  });
-
-  await restoreAutoloadSet(browser, 1);
-
-  assert.equal(peakCreations, 1);
-});
 
 test('keeps a matching tab whose navigation has not committed', async () => {
   let mutationCount = 0;

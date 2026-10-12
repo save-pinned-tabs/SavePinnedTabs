@@ -6,6 +6,7 @@ import type {
   ExportDocument,
   OptionsState,
   PopupState,
+  TabRestorationOutcome,
   TabSet,
   TabSetDetails,
   TabSetId,
@@ -58,7 +59,7 @@ interface WindowTabState {
   ): Promise<TabSet | null>;
 
   /** Replaces the window's managed tabs with a saved set. */
-  replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  replace(windowId: WindowId, setId: TabSetId): Promise<TabRestorationOutcome>;
 
 }
 
@@ -112,8 +113,11 @@ export class TabSetController {
   loadSet(setId: TabSetId) {
     return this.#execute('load tab set', async () => {
       const windowId = await this.#dependencies.getCurrentWindowId();
-      await this.#dependencies.windowTabState.replace(windowId, setId);
-      return { state: await this.#popupState(windowId) };
+      const restoration = await this.#dependencies.windowTabState.replace(
+        windowId,
+        setId,
+      );
+      return { state: await this.#popupState(windowId), restoration };
     });
   }
 

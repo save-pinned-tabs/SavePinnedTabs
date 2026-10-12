@@ -7,6 +7,7 @@ import {
   registerWindowTabStateMessages,
 } from '../.extension-build/storage/window-tab-state.js';
 import { LOCAL_DOCUMENT_KEY, SYNC_DOCUMENT_KEY } from '../.extension-build/storage/storage-schema.js';
+import { createBrowserRepositories } from '../.extension-build/storage/browser-repositories.js';
 
 function createHarness({ tabs = [], sets = {}, sessions = {}, failAt = [] } = {}) {
   const state = {
@@ -215,6 +216,203 @@ test('replacement creates and pins the complete ordered set before removing orig
   const firstCreate = state.calls.indexOf('tabs.create');
   const originalRemoval = state.calls.lastIndexOf('tabs.remove');
   assert.ok(firstCreate >= 0 && firstCreate < originalRemoval);
+});
+
+test('replacement skips a rejected URL and restores later tabs without changing the saved set', async () => {
+  const savedUrls = ['https://first.example/', 'http://[invalid', 'https://last.example/'];
+  const { browser, state } = createHarness({
+    tabs: [{ id: 10, url: 'https://old.example/' }],
+    sets: { replacement: { tabs: savedUrls } },
+  });
+  const create = browser.tabs.create;
+  browser.tabs.create = (properties) => properties.url === 'http://[invalid'
+    ? Promise.reject(new Error('Invalid URL'))
+    : create(properties);
+
+  const outcome = await createBrowserWindowTabState(browser).replace(1, 'replacement');
+
+  assert.deepEqual(pinnedUrls(state), ['https://first.example/', 'https://last.example/']);
+  assert.deepEqual(outcome.restoredUrls, ['https://first.example/', 'https://last.example/']);
+  assert.equal(outcome.total, 3);
+  assert.equal(outcome.failures.length, 1);
+  assert.equal(outcome.failures[0].url, 'http://[invalid');
+  assert.match(outcome.failures[0].reason, /Invalid URL/);
+  assert.deepEqual(state.sets.replacement.tabs, savedUrls);
+});
+
+for (const [position, rejectedUrls, expectedUrls] of [
+  ['beginning', ['https://first.example/'], ['https://middle.example/', 'https://last.example/']],
+  ['end', ['https://last.example/'], ['https://first.example/', 'https://middle.example/']],
+  ['multiple positions', ['https://first.example/', 'https://last.example/'], ['https://middle.example/']],
+  ['every position', ['https://first.example/', 'https://middle.example/', 'https://last.example/'], []],
+]) {
+  test(`replacement isolates creation failures at ${position}`, async () => {
+    const savedUrls = ['https://first.example/', 'https://middle.example/', 'https://last.example/'];
+    const { browser, state } = createHarness({
+      tabs: [{ id: 10, url: 'https://old.example/' }],
+      sets: { replacement: { tabs: savedUrls } },
+    });
+    const create = browser.tabs.create;
+    browser.tabs.create = (properties) => rejectedUrls.includes(properties.url)
+      ? Promise.reject(new Error(`Cannot open ${properties.url}`))
+      : create(properties);
+
+    const outcome = await createBrowserWindowTabState(browser).replace(1, 'replacement');
+
+    assert.deepEqual(outcome.restoredUrls, expectedUrls);
+    assert.equal(outcome.total, 3);
+    assert.deepEqual(outcome.failures.map(({ url }) => url), rejectedUrls);
+    for (const failure of outcome.failures) assert.match(failure.reason, /Cannot open/);
+    assert.deepEqual(pinnedUrls(state), expectedUrls.length > 0 ? expectedUrls : ['https://old.example/']);
+    assert.deepEqual(state.sets.replacement.tabs, savedUrls);
+    assert.equal(state.sessions[1] ?? null, expectedUrls.length > 0 ? 'replacement' : null);
+  });
+}
+
+for (const cleanupFails of [false, true]) {
+  test(`pinning failure preserves successful replacements and ${cleanupFails ? 'reports failed cleanup' : 'removes the failed replacement'}`, async () => {
+    const { browser, state } = createHarness({
+      tabs: [{ id: 10, url: 'https://old.example/' }],
+      sets: { replacement: { tabs: ['https://first.example/', 'https://middle.example/', 'https://last.example/'] } },
+    });
+    const update = browser.tabs.update;
+    browser.tabs.update = (tabId, properties) => tabId === 101
+      ? Promise.reject(new Error('Pinning denied'))
+      : update(tabId, properties);
+    const remove = browser.tabs.remove;
+    browser.tabs.remove = (tabIds) => cleanupFails && tabIds.includes(101)
+      ? Promise.reject(new Error('Removal denied'))
+      : remove(tabIds);
+
+    const outcome = await createBrowserWindowTabState(browser).replace(1, 'replacement');
+
+    assert.deepEqual(pinnedUrls(state), ['https://first.example/', 'https://last.example/']);
+    assert.deepEqual(outcome.restoredUrls, ['https://first.example/', 'https://last.example/']);
+    assert.equal(outcome.total, 3);
+    assert.equal(outcome.failures.length, 1);
+    assert.equal(outcome.failures[0].url, 'https://middle.example/');
+    assert.match(outcome.failures[0].reason, /Pinning denied/);
+    if (cleanupFails) {
+      assert.match(outcome.failures[0].cleanupError, /Removal denied/);
+      assert.equal(state.tabs.find(({ id }) => id === 101).pinned, false);
+    } else {
+      assert.equal(outcome.failures[0].cleanupError, undefined);
+      assert.equal(state.tabs.find(({ id }) => id === 101), undefined);
+    }
+  });
+}
+
+test('all pinning failures clean replacements and preserve original pinned tabs', async () => {
+  const { browser, state } = replacementHarness();
+  browser.tabs.update = () => Promise.reject(new Error('Pinning denied'));
+
+  const outcome = await createBrowserWindowTabState(browser).replace(1, 'replacement');
+
+  assert.deepEqual(outcome.restoredUrls, []);
+  assert.equal(outcome.total, 2);
+  assert.equal(outcome.failures.length, 2);
+  assert.deepEqual(state.tabs.map(({ id }) => id), [10]);
+  assert.deepEqual(pinnedUrls(state), ['https://old.example/']);
+});
+
+test('operation-wide failure retains an earlier failed replacement cleanup reason', async () => {
+  const { browser, state } = replacementHarness();
+  await createBrowserRepositories(browser).tabSets.get('replacement');
+  const update = browser.tabs.update;
+  browser.tabs.update = (tabId, properties) => tabId === 100
+    ? Promise.reject(new Error('Pinning denied'))
+    : update(tabId, properties);
+  const remove = browser.tabs.remove;
+  let firstCleanup = true;
+  browser.tabs.remove = (ids) => {
+    if (firstCleanup && ids.includes(100)) {
+      firstCleanup = false;
+      return Promise.reject(new Error('Failed replacement cleanup denied'));
+    }
+    return remove(ids);
+  };
+  const set = browser.storage.local.set;
+  browser.storage.local.set = (values) => values[LOCAL_DOCUMENT_KEY]?.windowSessions[1] === 'replacement'
+    ? Promise.reject(new Error('Activation denied'))
+    : set(values);
+
+  await assert.rejects(
+    createBrowserWindowTabState(browser).replace(1, 'replacement'),
+    (error) => error.message.includes('Activation denied')
+      && error.message.includes('Failed replacement cleanup denied'),
+  );
+
+  assert.deepEqual(pinnedUrls(state), ['https://old.example/']);
+  assert.deepEqual(state.tabs.map(({ id }) => id), [10]);
+});
+
+for (const operation of ['read set', 'clear session', 'activate session', 'remove originals']) {
+  test(`${operation} failure remains fatal rather than becoming a skipped tab`, async () => {
+    const { browser, state } = replacementHarness();
+    await createBrowserRepositories(browser).tabSets.get('replacement');
+    if (operation === 'read set') {
+      browser.storage.sync.get = () => Promise.reject(new Error('Storage unavailable'));
+    } else if (operation === 'clear session') {
+      browser.storage.local.set = () => Promise.reject(new Error('Session unavailable'));
+    } else if (operation === 'activate session') {
+      const set = browser.storage.local.set;
+      browser.storage.local.set = (values) => values[LOCAL_DOCUMENT_KEY]?.windowSessions[1] === 'replacement'
+        ? Promise.reject(new Error('Activation denied'))
+        : set(values);
+    } else {
+      const remove = browser.tabs.remove;
+      browser.tabs.remove = (ids) => ids.includes(10)
+        ? Promise.reject(new Error('Original removal denied'))
+        : remove(ids);
+    }
+
+    await assert.rejects(
+      createBrowserWindowTabState(browser).replace(1, 'replacement'),
+    );
+
+    assert.deepEqual(pinnedUrls(state), ['https://old.example/']);
+    assert.deepEqual(state.tabs.map(({ id }) => id), [10]);
+    assert.notEqual(state.sessions[1], 'replacement');
+  });
+}
+
+test('background messaging returns per-tab failures while preserving successful tabs', async () => {
+  const { browser, state } = replacementHarness();
+  const create = browser.tabs.create;
+  browser.tabs.create = (properties) => properties.url === 'https://first.example/'
+    ? Promise.reject(new Error('Creation denied'))
+    : create(properties);
+  let listener;
+  browser.runtime = {
+    onMessage: { addListener(value) { listener = value; } },
+    async sendMessage(message) { return structuredClone(await listener(message)); },
+  };
+  registerWindowTabStateMessages(browser, createBrowserWindowTabState(browser));
+  const client = createWindowTabStateClient(browser);
+
+  const outcome = await client.replace(1, 'replacement');
+
+  assert.deepEqual(await client.snapshot(1), ['https://second.example/']);
+  assert.deepEqual(outcome.restoredUrls, ['https://second.example/']);
+  assert.equal(outcome.total, 2);
+  assert.equal(outcome.failures[0].url, 'https://first.example/');
+  assert.match(outcome.failures[0].reason, /Creation denied/);
+  assert.deepEqual(state.sets.replacement.tabs, replacementSet.tabs);
+});
+
+test('the messaging client rejects malformed restoration outcomes', async () => {
+  for (const response of [
+    ['https://example.com/'],
+    { restoredUrls: [], total: 1, failures: [] },
+    { restoredUrls: [], total: -1, failures: [] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', reason: 42 }] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', reason: 'Denied', cleanupError: {} }] },
+  ]) {
+    const client = createWindowTabStateClient({
+      runtime: { async sendMessage() { return response; } },
+    });
+    await assert.rejects(client.replace(1, 'replacement'), /Invalid tab restoration response/);
+  }
 });
 
 

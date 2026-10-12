@@ -11,6 +11,16 @@ A browser extension to save and load groups of pinned tabs
 - Import and export tab groups as JSON backups
 - Sync saved tab groups through browser extension storage
 
+### Restoring tab sets
+
+Loading a set attempts every saved URL. Tabs the browser can create and pin are restored in their saved relative order. If any creation or pinning fails, the popup reports the restored/total count and each failed URL and reason, including failures to clean up an unpinned replacement. If every tab fails, existing pinned tabs are retained. The saved set is not changed, so skipped URLs can be retried later.
+
+Autoload uses the same restoration behavior and reports per-tab failures in the extension's background console. Storage, session, and other operation-wide failures remain errors rather than skipped tabs.
+
+Restoration counts reflect browser tab-creation and pinning API results, not successful navigation. A browser may create a tab for an unavailable page or deleted local file and show a navigation error afterward; that is separate from an API rejection.
+
+Deleted-file investigation: Chromium 149.0.7827.200 created and pinned the deleted-file tab, then displayed `ERR_FILE_NOT_FOUND`. Firefox 146.0 rejected the file URL with `Illegal URL` and restored the other tabs, but also rejected that URL while the file existed; this reflects file-URL restrictions, not deletion-specific handling. The original reporter's browser/version is unknown, so the exact deleted-file trigger is not confirmed fixed.
+
 ## Installation
 
 - [Chrome Web Store](https://chrome.google.com/webstore/detail/save-pinned-tabs/anmidgajdonkgmmilbccfefkfieajakd)

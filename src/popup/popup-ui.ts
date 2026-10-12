@@ -195,13 +195,13 @@ export function createPopupUi(document: Document): View {
       saveName.focus();
     },
 
-    /** Replaces the visible status and clears completed messages after a delay. */
+    /** Replaces feedback, keeping errors and warnings until the next operation. */
     showStatus(message, kind) {
       clearTimeout(clearStatusTimer);
       clearStatusTimer = undefined;
       status.textContent = message;
       status.dataset.kind = kind;
-      if (kind !== 'loading' && kind !== 'warning' && message) {
+      if (kind === 'success' && message) {
         clearStatusTimer = setTimeout(() => {
           status.textContent = '';
           delete status.dataset.kind;
