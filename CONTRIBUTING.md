@@ -108,3 +108,16 @@ They reject documents with invalid required fields before the data enters applic
   `npm run build`
 
 - The extension archive will be saved to `dist/save_pinned_tabs-X.Y.Z.zip`
+
+## Website
+
+The static website uses Astro 7 and requires Node.js 22.12.0 or newer.
+From `website/`, install its separate dependencies with `npm ci`, build with
+`npm run build`, and inspect the production output with `npm run preview`.
+Run `npm audit` in both the repository root and `website/` when updating dependencies.
+
+## Dependency security
+
+The root package overrides `web-ext`'s pinned `fx-runner` dependency with 1.7.x
+to use the patched `shell-quote` release. Remove the override when `web-ext`
+requires a patched runner itself.
