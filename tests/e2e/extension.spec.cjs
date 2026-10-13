@@ -1,10 +1,11 @@
 const http = require("node:http");
 const { createHash } = require("node:crypto");
 const { execFile } = require("node:child_process");
-const { mkdtemp, readFile, rm } = require("node:fs/promises");
+const { mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { promisify } = require("node:util");
+const { pathToFileURL } = require("node:url");
 const { chromium } = require("@playwright/test");
 const {
   expect,
@@ -146,6 +147,15 @@ async function importDocument(page, document, fileName = "import.json") {
     buffer: Buffer.from(JSON.stringify(document)),
   });
   await page.getByRole("button", { name: "Import" }).click();
+}
+
+async function savedSet(page, setId) {
+  return page.evaluate(async (id) => {
+    const { createBrowserRepositories } = await import(
+      chrome.runtime.getURL("storage/browser-repositories.js")
+    );
+    return createBrowserRepositories(chrome).tabSets.get(id);
+  }, setId);
 }
 
 test("a user can save a pinned tab set without reloading", async ({ extension }) => {
@@ -324,6 +334,131 @@ test("loading a set changes only the initiating window and preserves pinned orde
   expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual(savedUrls);
 });
 
+for (const { name, deleteFile } of [
+  {
+    name: "restoring a saved local HTML file distinguishes API rejection from navigation failure",
+    deleteFile: false,
+  },
+  {
+    name: "restoring a deleted saved local HTML file preserves other saved tabs",
+    deleteFile: true,
+  },
+]) {
+  test(name, async ({ extension }) => {
+    const { context, extensionId } = extension;
+    const directory = await mkdtemp(path.join(os.tmpdir(), "save-pinned-tabs-local-html-"));
+    const filePath = path.join(directory, "saved tab.html");
+    const fileUrl = pathToFileURL(filePath).href;
+    const marker = "Saved local HTML content";
+    const filePages = new Set();
+
+    try {
+      await writeFile(filePath, `<!doctype html><title>Saved local tab</title><h1>${marker}</h1>`);
+      const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+      expect(await popup.evaluate(
+        () => chrome.extension.isAllowedFileSchemeAccess(),
+      ), "The extension must have access to file URLs").toBe(true);
+      const goodUrls = ["before", "after"].map(
+        (position) => `chrome-extension://${extensionId}/options/options.html?local-html-${position}`,
+      );
+      const savedUrls = [goodUrls[0], fileUrl, goodUrls[1]];
+      await createTabs(popup, savedUrls);
+      await expect.poll(() => context.pages().some((page) => page.url() === fileUrl)).toBe(true);
+      const originalFilePage = context.pages().find((page) => page.url() === fileUrl);
+      filePages.add(originalFilePage);
+      await expect(originalFilePage.getByRole("heading", { name: marker })).toBeVisible();
+      await saveSet(popup, "Local HTML");
+      const setId = await popup.evaluate(async () => {
+        const { createBrowserRepositories } = await import(
+          chrome.runtime.getURL("storage/browser-repositories.js")
+        );
+        const sets = await createBrowserRepositories(chrome).tabSets.list();
+        return sets.find((set) => set.name === "Local HTML").id;
+      });
+      const savedSetBeforeRestore = await savedSet(popup, setId);
+      expect(savedSetBeforeRestore.tabs).toEqual(savedUrls);
+      await removePinnedTabs(popup);
+      await expect.poll(() => originalFilePage.isClosed()).toBe(true);
+      if (deleteFile) await rm(filePath);
+      const pagesBeforeRestore = new Set(context.pages());
+
+      await popup.locator('.load-row[data-name="Local HTML"] .set-load').click();
+
+      await expect(popup.getByRole("status")).toHaveAttribute("data-kind", "success");
+      await expect.poll(
+        async () => pinnedUrls(popup, await currentWindowId(popup)),
+      ).toEqual(savedUrls);
+      expect(await savedSet(popup, setId)).toEqual(savedSetBeforeRestore);
+      for (const url of goodUrls) {
+        await expect.poll(() => context.pages().some((page) => page.url() === url)).toBe(true);
+      }
+      if (deleteFile) {
+        // Initial navigation may fail before Playwright attaches to the new tab.
+        const restoredFilePages = () => context.pages().filter(
+          (page) => !pagesBeforeRestore.has(page) && !goodUrls.includes(page.url()),
+        );
+        await expect.poll(() => restoredFilePages().length).toBe(1);
+        const failedPage = restoredFilePages()[0];
+        filePages.add(failedPage);
+        await expect(failedPage.locator("body")).toContainText("ERR_FILE_NOT_FOUND");
+      } else {
+        await expect.poll(() => context.pages().some((page) => page.url() === fileUrl)).toBe(true);
+        const restoredFilePage = context.pages().find((page) => page.url() === fileUrl);
+        filePages.add(restoredFilePage);
+        await expect(restoredFilePage.getByRole("heading", { name: marker })).toBeVisible();
+      }
+    } finally {
+      for (const page of context.pages()) {
+        if (page.url() === fileUrl) filePages.add(page);
+      }
+      try {
+        await Promise.all([...filePages].filter((page) => !page.isClosed()).map((page) => page.close()));
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  });
+}
+
+test("partial restoration attempts every URL and preserves successful saved order", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const goodUrls = ["first", "middle", "last"].map(
+    (position) => `chrome-extension://${extensionId}/options/options.html?partial-${position}`,
+  );
+  const failedUrls = ["http://[invalid", "https://[also-invalid"];
+  const tabs = [goodUrls[0], failedUrls[0], goodUrls[1], failedUrls[1], goodUrls[2]];
+  const setId = "00000000-0000-4000-8000-000000000003";
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  await importDocument(options, {
+    version: 2,
+    sets: [{ id: setId, name: "Partial", tabs }],
+    autoload: { scope: "first-window", setIds: [] },
+  });
+  await expect(options.getByRole("status")).toContainText("Successfully imported");
+  const before = await savedSet(options, setId);
+  const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
+  await createTabs(popup, [
+    `chrome-extension://${extensionId}/options/options.html?partial-original`,
+  ]);
+
+  await popup.locator('.load-row[data-name="Partial"] .set-load').click();
+
+  const status = popup.getByRole("status");
+  await expect(status).toHaveAttribute("data-kind", "warning");
+  await expect(status).toContainText(/3\s+of\s+5/);
+  for (const url of failedUrls) {
+    await expect(status).toContainText(url);
+    const detail = (await status.textContent()).split("\n").find((line) => line.includes(url));
+    expect(detail.slice(detail.indexOf(url) + url.length)).toMatch(/invalid|malformed/i);
+  }
+  await expect.poll(
+    async () => pinnedUrls(popup, await currentWindowId(popup)),
+  ).toEqual(goodUrls);
+  expect(await savedSet(popup, setId)).toEqual(before);
+});
+
 test("a tab creation failure preserves original pinned tabs and reports the failed URL", async ({
   extension,
 }) => {
@@ -340,6 +475,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
   await expect(
     options.getByText("Successfully imported 1 tab set.", { exact: true }),
   ).toBeVisible();
+  const before = await savedSet(options, failingSetId);
   const popup = await openExtensionPage(context, extensionId, "popup/popup.html");
   await createTabs(popup, [originalUrl]);
 
@@ -347,7 +483,10 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
     .getByRole("button", { name: "Load", exact: true }).click();
 
   await expect(popup.getByRole("status")).toContainText(failedUrl);
+  await expect(popup.getByRole("status")).toHaveAttribute("data-kind", "error");
+  await expect(popup.getByRole("status")).toContainText(/0\s+of\s+1/);
   expect(await pinnedUrls(popup, await currentWindowId(popup))).toEqual([originalUrl]);
+  expect(await savedSet(popup, failingSetId)).toEqual(before);
 });
 
 test("the delete dialog contains focus and returns it after cancellation", async ({ extension }) => {
@@ -891,6 +1030,38 @@ test("an imported every-window set autoloads in existing and new windows", async
     `chrome-extension://${extensionId}/options/options.html?new-window`,
   );
   await expect.poll(() => pinnedUrls(popup, thirdWindow.id)).toEqual([autoloadUrl]);
+});
+
+test("startup partially restores an autoload set without changing its saved URLs", async ({
+  extension,
+}) => {
+  const { context, extensionId } = extension;
+  const goodUrls = ["first", "last"].map(
+    (position) => `chrome-extension://${extensionId}/options/options.html?autoload-partial-${position}`,
+  );
+  const setId = "00000000-0000-4000-8000-000000000004";
+  const options = await openExtensionPage(context, extensionId, "options/options.html");
+  await importDocument(options, {
+    version: 2,
+    sets: [{
+      id: setId,
+      name: "Partial autoload",
+      tabs: [goodUrls[0], "http://[invalid", "https://[also-invalid", goodUrls[1]],
+    }],
+    autoload: { scope: "first-window", setIds: [setId] },
+  });
+  await expect(options.getByRole("status")).toContainText("Successfully imported");
+  const before = await savedSet(options, setId);
+  await createTabs(options, [
+    `chrome-extension://${extensionId}/options/options.html?autoload-partial-original`,
+  ]);
+
+  await runStartupHandler(options);
+
+  await expect.poll(
+    async () => pinnedUrls(options, await currentWindowId(options)),
+  ).toEqual(goodUrls);
+  expect(await savedSet(options, setId)).toEqual(before);
 });
 
 test("installed Chrome delivers runtime.onStartup without command-line extension loading", async () => {

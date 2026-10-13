@@ -23,6 +23,60 @@ function createView() {
 
 const state = { sets: [], activeSetId: null, autoloadSetIds: [] };
 
+function createLoadController(restoration, loadedState = state) {
+  return {
+    getPopupState: async () => ({ status: 'success', value: { state } }),
+    loadSet: async () => ({
+      status: 'success',
+      value: { state: loadedState, restoration },
+    }),
+  };
+}
+
+
+for (const synchronization of ['synchronized', 'local-only']) {
+  for (const allFailed of [false, true]) {
+    test(`popup retains every restoration failure with ${synchronization} storage when ${allFailed ? 'all' : 'some'} tabs fail`, async () => {
+      const view = createView();
+      const loadedState = {
+        ...state,
+        activeSetId: allFailed ? null : 'set-1',
+        synchronization,
+      };
+      await startPopupApp(createLoadController({
+        restoredUrls: allFailed ? [] : ['https://saved.example/'],
+        total: allFailed ? 2 : 3,
+        failures: [
+          { url: 'file:///missing.html', reason: 'File not found' },
+          {
+            url: 'https://pin-failed.example/',
+            reason: 'Pin denied <script>untrusted</script>',
+            cleanupError: 'Removal denied',
+          },
+        ],
+      }, loadedState), view);
+
+      await view.actions.load('set-1');
+
+      const [event, kind, message] = view.events.at(-2);
+      assert.equal(event, 'status');
+      assert.equal(kind, allFailed ? 'error' : 'warning');
+      assert.match(message, allFailed ? /0\s+of\s+2/ : /1\s+of\s+3/);
+      assert.match(message, /file:\/\/\/missing\.html: File not found/);
+      assert.match(message, /https:\/\/pin-failed\.example\/: Pin denied <script>untrusted<\/script>/);
+      assert.match(message, /Cleanup failed: Removal denied/);
+      assert.doesNotMatch(message, /Tab set loaded\./);
+      if (synchronization === 'local-only') {
+        assert.match(message, /synchronization is suspended/);
+      } else {
+        assert.doesNotMatch(message, /synchronization is suspended/);
+      }
+      assert.deepEqual(view.events.at(-3), ['render', loadedState]);
+      assert.deepEqual(view.events.at(-1), ['pending', false]);
+    });
+  }
+}
+
 test('popup keeps recovered local-only sets visible with a sync warning', async () => {
   const view = createView();
   const localOnlyState = {
@@ -164,7 +218,10 @@ test('delete confirmation locks out competing controller commands', async () => 
     getPopupState: async () => ({ status: 'success', value: { state } }),
     loadSet: async () => {
       loadCalls += 1;
-      return { status: 'success', value: { state } };
+      return {
+        status: 'success',
+        value: { state, restoration: { restoredUrls: [], total: 0, failures: [] } },
+      };
     },
     deleteSet: async () => {
       deleteCalls += 1;

@@ -8,6 +8,8 @@ import type {
   TabSetDetails,
   TabSetDraft,
   TabSetId,
+  TabRestorationFailure,
+  TabRestorationOutcome,
   WindowId,
 } from '../domain.js';
 import {
@@ -174,16 +176,6 @@ function isWindowTabStateError(error: unknown): boolean {
     && error[WINDOW_TAB_STATE_ERROR] === true;
 }
 
-/** Preserves created tab identifiers when a multi-tab creation fails partway. */
-class PartialTabCreationError extends Error {
-  readonly createdTabIds: number[];
-
-  /** Records successfully created tabs alongside the original failure. */
-  constructor(createdTabIds: number[], cause: unknown) {
-    super(errorMessage(cause), { cause });
-    this.createdTabIds = createdTabIds;
-  }
-}
 
 /** Canonicalizes absolute URLs while preserving nonstandard browser URL strings. */
 export function normalizeUrl(url: unknown): string {
@@ -328,7 +320,7 @@ export class BrowserTabsAdapter implements PinnedTabs {
   }
 }
 
-/** Coordinates atomic pinned-tab transitions and window session state. */
+/** Serializes pinned-tab transitions and coordinates window session state. */
 export class WindowTabState {
   #tabs: PinnedTabs;
   #tabSets: TabSetStore;
@@ -362,8 +354,8 @@ export class WindowTabState {
     });
   }
 
-  /** Replaces pinned tabs with a saved set and activates its window session. */
-  replace(windowId: WindowId, setId: TabSetId): Promise<string[]> {
+  /** Restores available saved tabs, preserving originals when every tab fails. */
+  replace(windowId: WindowId, setId: TabSetId): Promise<TabRestorationOutcome> {
     return this.#run(
       windowId,
       `replace with tab set "${String(setId)}"`,
@@ -374,19 +366,18 @@ export class WindowTabState {
 
         if (urlsMatch(currentTabs, savedUrls)) {
           await this.#activateSession(windowId, setId, set);
-          return savedUrls;
+          return { restoredUrls: savedUrls, total: savedUrls.length, failures: [] };
         }
 
         await this.#windowSessions.clear(windowId);
         this.#onReplace(savedUrls);
-        await this.#replaceTabs(
+        return this.#replaceTabs(
           windowId,
           setId,
           set,
           currentTabs,
           savedUrls,
         );
-        return savedUrls;
       },
     );
   }
@@ -495,21 +486,24 @@ export class WindowTabState {
     }
   }
 
-  /** Creates replacements before activation and removes them if transition fails. */
+  /** Retains per-tab successes, rolling back only operation-wide failures. */
   async #replaceTabs(
     windowId: WindowId,
     setId: TabSetId,
     set: TabSet,
     currentTabs: PinnedTab[],
     savedUrls: string[],
-  ): Promise<void> {
+  ): Promise<TabRestorationOutcome> {
     let createdTabIds: number[] = [];
+    let restoration: TabRestorationOutcome | undefined;
 
     try {
-      createdTabIds = await this.#createAndPinTabs(
-        windowId,
-        savedUrls,
-      );
+      const replacements = await this.#createAndPinTabs(windowId, savedUrls);
+      createdTabIds = replacements.createdTabIds;
+      restoration = replacements.restoration;
+      if (restoration.restoredUrls.length === 0 && savedUrls.length > 0) {
+        return restoration;
+      }
 
       const activated = await this.#tabSets.activateWindowSession(
         setId,
@@ -527,17 +521,15 @@ export class WindowTabState {
         windowId,
         'original pinned',
       );
+      return restoration;
     } catch (error: unknown) {
-      const primaryError = error instanceof PartialTabCreationError
-        ? error.cause
-        : error;
-
-      if (error instanceof PartialTabCreationError) {
-        createdTabIds = error.createdTabIds;
-      }
-
       const rollbackErrors =
         await this.#clearSessionAfterFailure(windowId);
+      if (restoration) {
+        for (const failure of restoration.failures) {
+          if (failure.cleanupError !== undefined) rollbackErrors.push(failure.cleanupError);
+        }
+      }
       try {
         await this.#tabs.remove(
           createdTabIds,
@@ -551,30 +543,52 @@ export class WindowTabState {
       throw operationError(
         'replace',
         windowId,
-        primaryError,
+        error,
         rollbackErrors,
       );
     }
   }
 
 
-  /** Creates and pins URLs sequentially, preserving partial progress on failure. */
+  /** Pins sequentially so successful replacements retain their saved order. */
   async #createAndPinTabs(
     windowId: WindowId,
     urls: string[],
-  ): Promise<number[]> {
+  ): Promise<{ createdTabIds: number[]; restoration: TabRestorationOutcome }> {
     const createdTabIds: number[] = [];
+    const restoration: TabRestorationOutcome = {
+      restoredUrls: [],
+      total: urls.length,
+      failures: [],
+    };
 
-    try {
-      for (const url of urls) {
-        const tabId = await this.#tabs.create(windowId, url);
-        createdTabIds.push(tabId);
-        await this.#tabs.pin(tabId, windowId, url);
+    for (const url of urls) {
+      let tabId: number;
+      try {
+        tabId = await this.#tabs.create(windowId, url);
+      } catch (error: unknown) {
+        restoration.failures.push({ url, reason: errorMessage(error) });
+        continue;
       }
-      return createdTabIds;
-    } catch (error: unknown) {
-      throw new PartialTabCreationError(createdTabIds, error);
+
+      try {
+        await this.#tabs.pin(tabId, windowId, url);
+      } catch (error: unknown) {
+        const failure: TabRestorationFailure = { url, reason: errorMessage(error) };
+        try {
+          await this.#tabs.remove([tabId], windowId, 'failed replacement');
+        } catch (cleanupError: unknown) {
+          failure.cleanupError = errorMessage(cleanupError);
+          createdTabIds.push(tabId);
+        }
+        restoration.failures.push(failure);
+        continue;
+      }
+
+      createdTabIds.push(tabId);
+      restoration.restoredUrls.push(url);
     }
+    return { createdTabIds, restoration };
   }
 
   /** Attempts session cleanup and returns any rollback failure. */
@@ -675,24 +689,13 @@ function sendWindowTabStateMessage(
   });
 }
 
-/** Sends a URL-producing operation and validates the response. */
-async function sendWindowTabUrls(
-  browser: BrowserApi,
-  operation: 'snapshot' | 'replace',
-  args: unknown[],
-): Promise<string[]> {
-  return normalizeSavedUrls(
-    await sendWindowTabStateMessage(browser, operation, args),
-  );
-}
-
 /** Exposes window tab-state operations through background messaging. */
 export interface WindowTabStateClient {
   /** Captures pinned-tab URLs in display order. */
   snapshot(windowId: WindowId): Promise<string[]>;
 
   /** Replaces pinned tabs with a saved tab set. */
-  replace(windowId: WindowId, setId: TabSetId): Promise<string[]>;
+  replace(windowId: WindowId, setId: TabSetId): Promise<TabRestorationOutcome>;
 
 
   /** Captures and saves pinned tabs, or returns null when none exist. */
@@ -707,11 +710,34 @@ export function createWindowTabStateClient(
   browser: BrowserApi,
 ): WindowTabStateClient {
   return {
-    snapshot(windowId) {
-      return sendWindowTabUrls(browser, 'snapshot', [windowId]);
+    async snapshot(windowId) {
+      return normalizeSavedUrls(
+        await sendWindowTabStateMessage(browser, 'snapshot', [windowId]),
+      );
     },
-    replace(windowId, setId) {
-      return sendWindowTabUrls(browser, 'replace', [windowId, setId]);
+    async replace(windowId, setId) {
+      const result = await sendWindowTabStateMessage(browser, 'replace', [windowId, setId]);
+      if (
+        !isRecord(result)
+        || !isStringArray(result.restoredUrls)
+        || !isInteger(result.total)
+        || result.total < 0
+        || !Array.isArray(result.failures)
+        || !result.failures.every((failure: unknown) =>
+          isRecord(failure)
+          && typeof failure.url === 'string'
+          && typeof failure.reason === 'string'
+          && (failure.cleanupError === undefined || typeof failure.cleanupError === 'string')
+        )
+        || result.restoredUrls.length + result.failures.length !== result.total
+      ) {
+        throw new TypeError('Invalid tab restoration response');
+      }
+      return {
+        restoredUrls: normalizeSavedUrls(result.restoredUrls),
+        total: result.total,
+        failures: result.failures as TabRestorationFailure[],
+      };
     },
 
     async captureAndSave(

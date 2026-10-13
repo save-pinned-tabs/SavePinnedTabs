@@ -5,6 +5,7 @@
 import type { BrowserApi } from '../browser-api.js';
 import type {
   AutoloadConfiguration,
+  TabRestorationOutcome,
   TabSetId,
   WindowId,
 } from '../domain.js';
@@ -23,7 +24,7 @@ type FaviconFetch = (url: URL) => Promise<FaviconResponse>;
 
 /** Provides tab-set restoration operations for a browser window. */
 export interface AutoloadWindowTabState {
-  replace(windowId: WindowId, setId: TabSetId): unknown;
+  replace(windowId: WindowId, setId: TabSetId): Promise<TabRestorationOutcome>;
   deactivate(windowId: WindowId): unknown;
 }
 
@@ -72,7 +73,7 @@ export async function restoreAutoloadSets(
       void preloadFavicons(browser, urls);
     },
   }),
-): Promise<void> {
+): Promise<TabRestorationOutcome | undefined> {
   if (configuration.setIds.length === 0) {
     await windowTabState.deactivate(windowId);
     return;
@@ -92,5 +93,12 @@ export async function restoreAutoloadSets(
     return;
   }
 
-  await windowTabState.replace(windowId, selectedSetId);
+  const restoration = await windowTabState.replace(windowId, selectedSetId);
+  if (restoration.failures.length > 0) {
+    console.warn(
+      `Restored ${restoration.restoredUrls.length} of ${restoration.total} tabs during autoload.`,
+      restoration.failures,
+    );
+  }
+  return restoration;
 }

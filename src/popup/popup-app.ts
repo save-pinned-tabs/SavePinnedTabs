@@ -3,6 +3,7 @@
 import type {
   CommandResult,
   PopupState,
+  TabRestorationOutcome,
   TabSetId,
 } from '../domain.js';
 import { errorMessage } from '../validation.js';
@@ -13,6 +14,7 @@ type StatusKind = 'loading' | 'error' | 'success' | 'warning';
 /** Carries the latest popup state returned by a command. */
 interface PopupCommandValue {
   state: PopupState;
+  restoration?: TabRestorationOutcome;
 }
 
 const LOCAL_ONLY_MESSAGE =
@@ -24,7 +26,9 @@ interface PopupController {
     name: string,
     setId?: TabSetId,
   ): Promise<CommandResult<PopupCommandValue>>;
-  loadSet(setId: TabSetId): Promise<CommandResult<PopupCommandValue>>;
+  loadSet(setId: TabSetId): Promise<CommandResult<
+    PopupCommandValue & { restoration: TabRestorationOutcome }
+  >>;
   setAutoload(
     setId: TabSetId,
     enabled: boolean,
@@ -58,6 +62,23 @@ interface RunCommandOptions {
   command(): Promise<CommandResult<PopupCommandValue>>;
   onSuccess?: (() => void) | undefined;
   successMessage: string;
+}
+
+/** Reports every failed URL without presenting an incomplete load as success. */
+function restorationFeedback(restoration: TabRestorationOutcome): {
+  message: string;
+  kind: 'warning' | 'error';
+} {
+  const details = restoration.failures.map(({ url, reason, cleanupError }) =>
+    `${url}: ${reason}${cleanupError !== undefined ? `\nCleanup failed: ${cleanupError}` : ''}`,
+  );
+  return {
+    message: [
+      `Restored ${restoration.restoredUrls.length} of ${restoration.total} tabs.`,
+      ...details,
+    ].join('\n'),
+    kind: restoration.restoredUrls.length === 0 ? 'error' : 'warning',
+  };
 }
 
 /** Binds popup actions, loads initial state, and focuses the save-name input. */
@@ -102,14 +123,22 @@ export async function startPopupApp(
 
       render(result.value.state);
       onSuccess?.();
-      view.showStatus(
-        result.value.state.synchronization === 'local-only'
-          ? LOCAL_ONLY_MESSAGE
-          : successMessage,
-        result.value.state.synchronization === 'local-only'
-          ? 'warning'
-          : 'success',
-      );
+      const isLocalOnly = result.value.state.synchronization === 'local-only';
+      const restoration = result.value.restoration;
+      if (restoration && restoration.failures.length > 0) {
+        const feedback = restorationFeedback(restoration);
+        view.showStatus(
+          isLocalOnly
+            ? `${feedback.message}\n${LOCAL_ONLY_MESSAGE}`
+            : feedback.message,
+          feedback.kind,
+        );
+      } else {
+        view.showStatus(
+          isLocalOnly ? LOCAL_ONLY_MESSAGE : successMessage,
+          isLocalOnly ? 'warning' : 'success',
+        );
+      }
     } finally {
       isPending = false;
       view.setPending(false);

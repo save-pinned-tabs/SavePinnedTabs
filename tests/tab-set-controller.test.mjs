@@ -36,7 +36,11 @@ function createHarness({ failAt } = {}) {
         name: set.name,
         tabs: ['https://example.com/'],
       }),
-      replace: (windowId, setId) => operation(`windowTabState.replace:${windowId}:${setId}`),
+      replace: (windowId, setId) => operation(`windowTabState.replace:${windowId}:${setId}`, {
+        restoredUrls: ['https://example.com/'],
+        total: 1,
+        failures: [],
+      }),
     },
     getCurrentWindowId: () => operation('windows.getCurrent', 7),
   });

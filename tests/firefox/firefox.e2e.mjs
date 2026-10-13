@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { Builder, By, Key, until } from "selenium-webdriver";
 import firefox from "selenium-webdriver/firefox.js";
 
@@ -221,6 +222,21 @@ async function importDocument(document, fileName = "import.json") {
   await driver.findElement(By.id("import-button")).click();
 }
 
+async function savedSet(setId) {
+  const result = await driver.executeAsyncScript(async (id, done) => {
+    try {
+      const { createBrowserRepositories } = await import(
+        browser.runtime.getURL("storage/browser-repositories.js")
+      );
+      done({ set: await createBrowserRepositories(browser).tabSets.get(id) });
+    } catch (error) {
+      done({ error: error.message });
+    }
+  }, setId);
+  assert.equal(result.error, undefined);
+  return result.set;
+}
+
 test("a user can save a pinned tab set without reloading", async () => {
   await openExtensionPage("popup/popup.html");
   await createTabs([`${extensionOrigin}/options/options.html?save`]);
@@ -381,6 +397,158 @@ test("loading a set changes only the initiating window and preserves pinned orde
   assert.deepEqual(await pinnedUrls(otherWindowId), [otherUrl]);
 });
 
+test("partial restoration attempts every URL and preserves successful saved order", async () => {
+  const goodUrls = ["first", "middle", "last"].map(
+    (position) => `${extensionOrigin}/options/options.html?partial-${position}`,
+  );
+  const failedUrls = ["http://[invalid", "https://[also-invalid"];
+  const tabs = [goodUrls[0], failedUrls[0], goodUrls[1], failedUrls[1], goodUrls[2]];
+  const setId = "00000000-0000-4000-8000-000000000003";
+  await openExtensionPage("options/options.html");
+  await importDocument({
+    version: 2,
+    sets: [{ id: setId, name: "Partial", tabs }],
+    autoload: { scope: "first-window", setIds: [] },
+  });
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  const before = await savedSet(setId);
+  await openExtensionPage("popup/popup.html");
+  await createTabs([`${extensionOrigin}/options/options.html?partial-original`]);
+
+  await driver.findElement(By.css('.load-row[data-name="Partial"] .set-load')).click();
+
+  const status = await driver.findElement(By.id("popup-status"));
+  await driver.wait(
+    async () => await status.getAttribute("data-kind") === "warning",
+    10_000,
+    "partial restoration warning",
+  );
+  const message = await status.getText();
+  assert.match(message, /3\s+of\s+5/);
+  for (const url of failedUrls) {
+    assert.ok(message.includes(url), `failure details include ${url}`);
+    const detail = message.split("\n").find((line) => line.includes(url));
+    assert.match(detail.slice(detail.indexOf(url) + url.length), /invalid|malformed/i);
+  }
+  await waitForPinnedUrls(goodUrls);
+  assert.deepEqual(await savedSet(setId), before);
+});
+
+for (const { name, deleteFile } of [
+  {
+    name: "restoring a saved local HTML file distinguishes API rejection from navigation failure",
+    deleteFile: false,
+  },
+  {
+    name: "restoring a deleted saved local HTML file preserves other saved tabs",
+    deleteFile: true,
+  },
+]) {
+  test(name, async () => {
+    const filePath = path.join(temporaryDirectory, "saved local file.html");
+    const fileUrl = pathToFileURL(filePath).href;
+    const marker = "A real local HTML file loaded before saving";
+    const html = `<!doctype html><title>Saved local file</title><p id="local-file-marker">${marker}</p>`;
+    await writeFile(filePath, html);
+    await openExtensionPage("popup/popup.html");
+    const popupHandle = await driver.getWindowHandle();
+    const goodUrls = [
+      `${extensionOrigin}/options/options.html?local-file-first`,
+      `${extensionOrigin}/options/options.html?local-file-last`,
+    ];
+    await createTabs([goodUrls[0]]);
+    // WebDriver can navigate to the file even though Firefox rejects tabs.create({ url }).
+    await driver.switchTo().newWindow("tab");
+    const fileHandle = await driver.getWindowHandle();
+    await driver.get(fileUrl);
+    assert.equal(await driver.getCurrentUrl(), fileUrl);
+    assert.equal(await driver.findElement(By.id("local-file-marker")).getText(), marker);
+    await driver.switchTo().window(popupHandle);
+    const pinError = await driver.executeAsyncScript(async (url, done) => {
+      try {
+        const tabs = await browser.tabs.query({ currentWindow: true });
+        const fileTabs = tabs.filter((tab) => tab.url === url);
+        if (fileTabs.length !== 1) throw new Error(`Expected one local file tab, found ${fileTabs.length}`);
+        await browser.tabs.update(fileTabs[0].id, { pinned: true });
+        done(null);
+      } catch (error) {
+        done(error.message);
+      }
+    }, fileUrl);
+    assert.equal(pinError, null, `Pinning the real file tab failed: ${pinError}`);
+    await createTabs([goodUrls[1]]);
+    const savedUrls = [goodUrls[0], fileUrl, goodUrls[1]];
+    await waitForPinnedUrls(savedUrls);
+
+    const setName = deleteFile ? "Deleted local HTML" : "Existing local HTML";
+    await saveSet(setName);
+    const lookup = await driver.executeAsyncScript(async (name, done) => {
+      try {
+        const { createBrowserRepositories } = await import(
+          browser.runtime.getURL("storage/browser-repositories.js")
+        );
+        const sets = await createBrowserRepositories(browser).tabSets.list();
+        done({ id: sets.find((set) => set.name === name)?.id });
+      } catch (error) {
+        done({ error: error.message });
+      }
+    }, setName);
+    assert.equal(lookup.error, undefined);
+    assert.ok(lookup.id, "The popup saved the local HTML set");
+    const savedSetBeforeRestore = await savedSet(lookup.id);
+    assert.deepEqual(savedSetBeforeRestore.tabs, savedUrls);
+    await removePinnedTabs();
+    await driver.wait(async () => (
+      !(await driver.getAllWindowHandles()).includes(fileHandle)
+    ), 10_000, "the original local file tab to close before deletion");
+    assert.equal(await driver.getWindowHandle(), popupHandle);
+    assert.deepEqual(await pinnedUrls(), []);
+    if (deleteFile) await rm(filePath);
+    else assert.equal(await readFile(filePath, "utf8"), html);
+    const existingTabs = await driver.executeAsyncScript((done) => {
+      browser.tabs.query({ currentWindow: true }).then(
+        (tabs) => done({ ids: tabs.map((tab) => tab.id) }),
+        (error) => done({ error: error.message }),
+      );
+    });
+    assert.equal(existingTabs.error, undefined);
+    const existingTabIds = new Set(existingTabs.ids);
+
+    await driver.findElement(
+      By.css(`.load-row[data-name="${setName}"] .set-load`),
+    ).click();
+
+    const status = await driver.findElement(By.id("popup-status"));
+    await driver.wait(
+      async () => await status.getAttribute("data-kind") === "warning",
+      10_000,
+      "Firefox file URL API rejection warning",
+    );
+    const message = await status.getText();
+    assert.match(message, /2\s+of\s+3/);
+    assert.ok(message.includes(fileUrl), "The warning identifies the rejected file URL");
+    const detail = message.split("\n").find((line) => line.includes(fileUrl));
+    assert.match(detail.slice(detail.indexOf(fileUrl) + fileUrl.length), /Illegal URL/i);
+    await waitForPinnedUrls(goodUrls);
+    const restored = await driver.executeAsyncScript(async (done) => {
+      try {
+        const tabs = await browser.tabs.query({ currentWindow: true });
+        done({ tabs: tabs.map(({ id, url }) => ({ id, url })) });
+      } catch (error) {
+        done({ error: error.message });
+      }
+    });
+    assert.equal(restored.error, undefined);
+    assert.deepEqual(
+      restored.tabs.filter((tab) => !existingTabIds.has(tab.id)).map((tab) => tab.url),
+      goodUrls,
+      "API rejection creates no extra file or navigation-error tab",
+    );
+    assert.deepEqual(await savedSet(lookup.id), savedSetBeforeRestore);
+    if (!deleteFile) assert.equal(await readFile(filePath, "utf8"), html);
+  });
+}
+
 test("a tab creation failure preserves original pinned tabs and reports the failed URL", async () => {
   const failedUrl = "http://[invalid";
   await openExtensionPage("options/options.html");
@@ -391,6 +559,7 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
     autoload: { scope: "first-window", setIds: [] },
   }, "failing.json");
   await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  const before = await savedSet(failingSetId);
   await openExtensionPage("popup/popup.html");
   const originalUrl = `${extensionOrigin}/options/options.html?original`;
   await createTabs([originalUrl]);
@@ -400,7 +569,11 @@ test("a tab creation failure preserves original pinned tabs and reports the fail
   await driver.wait(async () => (
     (await driver.findElement(By.id("popup-status")).getText()).includes(failedUrl)
   ), 10_000, "actionable failed URL");
+  const status = await driver.findElement(By.id("popup-status"));
+  assert.equal(await status.getAttribute("data-kind"), "error");
+  assert.match(await status.getText(), /0\s+of\s+1/);
   assert.deepEqual(await pinnedUrls(), [originalUrl]);
+  assert.deepEqual(await savedSet(failingSetId), before);
 });
 
 test("the delete dialog contains focus and returns it after cancellation", async () => {
@@ -804,6 +977,31 @@ test("an imported every-window set autoloads in existing and new windows", async
   for (const windowId of [...existingWindowIds, newWindowId]) {
     assert.deepEqual(await pinnedUrls(windowId), [autoloadUrl]);
   }
+});
+
+test("startup partially restores an autoload set without changing its saved URLs", async () => {
+  const goodUrls = ["first", "last"].map(
+    (position) => `${extensionOrigin}/options/options.html?autoload-partial-${position}`,
+  );
+  const setId = "00000000-0000-4000-8000-000000000004";
+  await openExtensionPage("options/options.html");
+  await importDocument({
+    version: 2,
+    sets: [{
+      id: setId,
+      name: "Partial autoload",
+      tabs: [goodUrls[0], "http://[invalid", "https://[also-invalid", goodUrls[1]],
+    }],
+    autoload: { scope: "first-window", setIds: [setId] },
+  });
+  await waitForStatus("options-status", "Successfully imported 1 tab set.");
+  const before = await savedSet(setId);
+  await createTabs([`${extensionOrigin}/options/options.html?autoload-partial-original`]);
+
+  await runStartupHandler();
+
+  await waitForPinnedUrls(goodUrls);
+  assert.deepEqual(await savedSet(setId), before);
 });
 
 test("temporary add-on reinstall: startup keeps an already restored pinned tab open", async () => {

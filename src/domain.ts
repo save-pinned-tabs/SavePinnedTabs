@@ -25,6 +25,20 @@ export interface TabSetDraft extends TabSetDetails {
   tabs: string[];
 }
 
+/** Records a tab API failure and any failure to remove its unpinned replacement. */
+export interface TabRestorationFailure {
+  url: string;
+  reason: string;
+  cleanupError?: string;
+}
+
+/** Describes API-level restoration; created tabs may still fail to navigate. */
+export interface TabRestorationOutcome {
+  restoredUrls: string[];
+  total: number;
+  failures: TabRestorationFailure[];
+}
+
 /** Controls whether sets load in the first window or every window. */
 export type AutoloadScope = "first-window" | "every-window";
 

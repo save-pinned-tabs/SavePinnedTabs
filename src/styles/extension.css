@@ -26,6 +26,7 @@ button.set-delete { background-color: #ff8a65; }
 button.set-delete:hover { background-color: #ff7043; }
 button:disabled, input:disabled, select:disabled { cursor: wait; opacity: 0.6; }
 .operation-status { min-height: 1.5em; }
+#popup-status { white-space: pre-wrap; overflow-wrap: anywhere; }
 .operation-status[data-kind="error"] { color: #b3261e; }
 .operation-status[data-kind="success"] { color: #287a35; }
 .operation-status[data-kind="loading"] { color: #666; }
