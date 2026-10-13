@@ -4,6 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { Builder, By, Key, until } from "selenium-webdriver";
 import firefox from "selenium-webdriver/firefox.js";
 
@@ -432,6 +433,121 @@ test("partial restoration attempts every URL and preserves successful saved orde
   await waitForPinnedUrls(goodUrls);
   assert.deepEqual(await savedSet(setId), before);
 });
+
+for (const { name, deleteFile } of [
+  {
+    name: "restoring a saved local HTML file distinguishes API rejection from navigation failure",
+    deleteFile: false,
+  },
+  {
+    name: "restoring a deleted saved local HTML file preserves other saved tabs",
+    deleteFile: true,
+  },
+]) {
+  test(name, async () => {
+    const filePath = path.join(temporaryDirectory, "saved local file.html");
+    const fileUrl = pathToFileURL(filePath).href;
+    const marker = "A real local HTML file loaded before saving";
+    const html = `<!doctype html><title>Saved local file</title><p id="local-file-marker">${marker}</p>`;
+    await writeFile(filePath, html);
+    await openExtensionPage("popup/popup.html");
+    const popupHandle = await driver.getWindowHandle();
+    const goodUrls = [
+      `${extensionOrigin}/options/options.html?local-file-first`,
+      `${extensionOrigin}/options/options.html?local-file-last`,
+    ];
+    await createTabs([goodUrls[0]]);
+    // WebDriver can navigate to the file even though Firefox rejects tabs.create({ url }).
+    await driver.switchTo().newWindow("tab");
+    const fileHandle = await driver.getWindowHandle();
+    await driver.get(fileUrl);
+    assert.equal(await driver.getCurrentUrl(), fileUrl);
+    assert.equal(await driver.findElement(By.id("local-file-marker")).getText(), marker);
+    await driver.switchTo().window(popupHandle);
+    const pinError = await driver.executeAsyncScript(async (url, done) => {
+      try {
+        const tabs = await browser.tabs.query({ currentWindow: true });
+        const fileTabs = tabs.filter((tab) => tab.url === url);
+        if (fileTabs.length !== 1) throw new Error(`Expected one local file tab, found ${fileTabs.length}`);
+        await browser.tabs.update(fileTabs[0].id, { pinned: true });
+        done(null);
+      } catch (error) {
+        done(error.message);
+      }
+    }, fileUrl);
+    assert.equal(pinError, null, `Pinning the real file tab failed: ${pinError}`);
+    await createTabs([goodUrls[1]]);
+    const savedUrls = [goodUrls[0], fileUrl, goodUrls[1]];
+    await waitForPinnedUrls(savedUrls);
+
+    const setName = deleteFile ? "Deleted local HTML" : "Existing local HTML";
+    await saveSet(setName);
+    const lookup = await driver.executeAsyncScript(async (name, done) => {
+      try {
+        const { createBrowserRepositories } = await import(
+          browser.runtime.getURL("storage/browser-repositories.js")
+        );
+        const sets = await createBrowserRepositories(browser).tabSets.list();
+        done({ id: sets.find((set) => set.name === name)?.id });
+      } catch (error) {
+        done({ error: error.message });
+      }
+    }, setName);
+    assert.equal(lookup.error, undefined);
+    assert.ok(lookup.id, "The popup saved the local HTML set");
+    const savedSetBeforeRestore = await savedSet(lookup.id);
+    assert.deepEqual(savedSetBeforeRestore.tabs, savedUrls);
+    await removePinnedTabs();
+    await driver.wait(async () => (
+      !(await driver.getAllWindowHandles()).includes(fileHandle)
+    ), 10_000, "the original local file tab to close before deletion");
+    assert.equal(await driver.getWindowHandle(), popupHandle);
+    assert.deepEqual(await pinnedUrls(), []);
+    if (deleteFile) await rm(filePath);
+    else assert.equal(await readFile(filePath, "utf8"), html);
+    const existingTabs = await driver.executeAsyncScript((done) => {
+      browser.tabs.query({ currentWindow: true }).then(
+        (tabs) => done({ ids: tabs.map((tab) => tab.id) }),
+        (error) => done({ error: error.message }),
+      );
+    });
+    assert.equal(existingTabs.error, undefined);
+    const existingTabIds = new Set(existingTabs.ids);
+
+    await driver.findElement(
+      By.css(`.load-row[data-name="${setName}"] .set-load`),
+    ).click();
+
+    const status = await driver.findElement(By.id("popup-status"));
+    await driver.wait(
+      async () => await status.getAttribute("data-kind") === "warning",
+      10_000,
+      "Firefox file URL API rejection warning",
+    );
+    const message = await status.getText();
+    assert.match(message, /2\s+of\s+3/);
+    assert.ok(message.includes(fileUrl), "The warning identifies the rejected file URL");
+    const detail = message.split("\n").find((line) => line.includes(fileUrl));
+    assert.match(detail.slice(detail.indexOf(fileUrl) + fileUrl.length), /Illegal URL/i);
+    await waitForPinnedUrls(goodUrls);
+    const restored = await driver.executeAsyncScript(async (done) => {
+      try {
+        const tabs = await browser.tabs.query({ currentWindow: true });
+        done({ tabs: tabs.map(({ id, url }) => ({ id, url })) });
+      } catch (error) {
+        done({ error: error.message });
+      }
+    });
+    assert.equal(restored.error, undefined);
+    assert.deepEqual(
+      restored.tabs.filter((tab) => !existingTabIds.has(tab.id)).map((tab) => tab.url),
+      goodUrls,
+      "API rejection creates no extra file or navigation-error tab",
+    );
+    assert.deepEqual(await savedSet(lookup.id), savedSetBeforeRestore);
+    if (!deleteFile) assert.equal(await readFile(filePath, "utf8"), html);
+  });
+}
 
 test("a tab creation failure preserves original pinned tabs and reports the failed URL", async () => {
   const failedUrl = "http://[invalid";

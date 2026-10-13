@@ -21,6 +21,8 @@ Restoration counts reflect browser tab-creation and pinning API results, not suc
 
 Deleted-file investigation: Chromium 149.0.7827.200 created and pinned the deleted-file tab, then displayed `ERR_FILE_NOT_FOUND`. Firefox 146.0 rejected the file URL with `Illegal URL` and restored the other tabs, but also rejected that URL while the file existed; this reflects file-URL restrictions, not deletion-specific handling. The original reporter's browser/version is unknown, so the exact deleted-file trigger is not confirmed fixed.
 
+Permanent Chromium and Firefox end-to-end tests save a real local HTML file between valid tabs, close the saved tabs, and restore the set both while the file exists and after deleting it. They check pinned order, unchanged saved URLs, and browser-specific feedback: Chromium accepts the file tab but shows a navigation error after deletion; Firefox reports its file-URL API rejection in both scenarios. Chromium scenarios require extension access to file URLs.
+
 ## Installation
 
 - [Chrome Web Store](https://chrome.google.com/webstore/detail/save-pinned-tabs/anmidgajdonkgmmilbccfefkfieajakd)
