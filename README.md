@@ -13,7 +13,9 @@ A browser extension to save and load groups of pinned tabs
 
 ### Restoring tab sets
 
-Loading a set attempts every saved URL. Tabs the browser can create and pin are restored in their saved relative order. If any creation or pinning fails, the popup reports the restored/total count and each failed URL and reason, including failures to clean up an unpinned replacement. If every tab fails, existing pinned tabs are retained. The saved set is not changed, so skipped URLs can be retried later.
+Loading a set attempts every saved URL. Tabs the browser can create and pin are restored in their saved relative order. If any creation or pinning fails, the popup reports the restored/total count and a concise creation or pinning failure message identifying each affected URL once. Low-level browser error details are omitted from these notices; failures to clean up an unpinned replacement are still reported. If every tab fails, existing pinned tabs are retained. The saved set is not changed, so skipped URLs can be retried later.
+
+Popup errors appear as red notices, while warnings (including partially restored sets) appear as amber notices. Both use a tinted background and bordered box, preserve line breaks, wrap long URLs, and remain visible until the next operation.
 
 Autoload uses the same restoration behavior and reports per-tab failures in the extension's background console. Storage, session, and other operation-wide failures remain errors rather than skipped tabs.
 

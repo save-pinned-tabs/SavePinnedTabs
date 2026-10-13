@@ -69,8 +69,8 @@ function restorationFeedback(restoration: TabRestorationOutcome): {
   message: string;
   kind: 'warning' | 'error';
 } {
-  const details = restoration.failures.map(({ url, reason, cleanupError }) =>
-    `${url}: ${reason}${cleanupError !== undefined ? `\nCleanup failed: ${cleanupError}` : ''}`,
+  const details = restoration.failures.map(({ url, operation, cleanupError }) =>
+    `Failed to ${operation} replacement tab for "${url}".${cleanupError !== undefined ? `\nCleanup failed: ${cleanupError}` : ''}`,
   );
   return {
     message: [

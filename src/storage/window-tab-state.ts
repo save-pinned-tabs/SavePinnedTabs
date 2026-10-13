@@ -567,14 +567,14 @@ export class WindowTabState {
       try {
         tabId = await this.#tabs.create(windowId, url);
       } catch (error: unknown) {
-        restoration.failures.push({ url, reason: errorMessage(error) });
+        restoration.failures.push({ url, operation: 'create', reason: errorMessage(error) });
         continue;
       }
 
       try {
         await this.#tabs.pin(tabId, windowId, url);
       } catch (error: unknown) {
-        const failure: TabRestorationFailure = { url, reason: errorMessage(error) };
+        const failure: TabRestorationFailure = { url, operation: 'pin', reason: errorMessage(error) };
         try {
           await this.#tabs.remove([tabId], windowId, 'failed replacement');
         } catch (cleanupError: unknown) {
@@ -726,6 +726,7 @@ export function createWindowTabStateClient(
         || !result.failures.every((failure: unknown) =>
           isRecord(failure)
           && typeof failure.url === 'string'
+          && (failure.operation === 'create' || failure.operation === 'pin')
           && typeof failure.reason === 'string'
           && (failure.cleanupError === undefined || typeof failure.cleanupError === 'string')
         )
