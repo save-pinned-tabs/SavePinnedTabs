@@ -28,6 +28,7 @@ export interface TabSetDraft extends TabSetDetails {
 /** Records a tab API failure and any failure to remove its unpinned replacement. */
 export interface TabRestorationFailure {
   url: string;
+  operation: 'create' | 'pin';
   reason: string;
   cleanupError?: string;
 }

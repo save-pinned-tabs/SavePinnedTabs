@@ -47,9 +47,10 @@ for (const synchronization of ['synchronized', 'local-only']) {
         restoredUrls: allFailed ? [] : ['https://saved.example/'],
         total: allFailed ? 2 : 3,
         failures: [
-          { url: 'file:///missing.html', reason: 'File not found' },
+          { url: 'file:///missing.html', operation: 'create', reason: 'File not found' },
           {
             url: 'https://pin-failed.example/',
+            operation: 'pin',
             reason: 'Pin denied <script>untrusted</script>',
             cleanupError: 'Removal denied',
           },
@@ -62,8 +63,9 @@ for (const synchronization of ['synchronized', 'local-only']) {
       assert.equal(event, 'status');
       assert.equal(kind, allFailed ? 'error' : 'warning');
       assert.match(message, allFailed ? /0\s+of\s+2/ : /1\s+of\s+3/);
-      assert.match(message, /file:\/\/\/missing\.html: File not found/);
-      assert.match(message, /https:\/\/pin-failed\.example\/: Pin denied <script>untrusted<\/script>/);
+      assert.ok(message.includes('file:///missing.html'));
+      assert.ok(message.includes('https://pin-failed.example/'));
+      assert.doesNotMatch(message, /File not found|Pin denied|<script>|URL:/);
       assert.match(message, /Cleanup failed: Removal denied/);
       assert.doesNotMatch(message, /Tab set loaded\./);
       if (synchronization === 'local-only') {

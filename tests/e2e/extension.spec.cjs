@@ -450,8 +450,6 @@ test("partial restoration attempts every URL and preserves successful saved orde
   await expect(status).toContainText(/3\s+of\s+5/);
   for (const url of failedUrls) {
     await expect(status).toContainText(url);
-    const detail = (await status.textContent()).split("\n").find((line) => line.includes(url));
-    expect(detail.slice(detail.indexOf(url) + url.length)).toMatch(/invalid|malformed/i);
   }
   await expect.poll(
     async () => pinnedUrls(popup, await currentWindowId(popup)),

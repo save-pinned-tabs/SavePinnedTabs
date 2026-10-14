@@ -236,6 +236,7 @@ test('replacement skips a rejected URL and restores later tabs without changing 
   assert.equal(outcome.total, 3);
   assert.equal(outcome.failures.length, 1);
   assert.equal(outcome.failures[0].url, 'http://[invalid');
+  assert.equal(outcome.failures[0].operation, 'create');
   assert.match(outcome.failures[0].reason, /Invalid URL/);
   assert.deepEqual(state.sets.replacement.tabs, savedUrls);
 });
@@ -291,6 +292,7 @@ for (const cleanupFails of [false, true]) {
     assert.equal(outcome.total, 3);
     assert.equal(outcome.failures.length, 1);
     assert.equal(outcome.failures[0].url, 'https://middle.example/');
+    assert.equal(outcome.failures[0].operation, 'pin');
     assert.match(outcome.failures[0].reason, /Pinning denied/);
     if (cleanupFails) {
       assert.match(outcome.failures[0].cleanupError, /Removal denied/);
@@ -405,8 +407,10 @@ test('the messaging client rejects malformed restoration outcomes', async () => 
     ['https://example.com/'],
     { restoredUrls: [], total: 1, failures: [] },
     { restoredUrls: [], total: -1, failures: [] },
-    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', reason: 42 }] },
-    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', reason: 'Denied', cleanupError: {} }] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', operation: 'create', reason: 42 }] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', operation: 'pin', reason: 'Denied', cleanupError: {} }] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', reason: 'Denied' }] },
+    { restoredUrls: [], total: 1, failures: [{ url: 'https://example.com/', operation: 'remove', reason: 'Denied' }] },
   ]) {
     const client = createWindowTabStateClient({
       runtime: { async sendMessage() { return response; } },
